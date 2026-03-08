@@ -3,6 +3,14 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- Transient: `simulate_tran(&Netlist) -> Result<SimResult>` in ferrospice-core::transient
+- Transient uses BE for first timestep, then switches to Trapezoidal (matching ngspice)
+- Capacitor companion model: BE → geq=C/h, ieq=-C/h*v_prev; Trap → geq=2C/h, ieq=-(2C/h*v_prev + i_prev)
+- Inductor companion model: BE → req=L/h, veq=-L/h*i_prev; Trap → req=2L/h, veq=-(2L/h*i_prev + v_prev)
+- Inductor in transient: adds -req on branch diagonal, veq on branch RHS (on top of topology stamps)
+- `CapacitorInstance` and `InductorInstance` in MnaSystem hold resolved values and IC params
+- IC= param on C/L elements overrides DC OP initial voltage/current for transient
+- Transient output: "time" vector + node voltages + branch currents, plot name "tran1"
 - DC sweep: `simulate_dc(&Netlist) -> Result<SimResult>` in ferrospice-core::simulate
 - DC sweep reuses assembled MNA matrix, only modifies RHS entries per sweep point
 - Voltage source sweep: set `system.rhs[num_nodes + vsource_idx] = sweep_value`
@@ -176,4 +184,26 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - Internal nodes (for RS) are indexed after external nodes: `node_map.len()..node_map.len()+internal_count`
   - `num_nodes` for NR convergence check must include internal nodes, not just external ones
   - DC sweep with diodes: each sweep point runs full NR solve, not just linear matrix solve
+---
+
+## 2026-03-08 - US-009
+- Created `ferrospice-core/src/transient.rs` with transient analysis engine
+- `simulate_tran(&Netlist) -> Result<SimResult>` — full .tran analysis
+- Backward Euler for first timestep, Trapezoidal for subsequent (matches ngspice)
+- Capacitor companion model: geq conductance + ieq history current source
+- Inductor companion model: req on branch diagonal + veq history voltage on RHS
+- Added `CapacitorInstance` and `InductorInstance` to `MnaSystem` with IC= param support
+- Refactored `assemble_mna` to collect C/L instances directly (not via `stamp_element`)
+- Added `stamp_inductor_topology()` and `extract_ic_param()` helpers in mna.rs
+- NR integration for nonlinear transient (diodes work during transient)
+- 2 tests: RC step response (within 1% at 1-5 RC), LC oscillator (frequency within 1%)
+- Files: ferrospice-core/src/transient.rs (new), ferrospice-core/src/mna.rs, ferrospice-core/src/lib.rs
+- **Learnings for future iterations:**
+  - Capacitor BE companion: geq=C/h, ieq=-C/h*v_prev; Trap: geq=2C/h, ieq=-(2C/h*v_prev+i_prev)
+  - Inductor BE companion: req=L/h, veq=-L/h*i_prev; Trap: req=2L/h, veq=-(2L/h*i_prev+v_prev)
+  - IC= parameter on C/L elements overrides DC OP initial conditions for transient
+  - Inductor topology stamps (1/-1 entries) are shared between DC and transient — only req/veq differ
+  - History current for capacitor must be computed from the companion model equation, not just C*dv/dt
+  - For LC oscillator test, trapezoidal method preserves energy well — no amplitude decay over 2 cycles
+  - `#[expect(clippy::too_many_arguments)]` needed for `solve_timestep` with 11 params
 ---
