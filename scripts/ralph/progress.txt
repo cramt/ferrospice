@@ -87,6 +87,12 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - MOSFET AC: gds/gm/gmbs real conductances + gate overlap caps (CGSO*W, CGDO*W, CGBO*L) + junction caps (CBD, CBS)
 - MOSFET internal nodes: RD>0 creates internal drain, RS>0 creates internal source (like BJT series resistances)
 - `has_nonlinear` checks: `!mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty()`
+- Subcircuit expansion: `flatten_netlist(&Netlist) -> Result<Netlist, SubcktError>` in ferrospice-core::subckt
+- Subcircuit flattening is called automatically at the start of `assemble_mna()` — transparent to callers
+- Expanded element names: `instance_prefix.element_name` (e.g., "x1.r1", "x1.x2.r1" for nested)
+- Expanded internal nodes: `instance_prefix.node_name` (e.g., "x1.mid"); ground "0" never remapped
+- `.global` nodes pass through subcircuit expansion unchanged (never prefixed)
+- Model defs inside subcircuits are hoisted to top level without name changes
 ---
 
 ## 2026-03-08 - US-001
@@ -368,4 +374,24 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - JFET gate junctions are PN diodes (Shockley equation) — same gate_junction_current for GS and GD
   - DC sweep source indexing must account for ALL internal nodes (diodes, BJTs, MOSFETs, JFETs) via total_num_nodes()
   - Always read the actual ngspice C source (e.g., jfetload.c) rather than implementing from textbook equations — ngspice has specific modifications
+---
+
+## 2026-03-08 - US-016
+- Implemented subcircuit expansion (flattening) as a pre-processing step before MNA assembly
+- New file: `ferrospice-core/src/subckt.rs` — `flatten_netlist()`, node/element remapping, parameter substitution
+- Modified: `mna.rs` (calls `flatten_netlist` before assembly), `lib.rs` (exports)
+- New integration tests: `ferrospice-core/tests/subcircuit.rs` — 8 tests including global-1.cir port
+- Features: port mapping, internal node prefixing, nested subcircuit expansion, PARAMS substitution, .global nodes, model hoisting
+- Files changed: subckt.rs (new), subcircuit.rs (new test), lib.rs, mna.rs
+- **Learnings for future iterations:**
+  - Subcircuit expansion is a pre-processing step: `flatten_netlist()` called at start of `assemble_mna()`
+  - Node naming convention: `instance_prefix.internal_node` (e.g., "x1.mid", "x1.x2.node3")
+  - Element naming: `instance_prefix.element_name` (e.g., "x1.r1")
+  - Ground node "0" is never remapped during subcircuit expansion
+  - Global nodes (.global) are never prefixed — they pass through as-is
+  - Port mapping is case-insensitive (lowercase comparison)
+  - Model definitions inside subcircuits are hoisted to top level without name prefixing
+  - Parameter substitution resolves `Expr::Param` references using subckt defaults + instance overrides
+  - Nested subcircuits work via recursive `expand_subckt_call()` with depth limit of 64
+  - `SubcktError` variant added to `MnaError` for error propagation
 ---
