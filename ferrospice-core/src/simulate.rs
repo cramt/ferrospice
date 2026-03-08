@@ -3,6 +3,7 @@ use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimV
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::diode::{VT_NOM, pnjlim, vcrit};
+use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::{NrOptions, newton_raphson_solve};
@@ -27,7 +28,10 @@ fn stamp_current_source(rhs: &mut [f64], ni: Option<usize>, nj: Option<usize>, i
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
 
-    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty();
+    let has_nonlinear = !mna.diodes.is_empty()
+        || !mna.bjts.is_empty()
+        || !mna.mosfets.is_empty()
+        || !mna.jfets.is_empty();
     let solution_vec = if !has_nonlinear {
         // Pure linear circuit — direct solve.
         let sol = mna.solve()?;
@@ -82,6 +86,11 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .mosfets
             .iter()
             .map(|m| m.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .jfets
+            .iter()
+            .map(|j| j.model.internal_node_count())
             .sum::<usize>();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
         let idx = num_nodes + i;
@@ -120,7 +129,16 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
         .iter()
         .map(|m| m.model.internal_node_count())
         .sum();
-    let num_nodes = num_ext_nodes + num_internal_diodes + num_internal_bjts + num_internal_mosfets;
+    let num_internal_jfets: usize = mna
+        .jfets
+        .iter()
+        .map(|j| j.model.internal_node_count())
+        .sum();
+    let num_nodes = num_ext_nodes
+        + num_internal_diodes
+        + num_internal_bjts
+        + num_internal_mosfets
+        + num_internal_jfets;
     let options = NrOptions::default();
 
     // The base linear system (matrix + RHS) from MNA assembly contains stamps
@@ -130,6 +148,7 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     let diodes = &mna.diodes;
     let bjts = &mna.bjts;
     let mosfets = &mna.mosfets;
+    let jfets = &mna.jfets;
 
     // Precompute vcrit for each diode for voltage limiting.
     let vcrits: Vec<f64> = diodes
@@ -143,6 +162,13 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     let prev_bjt_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); bjts.len()]);
     // Track previous MOSFET voltages (vgs, vds) for limiting.
     let prev_mos_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); mosfets.len()]);
+    // Track previous JFET junction voltages (vgs, vgd) for limiting.
+    let prev_jfet_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); jfets.len()]);
+    // Precompute vcrit for each JFET for voltage limiting.
+    let jfet_vcrits: Vec<f64> = jfets
+        .iter()
+        .map(|j| vcrit(j.model.n * VT_NOM, j.model.is))
+        .collect();
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps.
@@ -215,6 +241,28 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
                 stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
+
+        // 5. Stamp JFET companion models.
+        {
+            let mut prev = prev_jfet_voltages.borrow_mut();
+            for (ji, jfet) in jfets.iter().enumerate() {
+                let (raw_vgs, raw_vgd) = jfet.junction_voltages(solution);
+
+                let vt = jfet.model.n * VT_NOM;
+                let (vgs, vgd) = jfet_limit(
+                    raw_vgs,
+                    raw_vgd,
+                    prev[ji].0,
+                    prev[ji].1,
+                    vt,
+                    jfet_vcrits[ji],
+                );
+                prev[ji] = (vgs, vgd);
+
+                let comp = jfet.model.companion(vgs, vgd);
+                stamp_jfet(&mut system.matrix, &mut system.rhs, jfet, &comp);
+            }
+        }
     };
 
     let initial = vec![0.0; dim];
@@ -236,6 +284,31 @@ enum SweepSource {
     },
 }
 
+/// Compute total number of nodes including internal nodes for all nonlinear devices.
+fn total_num_nodes(mna: &MnaSystem) -> usize {
+    mna.node_map.len()
+        + mna
+            .diodes
+            .iter()
+            .filter(|d| d.internal_idx.is_some())
+            .count()
+        + mna
+            .bjts
+            .iter()
+            .map(|b| b.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .mosfets
+            .iter()
+            .map(|m| m.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .jfets
+            .iter()
+            .map(|j| j.model.internal_node_count())
+            .sum::<usize>()
+}
+
 /// Find the sweep source in the MNA system and return info for modifying the RHS.
 fn find_sweep_source(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, MnaError> {
     let src_lower = src_name.to_lowercase();
@@ -246,8 +319,9 @@ fn find_sweep_source(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, Mna
         .iter()
         .position(|n| n.to_lowercase() == src_lower)
     {
+        let num_nodes = total_num_nodes(mna);
         return Ok(SweepSource::Voltage {
-            rhs_index: mna.node_map.len() + pos,
+            rhs_index: num_nodes + pos,
         });
     }
 
@@ -477,7 +551,10 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
 /// Solve the MNA system and append the solution to result vectors.
 fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), MnaError> {
-    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty();
+    let has_nonlinear = !mna.diodes.is_empty()
+        || !mna.bjts.is_empty()
+        || !mna.mosfets.is_empty()
+        || !mna.jfets.is_empty();
     if !has_nonlinear {
         // Linear circuit — direct solve.
         let solution = mna.solve()?;
@@ -510,8 +587,16 @@ fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), 
             .iter()
             .map(|m| m.model.internal_node_count())
             .sum();
-        let num_nodes =
-            num_ext_nodes + num_internal_diodes + num_internal_bjts + num_internal_mosfets;
+        let num_internal_jfets: usize = mna
+            .jfets
+            .iter()
+            .map(|j| j.model.internal_node_count())
+            .sum();
+        let num_nodes = num_ext_nodes
+            + num_internal_diodes
+            + num_internal_bjts
+            + num_internal_mosfets
+            + num_internal_jfets;
 
         for (_name, node_idx) in mna.node_map.iter() {
             vecs[idx].real.push(sol[node_idx]);
@@ -1167,5 +1252,80 @@ MN 3 2 0 0 NMOD W=10u L=1u
             vout_high < 0.5,
             "CMOS inv with VIN=5: VOUT should be ~0V, got {vout_high:.4}"
         );
+    }
+
+    #[test]
+    fn test_jfet_2n4221_op() {
+        // Port of ngspice-upstream/tests/jfet/jfet_vds-vgs.cir operating point.
+        // N-channel JFET 2N4221 at VGS=-2V, VDS=25V.
+        // Expected from ngspice: I(VD) ≈ -9.68268e-4
+        let netlist = Netlist::parse(
+            "JFET 2N4221 OP
+j1 2 1 0 MODJ
+VD 2 0 25
+VG 1 0 -2
+.model MODJ NJF LEVEL=1 VTO=-3.5 BETA=4.1E-4 LAMBDA=0.002 RD=200
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+
+        let v1 = op_voltage(&result, "1");
+        let v2 = op_voltage(&result, "2");
+        assert_abs_diff_eq!(v1, -2.0, epsilon = 1e-6);
+        assert_abs_diff_eq!(v2, 25.0, epsilon = 1e-6);
+
+        // I(VD) should be approximately -9.68268e-4
+        let i_vd = op_branch_current(&result, "VD");
+        assert_abs_diff_eq!(i_vd, -9.68268e-4, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn test_jfet_dc_sweep() {
+        // JFET DC sweep: sweep VDS from 0 to 25V at VGS=-2V.
+        // Current should increase in linear region then saturate.
+        let netlist = Netlist::parse(
+            "JFET DC sweep
+j1 2 1 0 MODJ
+VD 2 0 25
+VG 1 0 -2
+.model MODJ NJF VTO=-3.5 BETA=4.1E-4 LAMBDA=0.002 RD=200
+.dc VD 0 25 5
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_dc(&netlist).unwrap();
+        let i_vd = dc_vector(&result, "vd#branch");
+
+        // At VDS=0: almost no current
+        assert!(
+            i_vd[0].abs() < 1e-6,
+            "at VDS=0: current should be near zero, got {}",
+            i_vd[0]
+        );
+
+        // At VDS=25: should be near saturation
+        let i_sat = i_vd[5].abs();
+        assert!(
+            i_sat > 5e-4,
+            "at VDS=25V, VGS=-2V: ID should be > 0.5mA, got {i_sat:.6e}"
+        );
+
+        // Current should increase with VDS (lambda modulation)
+        for i in 1..i_vd.len() {
+            assert!(
+                i_vd[i].abs() >= i_vd[i - 1].abs() - 1e-10,
+                "current should increase with VDS: |I[{}]|={} < |I[{}]|={}",
+                i,
+                i_vd[i].abs(),
+                i - 1,
+                i_vd[i - 1].abs()
+            );
+        }
     }
 }

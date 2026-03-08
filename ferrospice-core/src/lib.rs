@@ -1,6 +1,7 @@
 pub mod ac;
 pub mod bjt;
 pub mod diode;
+pub mod jfet;
 pub mod mna;
 pub mod mosfet;
 pub mod newton;
@@ -12,6 +13,7 @@ pub mod waveform;
 pub use ac::simulate_ac;
 pub use bjt::{BjtInstance, BjtModel, BjtType, stamp_bjt};
 pub use diode::DiodeModel;
+pub use jfet::{JfetInstance, JfetModel, JfetType, stamp_jfet};
 pub use mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
     VoltageSourceInstance, assemble_mna, stamp_conductance,

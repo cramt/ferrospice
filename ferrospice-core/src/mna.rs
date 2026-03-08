@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::LinearSystem;
 use crate::bjt::{BjtInstance, BjtModel};
 use crate::diode::DiodeModel;
+use crate::jfet::{JfetInstance, JfetModel};
 use crate::mosfet::{MosfetInstance, MosfetModel};
 
 /// Ground node name — the reference node excluded from the MNA matrix.
@@ -154,6 +155,8 @@ pub struct MnaSystem {
     pub bjts: Vec<BjtInstance>,
     /// Resolved MOSFET instances for NR iteration.
     pub mosfets: Vec<MosfetInstance>,
+    /// Resolved JFET instances for NR iteration.
+    pub jfets: Vec<JfetInstance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -321,6 +324,24 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 };
                 internal_node_count += mm.internal_node_count();
             }
+            ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params,
+            } => {
+                node_map.index(d);
+                node_map.index(g);
+                node_map.index(s);
+                let _ = params;
+                let jm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    JfetModel::from_model_def(mdef)
+                } else {
+                    JfetModel::new(crate::jfet::JfetType::Njf)
+                };
+                internal_node_count += jm.internal_node_count();
+            }
             _ => {}
         }
     }
@@ -333,6 +354,7 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut diodes = Vec::new();
     let mut bjts = Vec::new();
     let mut mosfets = Vec::new();
+    let mut jfets = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
@@ -521,6 +543,65 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 });
                 // MOSFET stamps are applied during NR iteration, not here.
             }
+            ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params,
+            } => {
+                let jm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    JfetModel::from_model_def(mdef)
+                } else {
+                    JfetModel::new(crate::jfet::JfetType::Njf)
+                };
+
+                let drain_idx = node_map.get(d);
+                let gate_idx = node_map.get(g);
+                let source_idx = node_map.get(s);
+
+                // Create internal nodes for series resistances
+                let drain_prime_idx = if jm.rd > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    drain_idx
+                };
+                let source_prime_idx = if jm.rs > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    source_idx
+                };
+
+                // Extract AREA and M from instance params
+                let mut area = 1.0;
+                let mut m_mult = 1.0;
+                for p in params {
+                    if let Expr::Num(v) = &p.value {
+                        match p.name.to_uppercase().as_str() {
+                            "AREA" => area = *v,
+                            "M" => m_mult = *v,
+                            _ => {}
+                        }
+                    }
+                }
+
+                jfets.push(JfetInstance {
+                    name: element.name.clone(),
+                    drain_idx,
+                    gate_idx,
+                    source_idx,
+                    drain_prime_idx,
+                    source_prime_idx,
+                    model: jm,
+                    area,
+                    m: m_mult,
+                });
+                // JFET stamps are applied during NR iteration, not here.
+            }
             ElementKind::Capacitor {
                 pos,
                 neg,
@@ -584,6 +665,7 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         diodes,
         bjts,
         mosfets,
+        jfets,
         capacitors,
         inductors,
         voltage_sources,

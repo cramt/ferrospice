@@ -107,6 +107,11 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 .mosfets
                 .iter()
                 .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + mna
+                .jfets
+                .iter()
+                .map(|j| j.model.internal_node_count())
                 .sum::<usize>();
         for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
             let idx = num_nodes + i;
@@ -152,6 +157,11 @@ fn solve_ac_point(
             .mosfets
             .iter()
             .map(|m| m.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .jfets
+            .iter()
+            .map(|j| j.model.internal_node_count())
             .sum::<usize>();
     let num_nodes = num_ext_nodes + num_internal;
     let dim = num_nodes + mna.vsource_names.len();
@@ -382,6 +392,63 @@ fn solve_ac_point(
         }
     }
 
+    // 5c. Stamp JFET small-signal model at DC operating point.
+    for jfet in &mna.jfets {
+        let (vgs, vgd) = jfet.junction_voltages(op_solution);
+        let comp = jfet.model.companion(vgs, vgd);
+        let m = jfet.m * jfet.area;
+
+        let dp = jfet.drain_prime_idx;
+        let g = jfet.gate_idx;
+        let sp = jfet.source_prime_idx;
+
+        // ggs conductance g-s' (real)
+        crate::stamp_conductance(&mut sys.real, g, sp, m * comp.ggs);
+        // ggd conductance g-d' (real)
+        crate::stamp_conductance(&mut sys.real, g, dp, m * comp.ggd);
+        // gds conductance d'-s' (real)
+        crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
+
+        // gm VCCS: Vgs controls current s'→d' (real)
+        let gm_scaled = m * comp.gm;
+        if let Some(d) = dp {
+            if let Some(gate) = g {
+                sys.real.add(d, gate, gm_scaled);
+            }
+            if let Some(s) = sp {
+                sys.real.add(d, s, -gm_scaled);
+            }
+        }
+        if let Some(s) = sp {
+            if let Some(gate) = g {
+                sys.real.add(s, gate, -gm_scaled);
+            }
+            sys.real.add(s, s, gm_scaled);
+        }
+
+        // Series resistances (real)
+        if jfet.model.rd > 0.0 {
+            let grd = 1.0 / jfet.model.rd;
+            crate::stamp_conductance(&mut sys.real, jfet.drain_idx, dp, m * grd);
+        }
+        if jfet.model.rs > 0.0 {
+            let grs = 1.0 / jfet.model.rs;
+            crate::stamp_conductance(&mut sys.real, jfet.source_idx, sp, m * grs);
+        }
+
+        // Gate-source junction capacitance (imaginary)
+        let cgs = jfet.model.junction_cap(vgs, jfet.model.cgs);
+        if cgs > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, g, sp, omega * m * cgs);
+        }
+
+        // Gate-drain junction capacitance (imaginary)
+        let cgd = jfet.model.junction_cap(vgd, jfet.model.cgd);
+        if cgd > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, g, dp, omega * m * cgd);
+        }
+    }
+
     // 6. Apply AC source excitation to RHS.
     for element in netlist.elements() {
         match &element.kind {
@@ -521,6 +588,11 @@ fn extract_op_solution(op_result: &SimResult, mna: &MnaSystem) -> Vec<f64> {
             .mosfets
             .iter()
             .map(|m| m.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .jfets
+            .iter()
+            .map(|j| j.model.internal_node_count())
             .sum::<usize>();
     let num_nodes = num_ext_nodes + num_internal;
     let dim = num_nodes + mna.vsource_names.len();

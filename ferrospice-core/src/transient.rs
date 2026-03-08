@@ -13,6 +13,7 @@ use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimV
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::diode::{VT_NOM, pnjlim, vcrit};
+use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::{NrOptions, newton_raphson_solve};
@@ -346,6 +347,11 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .mosfets
             .iter()
             .map(|m| m.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .jfets
+            .iter()
+            .map(|j| j.model.internal_node_count())
             .sum::<usize>();
     let num_nodes = num_ext_nodes + num_internal;
     let dim = mna.system.dim();
@@ -465,7 +471,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .map(|d| vcrit(d.model.n * VT_NOM, d.model.is))
         .collect();
 
-    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty();
+    let has_nonlinear = !mna.diodes.is_empty()
+        || !mna.bjts.is_empty()
+        || !mna.mosfets.is_empty()
+        || !mna.jfets.is_empty();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
     let tran_params = TranParams {
@@ -701,6 +710,19 @@ fn solve_timestep(
             .collect::<Vec<(f64, f64)>>(),
     );
 
+    // Track previous JFET junction voltages (vgs, vgd) for limiting.
+    let jfets = &mna.jfets;
+    let prev_jfet_voltages = std::cell::RefCell::new(
+        jfets
+            .iter()
+            .map(|j| j.junction_voltages(prev_solution))
+            .collect::<Vec<(f64, f64)>>(),
+    );
+    let jfet_vcrits: Vec<f64> = jfets
+        .iter()
+        .map(|j| vcrit(j.model.n * VT_NOM, j.model.is))
+        .collect();
+
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
         for triplet in base_matrix.triplets() {
@@ -808,6 +830,26 @@ fn solve_timestep(
 
                 let comp = eff_model.companion(vgs, vds, vbs);
                 stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
+            }
+
+            // 7. Stamp JFET companion models.
+            let mut prev_jfet = prev_jfet_voltages.borrow_mut();
+            for (ji, jfet) in jfets.iter().enumerate() {
+                let (raw_vgs, raw_vgd) = jfet.junction_voltages(solution);
+
+                let vt = jfet.model.n * VT_NOM;
+                let (vgs, vgd) = jfet_limit(
+                    raw_vgs,
+                    raw_vgd,
+                    prev_jfet[ji].0,
+                    prev_jfet[ji].1,
+                    vt,
+                    jfet_vcrits[ji],
+                );
+                prev_jfet[ji] = (vgs, vgd);
+
+                let comp = jfet.model.companion(vgs, vgd);
+                stamp_jfet(&mut system.matrix, &mut system.rhs, jfet, &comp);
             }
         }
     };
