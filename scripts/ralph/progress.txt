@@ -3,6 +3,14 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- AC analysis: `simulate_ac(&Netlist) -> Result<SimResult>` in ferrospice-core::ac
+- AC uses `ComplexLinearSystem` (separate real/imag sparse matrices) solved via faer `c64` LU decomposition
+- AC sweep modes: DEC (n pts/decade, log spacing), OCT (n pts/octave), LIN (n total points, linear)
+- AC source excitation: `AcSpec { mag, phase }` on voltage/current sources → complex RHS in branch/node equations
+- AC capacitor stamp: imaginary part += ωC (susceptance) between cap nodes
+- AC inductor stamp: imaginary part += -ωL on branch diagonal (branch equation)
+- AC diode stamp: small-signal conductance g_d at DC OP + junction capacitance Cj(V) + transit time cap τ*g_d
+- `DiodeModel::junction_capacitance(v)` computes depletion cap Cj(V) = CJO/(1-V/VJ)^M with linear extrapolation beyond FC*VJ
 - Adaptive timestep: LTE estimated from BE vs Trap difference on capacitor charges and inductor fluxes
 - `BreakpointTable` collects discontinuity times from waveforms, forces timestep to land on them
 - `waveform::breakpoints(&Waveform, &TranParams) -> Vec<f64>` extracts breakpoint times from waveforms
@@ -266,4 +274,28 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - CHGTOL=1e-14 prevents zero-charge elements from demanding infinitely small timesteps
   - At breakpoints, BE is essential — Trap can oscillate (ringing) at discontinuities
   - The `is_at_breakpoint()` check uses `min_break` tolerance to avoid floating-point near-miss issues
+---
+
+## 2026-03-08 - US-012
+- Created `ferrospice-core/src/ac.rs` with AC small-signal analysis engine
+- `simulate_ac(&Netlist) -> Result<SimResult>` — full .ac frequency sweep analysis
+- Added `ComplexLinearSystem` to sparse.rs — separate real/imag sparse matrices solved via faer c64 LU
+- AC algorithm: DC OP → linearize → build (G + jωC) matrix → sweep frequency → solve at each point
+- AC stamps: resistors (real), capacitors (jωC imaginary), inductors (-jωL on branch diagonal)
+- Diode AC stamps: small-signal conductance + junction capacitance + transit time capacitance
+- Added `DiodeModel::junction_capacitance(v)` for depletion cap with linear extrapolation beyond FC*VJ
+- AC source excitation: AcSpec mag/phase → complex RHS (real=mag*cos(phase), imag=mag*sin(phase))
+- Frequency sweep: DEC (n pts/decade), OCT (n pts/octave), LIN (n total points)
+- Result: "frequency" real vector + complex node voltages + complex branch currents
+- 7 unit tests: sweep generation (DEC/OCT/LIN), RC lowpass -3dB, RL highpass
+- 2 integration tests: ngspice lowpass.cir port (31 points matched), RC -3dB analytical verification
+- Files: ferrospice-core/src/ac.rs (new), ferrospice-core/src/sparse.rs, ferrospice-core/src/diode.rs, ferrospice-core/src/lib.rs, ferrospice-core/tests/ac.rs (new)
+- **Learnings for future iterations:**
+  - faer supports `c64` type natively — `Mat::<c64>::zeros()` and `FullPivLu` work with complex matrices
+  - AC analysis reuses DC MNA stamps for the real (conductance) part — only add imaginary susceptances
+  - Inductor AC stamp goes on the branch diagonal (imaginary), not on node entries
+  - Diode junction capacitance uses forward coefficient FC=0.5 and linear extrapolation to avoid singularity at V=VJ
+  - AC source phase is in degrees (from AcSpec), must convert to radians for cos/sin decomposition
+  - The lowpass.cir test has V1 with both AC and SIN waveform — `simulate_ac` only uses the AC spec, ignores transient waveform
+  - ComplexLinearSystem keeps real and imag matrices separate (cleaner than interleaved)
 ---
