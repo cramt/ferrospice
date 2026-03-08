@@ -1,19 +1,49 @@
-# Ralph Agent Instructions
+# Ralph Agent Instructions — Ferrospice
 
-You are an autonomous coding agent working on a software project.
+You are an autonomous coding agent working on **ferrospice**, a Rust rewrite of ngspice (circuit simulator). This is a **library-first** project.
+
+## Project Context
+
+- **Reference C source:** `ngspice-upstream/` (read-only, do not modify)
+- **Existing netlist parser:** `ferrospice-netlist/` crate (parses SPICE files)
+- **Project root CLAUDE.md:** Read `../../CLAUDE.md` for conventions, goals, and dev methodology
+- **Test suite:** `ngspice-upstream/tests/` contains 113 `.cir`/`.out` test pairs — the project is done when all pass
+
+## Quality Checks
+
+**Always run commands through `nix develop --command ...`** so that flake.nix stays honest.
+
+```bash
+nix develop --command cargo clippy --workspace -- -D warnings
+nix develop --command cargo test --workspace
+nix develop --command cargo fmt --check
+```
+
+If a command fails because a tool is missing, add it to the `devShell` in `flake.nix`.
+
+## Key Rules
+
+- **Correctness over performance.** Get it right first. Optimize later.
+- **Make impossible states irrepresentable.** Use enums, newtypes, typestate.
+- **Use facet, not serde.** Use unsynn, not syn.
+- **Split into subcrates freely.** Don't let things get monolithic.
+- **Test-driven.** Write tests first when possible. Port ngspice tests before implementing.
+- **Never include Co-Authored-By lines in git commits.**
+- **Library-first.** All simulation logic lives in library crates. CLI is a thin wrapper.
 
 ## Your Task
 
 1. Read the PRD at `prd.json` (in the same directory as this file)
 2. Read the progress log at `progress.txt` (check Codebase Patterns section first)
-3. Check you're on the correct branch from PRD `branchName`. If not, check it out or create from main.
-4. Pick the **highest priority** user story where `passes: false`
-5. Implement that single user story
-6. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires)
-7. Update CLAUDE.md files if you discover reusable patterns (see below)
-8. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
-9. Update the PRD to set `passes: true` for the completed story
-10. Append your progress to `progress.txt`
+3. Read `../../CLAUDE.md` for project conventions
+4. Check you're on the correct branch from PRD `branchName`. If not, check it out or create from main.
+5. Pick the **highest priority** user story where `passes: false`
+6. Implement that single user story
+7. Run quality checks: `nix develop --command cargo clippy --workspace -- -D warnings && nix develop --command cargo test --workspace`
+8. Update CLAUDE.md files if you discover reusable patterns (see below)
+9. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
+10. Update the PRD to set `passes: true` for the completed story
+11. Append your progress to `progress.txt`
 
 ## Progress Report Format
 
@@ -37,9 +67,9 @@ If you discover a **reusable pattern** that future iterations should know, add i
 
 ```
 ## Codebase Patterns
-- Example: Use `sql<number>` template for aggregations
-- Example: Always use `IF NOT EXISTS` for migrations
-- Example: Export types from actions.ts for UI components
+- Example: Use `faer` for sparse matrix operations
+- Example: Device trait has dc_stamp(), ac_stamp(), tran_stamp() methods
+- Example: Node "0" is ground and excluded from the MNA matrix
 ```
 
 Only add patterns that are **general and reusable**, not story-specific details.
@@ -55,37 +85,11 @@ Before committing, check if any edited files have learnings worth preserving in 
    - Gotchas or non-obvious requirements
    - Dependencies between files
    - Testing approaches for that area
-   - Configuration or environment requirements
-
-**Examples of good CLAUDE.md additions:**
-- "When modifying X, also update Y to keep them in sync"
-- "This module uses pattern Z for all API calls"
-- "Tests require the dev server running on PORT 3000"
-- "Field names must match the template exactly"
 
 **Do NOT add:**
 - Story-specific implementation details
 - Temporary debugging notes
 - Information already in progress.txt
-
-Only update CLAUDE.md if you have **genuinely reusable knowledge** that would help future work in that directory.
-
-## Quality Requirements
-
-- ALL commits must pass your project's quality checks (typecheck, lint, test)
-- Do NOT commit broken code
-- Keep changes focused and minimal
-- Follow existing code patterns
-
-## Browser Testing (If Available)
-
-For any story that changes UI, verify it works in the browser if you have browser testing tools configured (e.g., via MCP):
-
-1. Navigate to the relevant page
-2. Verify the UI changes work as expected
-3. Take a screenshot if helpful for the progress log
-
-If no browser tools are available, note in your progress report that manual browser verification is needed.
 
 ## Stop Condition
 
@@ -102,3 +106,4 @@ If there are still stories with `passes: false`, end your response normally (ano
 - Commit frequently
 - Keep CI green
 - Read the Codebase Patterns section in progress.txt before starting
+- Reference ngspice C source in `ngspice-upstream/` when implementing algorithms

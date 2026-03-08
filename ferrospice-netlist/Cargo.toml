@@ -1,5 +1,5 @@
 [package]
-name = "spice-netlist"
+name = "ferrospice-netlist"
 version = "0.1.0"
 edition = "2024"
 description = "Parser and generator for SPICE netlists (ngspice dialect)"

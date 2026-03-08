@@ -3,7 +3,7 @@
 //! # Quick start
 //!
 //! ```rust
-//! use spice_netlist::{Netlist, Item, ElementKind, Expr, Source};
+//! use ferrospice_netlist::{Netlist, Item, ElementKind, Expr, Source};
 //!
 //! // Parse a netlist from text
 //! let src = "

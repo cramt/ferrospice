@@ -1,3 +1,11 @@
+[workspace]
+members = ["ferrospice-netlist"]
+resolver = "3"
+
+[workspace.dependencies]
+thiserror = "2"
+facet = "0.44"
+
 [package]
 name = "ferrospice"
 version = "0.1.0"
@@ -6,3 +14,4 @@ description = "A Rust rewrite of ngspice - open-source mixed-level/mixed-signal 
 license = "BSD-3-Clause"
 
 [dependencies]
+ferrospice-netlist = { path = "ferrospice-netlist" }

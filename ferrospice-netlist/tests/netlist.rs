@@ -5,7 +5,7 @@
 //! commands.
 
 use approx::assert_abs_diff_eq;
-use spice_netlist::{
+use ferrospice_netlist::{
     AcSpec, AcVariation, Analysis, DcSweep, ElementKind, Expr, Item, Netlist, Source, Waveform,
     format_si,
 };
@@ -19,7 +19,7 @@ fn parse(src: &str) -> Netlist {
 }
 
 fn num(src: &str) -> f64 {
-    spice_netlist::parse::parse_spice_number(src)
+    ferrospice_netlist::parse::parse_spice_number(src)
         .unwrap_or_else(|| panic!("not a number: {src}"))
 }
 
