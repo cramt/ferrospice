@@ -80,6 +80,34 @@ pub struct DiodeInstance {
     pub model: DiodeModel,
 }
 
+/// A resolved capacitor instance with matrix indices.
+#[derive(Debug, Clone)]
+pub struct CapacitorInstance {
+    /// Positive node matrix index (None = ground).
+    pub pos_idx: Option<usize>,
+    /// Negative node matrix index (None = ground).
+    pub neg_idx: Option<usize>,
+    /// Capacitance value in Farads.
+    pub capacitance: f64,
+    /// Initial condition voltage (from IC= parameter), if specified.
+    pub ic: Option<f64>,
+}
+
+/// A resolved inductor instance with matrix indices.
+#[derive(Debug, Clone)]
+pub struct InductorInstance {
+    /// Positive node matrix index (None = ground).
+    pub pos_idx: Option<usize>,
+    /// Negative node matrix index (None = ground).
+    pub neg_idx: Option<usize>,
+    /// Index of this inductor's branch current in the solution vector.
+    pub branch_idx: usize,
+    /// Inductance value in Henrys.
+    pub inductance: f64,
+    /// Initial condition current (from IC= parameter), if specified.
+    pub ic: Option<f64>,
+}
+
 /// The assembled MNA system ready for solving.
 #[derive(Debug)]
 pub struct MnaSystem {
@@ -92,6 +120,10 @@ pub struct MnaSystem {
     pub vsource_names: Vec<String>,
     /// Resolved diode instances for NR iteration.
     pub diodes: Vec<DiodeInstance>,
+    /// Resolved capacitor instances for transient analysis.
+    pub capacitors: Vec<CapacitorInstance>,
+    /// Resolved inductor instances for transient analysis.
+    pub inductors: Vec<InductorInstance>,
 }
 
 impl MnaSystem {
@@ -223,6 +255,8 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut vsource_names = Vec::with_capacity(vsource_count);
     let mut vsource_idx = 0usize;
     let mut diodes = Vec::new();
+    let mut capacitors = Vec::new();
+    let mut inductors = Vec::new();
     let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
     // Second pass: stamp each element.
@@ -261,6 +295,47 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 });
                 // Diode stamps are applied during NR iteration, not here.
             }
+            ElementKind::Capacitor {
+                pos,
+                neg,
+                value,
+                params,
+            } => {
+                let cap_val = expr_value(value, &element.name)?;
+                let pos_idx = node_map.get(pos);
+                let neg_idx = node_map.get(neg);
+                let ic = extract_ic_param(params);
+                capacitors.push(CapacitorInstance {
+                    pos_idx,
+                    neg_idx,
+                    capacitance: cap_val,
+                    ic,
+                });
+                // No DC stamp for capacitor (open circuit in DC).
+            }
+            ElementKind::Inductor {
+                pos,
+                neg,
+                value,
+                params,
+            } => {
+                let ind_val = expr_value(value, &element.name)?;
+                let pos_idx = node_map.get(pos);
+                let neg_idx = node_map.get(neg);
+                let branch = n + vsource_idx;
+                let ic = extract_ic_param(params);
+                inductors.push(InductorInstance {
+                    pos_idx,
+                    neg_idx,
+                    branch_idx: branch,
+                    inductance: ind_val,
+                    ic,
+                });
+                // Stamp inductor as 0V voltage source (short circuit in DC).
+                stamp_inductor_topology(&mut system, pos_idx, neg_idx, branch);
+                vsource_names.push(element.name.clone());
+                vsource_idx += 1;
+            }
             _ => {
                 stamp_element(
                     element,
@@ -279,6 +354,8 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         node_map,
         vsource_names,
         diodes,
+        capacitors,
+        inductors,
     })
 }
 
@@ -345,34 +422,45 @@ fn stamp_element(
                 system.rhs[j] += i_val;
             }
         }
-        ElementKind::Capacitor { .. } => {
-            // Capacitor is open circuit in DC — no contribution to DC matrix.
-        }
-        ElementKind::Inductor { pos, neg, .. } => {
-            // Inductor is short circuit in DC — modeled as 0V voltage source.
-            let ni = node_map.get(pos);
-            let nj = node_map.get(neg);
-            let branch = num_nodes + *vsource_idx;
-
-            if let Some(i) = ni {
-                system.matrix.add(i, branch, 1.0);
-                system.matrix.add(branch, i, 1.0);
-            }
-            if let Some(j) = nj {
-                system.matrix.add(j, branch, -1.0);
-                system.matrix.add(branch, j, -1.0);
-            }
-            // V(pos) - V(neg) = 0 (short circuit)
-            system.rhs[branch] = 0.0;
-
-            vsource_names.push(element.name.clone());
-            *vsource_idx += 1;
+        ElementKind::Capacitor { .. } | ElementKind::Inductor { .. } => {
+            // Handled directly in assemble_mna (need instance info for transient).
         }
         _ => {
             // Skip unsupported elements silently for now
         }
     }
     Ok(())
+}
+
+/// Stamp the topology of an inductor branch equation (same pattern as voltage source).
+fn stamp_inductor_topology(
+    system: &mut LinearSystem,
+    ni: Option<usize>,
+    nj: Option<usize>,
+    branch: usize,
+) {
+    if let Some(i) = ni {
+        system.matrix.add(i, branch, 1.0);
+        system.matrix.add(branch, i, 1.0);
+    }
+    if let Some(j) = nj {
+        system.matrix.add(j, branch, -1.0);
+        system.matrix.add(branch, j, -1.0);
+    }
+    // V(pos) - V(neg) = 0 (short circuit in DC)
+    system.rhs[branch] = 0.0;
+}
+
+/// Extract IC= parameter value from element params.
+fn extract_ic_param(params: &[ferrospice_netlist::Param]) -> Option<f64> {
+    for p in params {
+        if p.name.to_uppercase() == "IC"
+            && let Expr::Num(v) = &p.value
+        {
+            return Some(*v);
+        }
+    }
+    None
 }
 
 /// Stamp a conductance G between nodes ni and nj into the matrix.
