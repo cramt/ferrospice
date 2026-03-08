@@ -10,10 +10,18 @@ A Rust rewrite of [ngspice](https://ngspice.sourceforge.io/), the open-source mi
 
 ## Development
 
-- Build: `cargo build`
-- Test: `cargo test`
-- Check: `cargo clippy -- -D warnings`
-- Format: `cargo fmt --check`
+**Always run commands through `nix develop --command ...`** so that flake.nix stays honest
+and no dependency works by accident from the host environment.
+
+```bash
+nix develop --command cargo build
+nix develop --command cargo test
+nix develop --command cargo clippy --workspace -- -D warnings
+nix develop --command cargo fmt --check
+```
+
+If a command fails because a tool is missing, add it to the `devShell` in `flake.nix`
+rather than installing it on the host.
 
 ## Ralph Loop
 
