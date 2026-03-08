@@ -298,4 +298,26 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - AC source phase is in degrees (from AcSpec), must convert to radians for cos/sin decomposition
   - The lowpass.cir test has V1 with both AC and SIN waveform — `simulate_ac` only uses the AC spec, ignores transient waveform
   - ComplexLinearSystem keeps real and imag matrices separate (cleaner than interleaved)
+- BJT model in `ferrospice-core::bjt`: BjtModel (params), BjtInstance (resolved nodes), BjtCompanion (NR result), stamp_bjt()
+- BJT decomposition: gpi (b'-e'), gmu (b'-c'), gm VCCS (V_be→I from e' to c'), go (c'-e'), plus series resistances
+- PNP: `BjtType::sign()` returns -1.0, applied to junction voltage extraction and RHS equivalent currents
+- BJT internal nodes: `model.internal_node_count()` returns count based on RB/RC/RE > 0
+- BJT junction capacitances: `junction_cap(v, cj0, vj, m)` with FC=0.5 linear extrapolation
+- BJT NR convergence: separate pnjlim for VBE and VBC with independent vcrit values
+---
+
+## 2026-03-08 - US-013
+- Implemented Ebers-Moll/Gummel-Poon level 1 BJT model (NPN and PNP)
+- New file: `ferrospice-core/src/bjt.rs` — BjtModel, BjtInstance, BjtCompanion, stamp_bjt
+- Modified: `mna.rs` (BJT parsing/assembly), `simulate.rs` (OP + DC sweep NR), `ac.rs` (small-signal + caps), `transient.rs` (NR + companion)
+- Files changed: bjt.rs (new), lib.rs, mna.rs, simulate.rs, ac.rs, transient.rs
+- **Learnings for future iterations:**
+  - BJT decomposes into 4 elements: gpi (b'-e'), gmu (b'-c'), gm VCCS (V_be→I c'-e'), go (c'-e')
+  - PNP handled via type sign multiplier: junction_voltages() returns sign*(V_bp-V_ep), RHS ceqbe/ceqbc scaled by sign
+  - Base charge normalization (Gummel-Poon): q1 from Early effect, qb from high-injection rolloff (IKF/IKR)
+  - Series resistances (RB, RC, RE) create internal nodes — `internal_node_count()` determines count
+  - BJT junction voltage limiting reuses `pnjlim()` from diode module, separate vcrit for BE and BC
+  - AC BJT: real conductances (gpi, gmu, gm, go) + imaginary junction capacitances (CJE+TF*gbe, CJC+TR*gbc)
+  - IS=1e-16 gives VBE ≈ 0.81V (higher than textbook 0.7V) — use wider tolerance in tests
+  - DC sweep VCE branch current is negative (source supplies current) — use .abs() in tests
 ---

@@ -223,8 +223,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Ebers-Moll/Gummel-Poon level 1 BJT with NPN/PNP, Early effect, high-injection rolloff, series resistances, junction caps. Integrated into OP, DC sweep, AC, and transient analyses."
     },
     {
       "id": "US-014",
