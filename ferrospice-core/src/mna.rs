@@ -458,11 +458,7 @@ C1 mid 0 1u
         assert_abs_diff_eq!(solution.voltage("1").unwrap(), 10.0, epsilon = 1e-12);
         assert_abs_diff_eq!(solution.voltage("mid").unwrap(), 10.0, epsilon = 1e-12);
         // No current flows (capacitor is open)
-        assert_abs_diff_eq!(
-            solution.branch_current("V1").unwrap(),
-            0.0,
-            epsilon = 1e-12
-        );
+        assert_abs_diff_eq!(solution.branch_current("V1").unwrap(), 0.0, epsilon = 1e-12);
     }
 
     #[test]
