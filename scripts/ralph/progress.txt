@@ -88,6 +88,11 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - MOSFET internal nodes: RD>0 creates internal drain, RS>0 creates internal source (like BJT series resistances)
 - `has_nonlinear` checks: `!mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty()`
 - Subcircuit expansion: `flatten_netlist(&Netlist) -> Result<Netlist, SubcktError>` in ferrospice-core::subckt
+- Controlled sources: VCVS (E), VCCS (G), CCCS (F), CCVS (H) all stamped as linear elements in base MNA matrix
+- VCVS/CCVS add branch equations (like voltage sources); VCCS/CCCS stamp directly into admittance matrix
+- F and H elements reference controlling voltage source by name → vsource_offset_map built during first pass
+- SPICE convention: `G out+ out- ctrl+ ctrl- gm` drives current FROM out+ TO out- internally (current LEAVES out+ externally)
+- Controlled sources are linear → no NR iteration needed, AC/transient get them free from base matrix copy
 - Subcircuit flattening is called automatically at the start of `assemble_mna()` — transparent to callers
 - Expanded element names: `instance_prefix.element_name` (e.g., "x1.r1", "x1.x2.r1" for nested)
 - Expanded internal nodes: `instance_prefix.node_name` (e.g., "x1.mid"); ground "0" never remapped
@@ -394,4 +399,21 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - Parameter substitution resolves `Expr::Param` references using subckt defaults + instance overrides
   - Nested subcircuits work via recursive `expand_subckt_call()` with depth limit of 64
   - `SubcktError` variant added to `MnaError` for error propagation
+---
+
+## 2026-03-08 - US-017
+- Implemented all 4 linear controlled source types: VCVS (E), VCCS (G), CCCS (F), CCVS (H)
+- Added MNA stamp functions: stamp_vcvs, stamp_vccs, stamp_cccs, stamp_ccvs
+- Added instance structs: VcvsInstance, VccsInstance, CccsInstance, CcvsInstance
+- Built vsource_offset_map during first pass for F/H controlling source lookup
+- 6 MNA unit tests + 4 simulate_op integration tests
+- No changes needed for AC or transient — controlled sources are linear, stamps in base matrix
+- Files changed: ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs
+- **Learnings for future iterations:**
+  - VCVS and CCVS add branch equations (increment vsource_count); VCCS and CCCS do not
+  - F and H need vsource branch index lookup → build vsource_offset_map<String, usize> during first pass
+  - SPICE current source convention: `G out+ out- ctrl+ ctrl-` drives current FROM out+ TO out- internally
+  - Externally, current LEAVES out+ → use reversed terminals (`G 0 out ...`) if you want positive V(out)
+  - Linear controlled sources need no NR treatment — stamped once in base matrix, carried through AC/transient
+  - Subcircuit expansion already handles controlled sources (prefixes vsrc names for F/H)
 ---
