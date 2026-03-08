@@ -98,6 +98,14 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Expanded internal nodes: `instance_prefix.node_name` (e.g., "x1.mid"); ground "0" never remapped
 - `.global` nodes pass through subcircuit expansion unchanged (never prefixed)
 - Model defs inside subcircuits are hoisted to top level without name changes
+- Noise analysis: `simulate_noise(&Netlist) -> Result<SimResult>` in ferrospice-core::noise
+- Noise uses adjoint (transposed) AC MNA solve: inject unit current at output, measure response at noise sources
+- Noise contribution formula: noise_density * |V_adj(n1) - V_adj(n2)|² (NevalSrc convention)
+- `ComplexLinearSystem::solve_transpose()` solves adjoint (transposed) complex system
+- `ResistorInstance` in MnaSystem tracks name/pos_idx/neg_idx/resistance for noise
+- Device noise params: KF (flicker coeff), AF (flicker exponent) on DiodeModel, BjtModel, MosfetModel, JfetModel
+- Noise result: two plots — noise1 (spectrum: frequency + onoise/inoise_spectrum) + noise2 (integrated: onoise/inoise_total)
+- `generate_ac_sweep()` and `stamp_imag_conductance()` are public in ac.rs — reusable by noise
 ---
 
 ## 2026-03-08 - US-001
@@ -416,4 +424,27 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - Externally, current LEAVES out+ → use reversed terminals (`G 0 out ...`) if you want positive V(out)
   - Linear controlled sources need no NR treatment — stamped once in base matrix, carried through AC/transient
   - Subcircuit expansion already handles controlled sources (prefixes vsrc names for F/H)
+---
+
+## 2026-03-08 - US-018
+- Implemented noise analysis (.noise) with spectral density and integrated noise
+- New file: `ferrospice-core/src/noise.rs` — `simulate_noise()`, adjoint solve, device noise models
+- Added `ResistorInstance` to `MnaSystem` for tracking resistor nodes/values during noise analysis
+- Added `solve_transpose()` to `ComplexLinearSystem` for adjoint (transposed) system solve
+- Added KF/AF flicker noise params to `DiodeModel`, `BjtModel`, `JfetModel` (MOSFET already had them)
+- Made `generate_ac_sweep()` and `stamp_imag_conductance()` public in ac.rs for reuse
+- Noise sources: resistor thermal (4kTG), diode shot (2qI) + RS thermal + flicker, BJT shot (Ic/Ib) + resistances thermal + flicker, MOSFET channel (8/3 kTgm) + RD/RS thermal + flicker, JFET channel + RD/RS thermal + flicker
+- Output: noise1 plot (spectrum: frequency, onoise_spectrum, inoise_spectrum) + noise2 plot (integrated: onoise_total, inoise_total)
+- 6 tests: analytical thermal noise, voltage divider, simple circuit, integration, output spec parsing
+- Files changed: noise.rs (new), lib.rs, mna.rs, ac.rs, sparse.rs, diode.rs, bjt.rs, jfet.rs
+- **Learnings for future iterations:**
+  - Noise analysis uses adjoint (transposed) AC system solve — inject unit current at output, measure voltage response at each noise source
+  - Noise contribution = noise_spectral_density * |V_adj(n1) - V_adj(n2)|² (ngspice NevalSrc convention)
+  - For thermal noise: noise current source = 4kT*G (A²/Hz), not 4kTR
+  - Voltage divider output noise = 4kT * R_parallel (not 4kT * R_series)
+  - Adjoint of MNA matrix is symmetric for conductance part, only need transpose for full matrix with voltage source branch equations
+  - `generate_ac_sweep()` and `stamp_imag_conductance()` now public in ac.rs — reusable by noise and future analyses
+  - `ResistorInstance` in MnaSystem tracks name/nodes/resistance for noise analysis
+  - Flicker noise uses device-specific formulas: diode/BJT: KF*|I|^AF/f, MOSFET: KF*|Id|^AF/(f*Cox*Leff²), JFET: KF*|Id|^AF/f
+  - Noise integration uses piecewise power-law interpolation (not trapezoidal) for accuracy with 1/f noise
 ---
