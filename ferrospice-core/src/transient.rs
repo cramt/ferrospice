@@ -11,6 +11,7 @@
 use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
+use crate::bjt::stamp_bjt;
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrOptions, newton_raphson_solve};
@@ -334,7 +335,12 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .diodes
         .iter()
         .filter(|d| d.internal_idx.is_some())
-        .count();
+        .count()
+        + mna
+            .bjts
+            .iter()
+            .map(|b| b.model.internal_node_count())
+            .sum::<usize>();
     let num_nodes = num_ext_nodes + num_internal;
     let dim = mna.system.dim();
 
@@ -453,7 +459,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .map(|d| vcrit(d.model.n * VT_NOM, d.model.is))
         .collect();
 
-    let has_nonlinear = !mna.diodes.is_empty();
+    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
     let tran_params = TranParams {
@@ -669,6 +675,14 @@ fn solve_timestep(
             .collect::<Vec<f64>>(),
     );
 
+    // Track previous BJT junction voltages (vbe, vbc) for pnjlim.
+    let bjts = &mna.bjts;
+    let prev_bjt_voltages = std::cell::RefCell::new(
+        bjts.iter()
+            .map(|b| b.junction_voltages(prev_solution))
+            .collect::<Vec<(f64, f64)>>(),
+    );
+
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
         for triplet in base_matrix.triplets() {
@@ -742,6 +756,19 @@ fn solve_timestep(
                     let g_rs = 1.0 / diode.model.rs;
                     stamp_conductance(&mut system.matrix, diode.anode_idx, Some(int_idx), g_rs);
                 }
+            }
+
+            // 5. Stamp BJT companion models.
+            let mut prev_bjt = prev_bjt_voltages.borrow_mut();
+            for (bi, bjt) in bjts.iter().enumerate() {
+                let (raw_vbe, raw_vbc) = bjt.junction_voltages(solution);
+
+                let vbe = bjt.model.limit_vbe(raw_vbe, prev_bjt[bi].0);
+                let vbc = bjt.model.limit_vbc(raw_vbc, prev_bjt[bi].1);
+                prev_bjt[bi] = (vbe, vbc);
+
+                let comp = bjt.model.companion(vbe, vbc);
+                stamp_bjt(&mut system.matrix, &mut system.rhs, bjt, &comp);
             }
         }
     };

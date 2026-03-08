@@ -1,6 +1,7 @@
 use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
+use crate::bjt::stamp_bjt;
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrOptions, newton_raphson_solve};
@@ -25,7 +26,8 @@ fn stamp_current_source(rhs: &mut [f64], ni: Option<usize>, nj: Option<usize>, i
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
 
-    let solution_vec = if mna.diodes.is_empty() {
+    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty();
+    let solution_vec = if !has_nonlinear {
         // Pure linear circuit — direct solve.
         let sol = mna.solve()?;
         // Extract raw values.
@@ -69,7 +71,12 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .diodes
             .iter()
             .filter(|d| d.internal_idx.is_some())
-            .count();
+            .count()
+        + mna
+            .bjts
+            .iter()
+            .map(|b| b.model.internal_node_count())
+            .sum::<usize>();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
         let idx = num_nodes + i;
         let current = if idx < solution_vec.len() {
@@ -96,19 +103,21 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
 fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     let dim = mna.system.dim();
     let num_ext_nodes = mna.node_map.len();
-    let num_internal = mna
+    let num_internal_diodes = mna
         .diodes
         .iter()
         .filter(|d| d.internal_idx.is_some())
         .count();
-    let num_nodes = num_ext_nodes + num_internal;
+    let num_internal_bjts: usize = mna.bjts.iter().map(|b| b.model.internal_node_count()).sum();
+    let num_nodes = num_ext_nodes + num_internal_diodes + num_internal_bjts;
     let options = NrOptions::default();
 
     // The base linear system (matrix + RHS) from MNA assembly contains stamps
-    // for R, V, I, C, L. We'll replay these plus diode companions each iteration.
+    // for R, V, I, C, L. We'll replay these plus diode/BJT companions each iteration.
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
     let diodes = &mna.diodes;
+    let bjts = &mna.bjts;
 
     // Precompute vcrit for each diode for voltage limiting.
     let vcrits: Vec<f64> = diodes
@@ -118,6 +127,8 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
 
     // Track previous junction voltages for pnjlim.
     let prev_jct_voltages = std::cell::RefCell::new(vec![0.0; diodes.len()]);
+    // Track previous BJT junction voltages (vbe, vbc) for pnjlim.
+    let prev_bjt_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); bjts.len()]);
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps.
@@ -129,37 +140,46 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
         }
 
         // 2. Stamp diode companion models.
-        let mut prev = prev_jct_voltages.borrow_mut();
-        for (di, diode) in diodes.iter().enumerate() {
-            // Determine junction voltage.
-            let (jct_anode, jct_cathode) = if diode.internal_idx.is_some() {
-                // RS present: junction is between internal node and cathode.
-                (diode.internal_idx, diode.cathode_idx)
-            } else {
-                (diode.anode_idx, diode.cathode_idx)
-            };
+        {
+            let mut prev = prev_jct_voltages.borrow_mut();
+            for (di, diode) in diodes.iter().enumerate() {
+                let (jct_anode, jct_cathode) = if diode.internal_idx.is_some() {
+                    (diode.internal_idx, diode.cathode_idx)
+                } else {
+                    (diode.anode_idx, diode.cathode_idx)
+                };
 
-            let v_anode = jct_anode.map(|i| solution[i]).unwrap_or(0.0);
-            let v_cathode = jct_cathode.map(|i| solution[i]).unwrap_or(0.0);
-            let mut v_jct = v_anode - v_cathode;
+                let v_anode = jct_anode.map(|i| solution[i]).unwrap_or(0.0);
+                let v_cathode = jct_cathode.map(|i| solution[i]).unwrap_or(0.0);
+                let mut v_jct = v_anode - v_cathode;
 
-            // Apply voltage limiting.
-            v_jct = pnjlim(v_jct, prev[di], diode.model.n * VT_NOM, vcrits[di]);
-            prev[di] = v_jct;
+                v_jct = pnjlim(v_jct, prev[di], diode.model.n * VT_NOM, vcrits[di]);
+                prev[di] = v_jct;
 
-            // Compute companion model.
-            let (g_d, i_eq) = diode.model.companion(v_jct);
+                let (g_d, i_eq) = diode.model.companion(v_jct);
+                stamp_conductance(&mut system.matrix, jct_anode, jct_cathode, g_d);
+                stamp_current_source(&mut system.rhs, jct_anode, jct_cathode, i_eq);
 
-            // Stamp junction conductance.
-            stamp_conductance(&mut system.matrix, jct_anode, jct_cathode, g_d);
+                if let Some(int_idx) = diode.internal_idx {
+                    let g_rs = 1.0 / diode.model.rs;
+                    stamp_conductance(&mut system.matrix, diode.anode_idx, Some(int_idx), g_rs);
+                }
+            }
+        }
 
-            // Stamp equivalent current source (i_eq flows from anode to cathode).
-            stamp_current_source(&mut system.rhs, jct_anode, jct_cathode, i_eq);
+        // 3. Stamp BJT companion models.
+        {
+            let mut prev = prev_bjt_voltages.borrow_mut();
+            for (bi, bjt) in bjts.iter().enumerate() {
+                let (raw_vbe, raw_vbc) = bjt.junction_voltages(solution);
 
-            // If RS > 0, stamp series resistance between external anode and internal node.
-            if let Some(int_idx) = diode.internal_idx {
-                let g_rs = 1.0 / diode.model.rs;
-                stamp_conductance(&mut system.matrix, diode.anode_idx, Some(int_idx), g_rs);
+                // Apply voltage limiting
+                let vbe = bjt.model.limit_vbe(raw_vbe, prev[bi].0);
+                let vbc = bjt.model.limit_vbc(raw_vbc, prev[bi].1);
+                prev[bi] = (vbe, vbc);
+
+                let comp = bjt.model.companion(vbe, vbc);
+                stamp_bjt(&mut system.matrix, &mut system.rhs, bjt, &comp);
             }
         }
     };
@@ -424,7 +444,8 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
 /// Solve the MNA system and append the solution to result vectors.
 fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), MnaError> {
-    if mna.diodes.is_empty() {
+    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty();
+    if !has_nonlinear {
         // Linear circuit — direct solve.
         let solution = mna.solve()?;
         let mut idx = 0;
@@ -445,12 +466,13 @@ fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), 
         let sol = solve_nonlinear_op(mna)?;
         let mut idx = 0;
         let num_ext_nodes = mna.node_map.len();
-        let num_internal = mna
+        let num_internal_diodes = mna
             .diodes
             .iter()
             .filter(|d| d.internal_idx.is_some())
             .count();
-        let num_nodes = num_ext_nodes + num_internal;
+        let num_internal_bjts: usize = mna.bjts.iter().map(|b| b.model.internal_node_count()).sum();
+        let num_nodes = num_ext_nodes + num_internal_diodes + num_internal_bjts;
 
         for (_name, node_idx) in mna.node_map.iter() {
             vecs[idx].real.push(sol[node_idx]);
@@ -823,5 +845,103 @@ D1 2 0 DMOD
                 "at Vd={vd:.4}: measured={i_measured:.6e}, shockley={i_shockley:.6e}, rel_err={rel_err:.6e}"
             );
         }
+    }
+
+    #[test]
+    fn test_bjt_common_emitter_op() {
+        // Common-emitter amplifier DC operating point.
+        // VCC=10V, RC=2k (collector), RB=200k (base bias).
+        // BF=100, IS=1e-16.
+        //
+        // Hand analysis:
+        // IB ≈ (VCC - VBE) / RB ≈ (10 - 0.7) / 200k ≈ 46.5uA
+        // IC = BF * IB ≈ 4.65mA
+        // VC = VCC - IC*RC ≈ 10 - 4.65*2 ≈ 0.7V
+        // (active region if VC > VBE which is marginal here)
+        //
+        // With a smaller RC we stay safely in active region:
+        // RC=1k → VC ≈ 10 - 4.65 = 5.35V
+        let netlist = Netlist::parse(
+            "BJT common-emitter OP
+VCC 1 0 10
+RC 1 col 1k
+RB 1 base 200k
+Q1 col base 0 QMOD
+.model QMOD NPN(BF=100 IS=1e-16)
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+
+        let v_base = op_voltage(&result, "base");
+        let v_col = op_voltage(&result, "col");
+
+        // Base should be near 0.6-0.85V (forward-biased BE junction, IS=1e-16 gives higher VBE)
+        assert!(
+            v_base > 0.55 && v_base < 0.9,
+            "VBE should be ~0.7V, got {v_base:.4}"
+        );
+
+        // Collector should be in active region (above VBE)
+        assert!(
+            v_col > v_base,
+            "Collector ({v_col:.4}) should be above base ({v_base:.4}) for active region"
+        );
+
+        // Check approximate IC: IC ≈ (VCC - VC) / RC
+        let ic = (10.0 - v_col) / 1000.0;
+        let ib = (10.0 - v_base) / 200_000.0;
+        let beta = ic / ib;
+
+        // Beta should be near 100 (BF=100)
+        assert!(
+            beta > 50.0 && beta < 150.0,
+            "beta={beta:.1} should be near 100"
+        );
+    }
+
+    #[test]
+    fn test_bjt_dc_sweep() {
+        // Sweep VBE and verify IC increases exponentially with VBE.
+        let netlist = Netlist::parse(
+            "BJT DC sweep
+VBE 1 0 0.6
+VCE 2 0 5
+Q1 2 1 0 QMOD
+.model QMOD NPN(BF=100 IS=1e-15)
+.dc VBE 0.5 0.8 0.01
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_dc(&netlist).unwrap();
+        let v_be = dc_vector(&result, "vbe");
+        let i_vce = dc_vector(&result, "vce#branch");
+
+        // IC should increase exponentially with VBE.
+        // Check that IC at 0.7V > IC at 0.6V by a large factor.
+        let idx_06 = v_be.iter().position(|&v| (v - 0.6).abs() < 0.005).unwrap();
+        let idx_07 = v_be.iter().position(|&v| (v - 0.7).abs() < 0.005).unwrap();
+
+        let ic_06 = i_vce[idx_06].abs();
+        let ic_07 = i_vce[idx_07].abs();
+
+        // 100mV increase in VBE should give ~50x increase in IC (exp(0.1/0.026))
+        assert!(
+            ic_07 > ic_06 * 10.0,
+            "IC at 0.7V ({ic_07:.4e}) should be >> IC at 0.6V ({ic_06:.4e})"
+        );
+
+        // Verify exponential trend: IC at 0.8V >> IC at 0.7V
+        let idx_08 = v_be.iter().position(|&v| (v - 0.8).abs() < 0.005).unwrap();
+        let ic_08 = i_vce[idx_08].abs();
+        assert!(
+            ic_08 > ic_07 * 5.0,
+            "IC at 0.8V ({ic_08:.4e}) should be >> IC at 0.7V ({ic_07:.4e})"
+        );
     }
 }

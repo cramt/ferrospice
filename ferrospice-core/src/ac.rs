@@ -97,7 +97,12 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 .diodes
                 .iter()
                 .filter(|d| d.internal_idx.is_some())
-                .count();
+                .count()
+            + mna
+                .bjts
+                .iter()
+                .map(|b| b.model.internal_node_count())
+                .sum::<usize>();
         for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
             let idx = num_nodes + i;
             let (re, im) = solution[idx];
@@ -198,7 +203,72 @@ fn solve_ac_point(
         }
     }
 
-    // 5. Apply AC source excitation to RHS.
+    // 5. Stamp BJT small-signal model at DC operating point.
+    for bjt in &mna.bjts {
+        let (vbe, vbc) = bjt.junction_voltages(op_solution);
+        let comp = bjt.model.companion(vbe, vbc);
+        let m = bjt.m * bjt.area;
+
+        let bp = bjt.base_prime_idx;
+        let cp = bjt.col_prime_idx;
+        let ep = bjt.emit_prime_idx;
+
+        // gpi conductance b'-e' (real)
+        crate::stamp_conductance(&mut sys.real, bp, ep, m * comp.gpi);
+        // gmu conductance b'-c' (real)
+        crate::stamp_conductance(&mut sys.real, bp, cp, m * comp.gmu);
+        // go conductance c'-e' (real)
+        crate::stamp_conductance(&mut sys.real, cp, ep, m * comp.go);
+
+        // gm VCCS: V_be controls current from e' to c' (real)
+        let gm_scaled = m * comp.gm;
+        if let Some(c) = cp {
+            if let Some(b) = bp {
+                sys.real.add(c, b, gm_scaled);
+            }
+            if let Some(e) = ep {
+                sys.real.add(c, e, -gm_scaled);
+            }
+        }
+        if let Some(e) = ep {
+            if let Some(b) = bp {
+                sys.real.add(e, b, -gm_scaled);
+            }
+            sys.real.add(e, e, gm_scaled);
+        }
+
+        // Series resistances (real)
+        if bjt.model.rb > 0.0 {
+            let gx = 1.0 / bjt.model.rb;
+            crate::stamp_conductance(&mut sys.real, bjt.base_idx, bp, m * gx);
+        }
+        if bjt.model.rc > 0.0 {
+            let gcpr = 1.0 / bjt.model.rc;
+            crate::stamp_conductance(&mut sys.real, bjt.col_idx, cp, m * gcpr);
+        }
+        if bjt.model.re > 0.0 {
+            let gepr = 1.0 / bjt.model.re;
+            crate::stamp_conductance(&mut sys.real, bjt.emit_idx, ep, m * gepr);
+        }
+
+        // B-E junction capacitance (imaginary): jω * (Cje + Tf*gbe)
+        let cap_be = bjt.model.cap_be(vbe);
+        let gbe = comp.gpi * bjt.model.bf; // recover gbe from gpi = gbe/BF
+        let total_cap_be = cap_be + bjt.model.tf * gbe;
+        if total_cap_be > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bp, ep, omega * m * total_cap_be);
+        }
+
+        // B-C junction capacitance (imaginary): jω * (Cjc + Tr*gbc)
+        let cap_bc = bjt.model.cap_bc(vbc);
+        let gbc = comp.gmu * bjt.model.br; // recover gbc from gmu = gbc/BR
+        let total_cap_bc = cap_bc + bjt.model.tr * gbc;
+        if total_cap_bc > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bp, cp, omega * m * total_cap_bc);
+        }
+    }
+
+    // 6. Apply AC source excitation to RHS.
     for element in netlist.elements() {
         match &element.kind {
             ferrospice_netlist::ElementKind::VoltageSource { source, .. } => {

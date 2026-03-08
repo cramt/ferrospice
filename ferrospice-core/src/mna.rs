@@ -4,6 +4,7 @@ use ferrospice_netlist::{Element, ElementKind, Expr, Netlist};
 use thiserror::Error;
 
 use crate::LinearSystem;
+use crate::bjt::{BjtInstance, BjtModel};
 use crate::diode::DiodeModel;
 
 /// Ground node name — the reference node excluded from the MNA matrix.
@@ -148,6 +149,8 @@ pub struct MnaSystem {
     pub capacitors: Vec<CapacitorInstance>,
     /// Resolved inductor instances for transient analysis.
     pub inductors: Vec<InductorInstance>,
+    /// Resolved BJT instances for NR iteration.
+    pub bjts: Vec<BjtInstance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -273,6 +276,28 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     internal_node_count += 1;
                 }
             }
+            ElementKind::Bjt {
+                c,
+                b,
+                e,
+                substrate,
+                model,
+                params,
+            } => {
+                node_map.index(c);
+                node_map.index(b);
+                node_map.index(e);
+                if let Some(s) = substrate {
+                    node_map.index(s);
+                }
+                let _ = params; // instance params handled in second pass
+                let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    BjtModel::from_model_def(mdef)
+                } else {
+                    BjtModel::new(crate::bjt::BjtType::Npn)
+                };
+                internal_node_count += bm.internal_node_count();
+            }
             _ => {}
         }
     }
@@ -283,6 +308,7 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut vsource_names = Vec::with_capacity(vsource_count);
     let mut vsource_idx = 0usize;
     let mut diodes = Vec::new();
+    let mut bjts = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
@@ -324,6 +350,75 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     model: dm,
                 });
                 // Diode stamps are applied during NR iteration, not here.
+            }
+            ElementKind::Bjt {
+                c,
+                b,
+                e,
+                model,
+                params,
+                ..
+            } => {
+                let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    BjtModel::from_model_def(mdef)
+                } else {
+                    BjtModel::new(crate::bjt::BjtType::Npn)
+                };
+                let bm = bm.with_instance_params(params);
+
+                let col_idx = node_map.get(c);
+                let base_idx = node_map.get(b);
+                let emit_idx = node_map.get(e);
+
+                // Create internal nodes for series resistances
+                let base_prime_idx = if bm.rb > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    base_idx
+                };
+                let col_prime_idx = if bm.rc > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    col_idx
+                };
+                let emit_prime_idx = if bm.re > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    emit_idx
+                };
+
+                // Extract area and M from instance params
+                let mut area = 1.0;
+                let mut m_mult = 1.0;
+                for p in params {
+                    if let Expr::Num(v) = &p.value {
+                        match p.name.to_uppercase().as_str() {
+                            "AREA" => area = *v,
+                            "M" => m_mult = *v,
+                            _ => {}
+                        }
+                    }
+                }
+
+                bjts.push(BjtInstance {
+                    name: element.name.clone(),
+                    col_idx,
+                    base_idx,
+                    emit_idx,
+                    base_prime_idx,
+                    col_prime_idx,
+                    emit_prime_idx,
+                    model: bm,
+                    area,
+                    m: m_mult,
+                });
+                // BJT stamps are applied during NR iteration, not here.
             }
             ElementKind::Capacitor {
                 pos,
@@ -386,6 +481,7 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         node_map,
         vsource_names,
         diodes,
+        bjts,
         capacitors,
         inductors,
         voltage_sources,

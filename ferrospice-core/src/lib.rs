@@ -1,4 +1,5 @@
 pub mod ac;
+pub mod bjt;
 pub mod diode;
 pub mod mna;
 pub mod newton;
@@ -8,6 +9,7 @@ pub mod transient;
 pub mod waveform;
 
 pub use ac::simulate_ac;
+pub use bjt::{BjtInstance, BjtModel, BjtType, stamp_bjt};
 pub use diode::DiodeModel;
 pub use mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
