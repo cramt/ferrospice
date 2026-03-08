@@ -38,6 +38,17 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - NR fallback chain: direct NR → Gmin stepping (1e-2 down to 1e-12) → source stepping (0.0 to 1.0)
 - Diode companion model: g_d = IS/Vt * exp(V/Vt), i_eq = I(V) - g_d * V; stamp g_d as conductance, i_eq as current source
 - `NrOptions::default()` matches ngspice: ABSTOL=1e-12, RELTOL=1e-3, VNTOL=1e-6, ITL1=100, ITL2=50, GMIN=1e-12
+- Diode model: `DiodeModel` in ferrospice-core::diode — IS, N, RS, BV, IBV, CJO, VJ, M, TT params
+- Diode companion: `(g_eq, i_eq) = model.companion(v_jct)` — stamp g_eq as conductance, i_eq as current source
+- `DiodeModel::from_model_def(&ModelDef)` parses .model params; `.with_instance_params(&[Param])` applies overrides
+- `DiodeInstance` in MNA: tracks anode_idx, cathode_idx, internal_idx (for RS>0), and resolved DiodeModel
+- `stamp_conductance` is now public (used by both mna.rs and simulate.rs NR load function)
+- `Triplet` struct and `SparseMatrix::triplets()` are public — NR load copies base linear stamps each iteration
+- `SparseMatrixError::SingularMatrix(String)` variant wraps NrError messages
+- `simulate_op` auto-detects diodes: linear circuits use direct solve, nonlinear use NR
+- `solve_nonlinear_op(mna)` builds NR load closure that replays base stamps + diode companions
+- Voltage limiting: `pnjlim(v_new, v_old, vt, vcrit)` prevents NR divergence from exp() overflow
+- `collect_solution_into` and `simulate_dc` also detect diodes and use NR for each sweep point
 ---
 
 ## 2026-03-08 - US-001
@@ -141,4 +152,28 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - `load_system` callback takes source_factor (f64) for source stepping support
   - Clippy enforces max 7 arguments per function — use structs to bundle params
   - ngspice ITL2=50 is used for Gmin/source stepping sub-iterations
+---
+
+## 2026-03-08 - US-008
+- Created `ferrospice-core/src/diode.rs` with `DiodeModel` struct and Shockley equation
+- Model params: IS, N, RS, BV, IBV, CJO, VJ, M, TT — all with ngspice defaults
+- NR companion model: `companion(v) -> (g_eq, i_eq)` for linearization at each iteration
+- Voltage limiting via `pnjlim()` matching ngspice `DEVpnjlim` for convergence stability
+- Series resistance support: RS > 0 creates internal node between RS and junction
+- `DiodeInstance` in MNA tracks resolved node indices and model params
+- Modified `assemble_mna()` to parse .model defs, create `DiodeInstance`s, skip diode stamps (applied during NR)
+- Modified `simulate_op()` to auto-detect nonlinear elements and use NR solver
+- `solve_nonlinear_op()` builds NR load closure: replays base linear stamps + diode companions
+- Modified `collect_solution_into()` and `simulate_dc()` to use NR for nonlinear circuits
+- Made `stamp_conductance`, `Triplet`, `SparseMatrix::triplets()` public for NR load function
+- Added `SparseMatrixError::SingularMatrix(String)` variant to wrap NR errors
+- 10 new tests: DiodeModel unit tests (5), simulate_op diode tests (2), DC sweep I-V tests (2), Shockley verification (1)
+- Files: ferrospice-core/src/diode.rs (new), ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/sparse.rs
+- **Learnings for future iterations:**
+  - NR load function needs to copy base linear stamps each iteration (matrix is cleared) — use `triplets()` accessor
+  - `RefCell` needed for mutable state (prev junction voltages) inside `Fn` closure for NR
+  - Model lookup: build `BTreeMap<String, &ModelDef>` keyed on uppercase name during MNA assembly
+  - Internal nodes (for RS) are indexed after external nodes: `node_map.len()..node_map.len()+internal_count`
+  - `num_nodes` for NR convergence check must include internal nodes, not just external ones
+  - DC sweep with diodes: each sweep point runs full NR solve, not just linear matrix solve
 ---
