@@ -351,7 +351,8 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
         let name = mos.name.to_lowercase();
         let (vgs, vds, vbs) = mos.terminal_voltages(&solution);
 
-        let mos_params: &[(&str, f64, Box<dyn Fn(&mut crate::mosfet::MosfetModel, f64)>)] = &[
+        type MosSetter = Box<dyn Fn(&mut crate::mosfet::MosfetModel, f64)>;
+        let mos_params: &[(&str, f64, MosSetter)] = &[
             ("vto", mos.model.vto, Box::new(|m, v| m.vto = v)),
             ("kp", mos.model.kp, Box::new(|m, v| m.kp = v)),
             ("lambda", mos.model.lambda, Box::new(|m, v| m.lambda = v)),
@@ -398,7 +399,8 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
         let name = jfet.name.to_lowercase();
         let (vgs, vgd) = jfet.junction_voltages(&solution);
 
-        let jfet_params: &[(&str, f64, Box<dyn Fn(&mut crate::jfet::JfetModel, f64)>)] = &[
+        type JfetSetter = Box<dyn Fn(&mut crate::jfet::JfetModel, f64)>;
+        let jfet_params: &[(&str, f64, JfetSetter)] = &[
             ("vto", jfet.model.vto, Box::new(|m, v| m.vto = v)),
             ("beta", jfet.model.beta, Box::new(|m, v| m.beta = v)),
             ("lambda", jfet.model.lambda, Box::new(|m, v| m.lambda = v)),

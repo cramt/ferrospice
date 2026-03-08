@@ -81,13 +81,13 @@ fn find_input_source(
 
     // Check current sources in the netlist
     for elem in netlist.elements() {
-        if elem.name.eq_ignore_ascii_case(input) {
-            if let ElementKind::CurrentSource { pos, neg, .. } = &elem.kind {
-                return Ok(InputSource::Current {
-                    pos_idx: mna.node_map.get(&pos.to_lowercase()),
-                    neg_idx: mna.node_map.get(&neg.to_lowercase()),
-                });
-            }
+        if elem.name.eq_ignore_ascii_case(input)
+            && let ElementKind::CurrentSource { pos, neg, .. } = &elem.kind
+        {
+            return Ok(InputSource::Current {
+                pos_idx: mna.node_map.get(&pos.to_lowercase()),
+                neg_idx: mna.node_map.get(&neg.to_lowercase()),
+            });
         }
     }
 
