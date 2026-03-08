@@ -3,6 +3,10 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- Integration tests go in `ferrospice-core/tests/` — use `CARGO_MANIFEST_DIR` to locate ngspice test files
+- ngspice check.sh filters: SPARSE|KLU|CPU|Dynamic|Note|Circuit|Doing|---|Data|Index|trans|acan|etc.
+- ngspice .out data rows are tab-separated, start with integer index, use scientific notation
+- `simulate_op` works on any netlist regardless of what analysis commands are present (ignores .tran/.ac)
 - Use `faer` 0.24 for sparse matrix / linear algebra (pure Rust, supports LU via `FullPivLu`)
 - Import `faer::prelude::Solve` trait to use `.solve()` on LU decomposition
 - `SparseMatrix` uses triplet (COO) form with duplicate summing — standard for MNA stamp accumulation
@@ -72,4 +76,22 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - Inductor DC stamp is identical to a voltage source stamp with V=0 — reuse the same pattern
   - Inductor branch entries go into `vsource_names`, so `simulate_op` picks them up automatically
   - No changes needed in `simulate.rs` — the existing loop over `vsource_names` handles inductors
+---
+
+## 2026-03-08 - US-005
+- Created integration test module `ferrospice-core/tests/resistance.rs`
+- Loads actual .cir files from `ngspice-upstream/tests/resistance/` directory
+- Validates DC OP results against numerical values from .out reference files
+- Created `filter_output()` utility matching ngspice check.sh filtering rules
+- Created `extract_data_rows()` for parsing tab-separated data from .out files
+- Tests: res_simple DC OP (pass), res_partition DC OP (pass), res_array (#[ignore] - needs model support)
+- Full output comparison tests marked #[ignore] with TODOs for transient (US-009) and AC (US-012)
+- Files: ferrospice-core/tests/resistance.rs (new), ferrospice-core/src/mna.rs (fmt)
+- **Learnings for future iterations:**
+  - `simulate_op` works on any netlist even without explicit .OP command — it just builds MNA and solves
+  - Use `CARGO_MANIFEST_DIR` + relative path to locate ngspice-upstream test files from integration tests
+  - ngspice .out data rows: tab-separated, index column first, scientific notation values
+  - check.sh filtering is quite aggressive — removes analysis keywords, headers, solver info
+  - res_array.cir needs model-based resistance (RSH, W/L geometry) — R = RSH * L / (W - NARROW) for R3=11kΩ
+  - res_partition.cir uses ac=15k on r2 — changes AC behavior (V(2)=0.75) vs DC (V(2)=0.5)
 ---
