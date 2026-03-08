@@ -860,6 +860,8 @@ fn expr_val_or(expr: &Expr, default: f64) -> f64 {
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     #[test]
     fn test_resistor_thermal_noise_analytical() {

@@ -3,9 +3,13 @@
 //! Loads actual .cir files, parses with ferrospice_netlist, simulates with
 //! ferrospice_core, and compares output against expected .out reference values.
 
+#[cfg(target_arch = "wasm32")]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use approx::assert_abs_diff_eq;
 use ferrospice_core::simulate_op;
 use ferrospice_netlist::{Netlist, SimResult};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_test::wasm_bindgen_test as test;
 
 /// Path to the ngspice resistance test directory.
 const RESISTANCE_DIR: &str = concat!(

@@ -26,6 +26,7 @@
         pkgs = import nixpkgs {inherit system overlays;};
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+          targets = ["wasm32-unknown-unknown" "wasm32-unknown-emscripten" "wasm32-wasip1"];
           extensions = ["rust-src" "rust-analyzer" "clippy" "rustfmt"];
         };
 
@@ -40,10 +41,11 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonCraneArgs;
 
-        ferrospice = craneLib.buildPackage (commonCraneArgs // {
-          inherit cargoArtifacts;
-          doCheck = true;
-        });
+        ferrospice = craneLib.buildPackage (commonCraneArgs
+          // {
+            inherit cargoArtifacts;
+            doCheck = true;
+          });
 
         ci-build = pkgs.writeShellScriptBin "ci-build" ''
           set -euo pipefail
@@ -51,6 +53,12 @@
           ${pkgs.nix}/bin/nix build .#ferrospice --print-build-logs
           echo ""
           echo "=== Build complete ==="
+        '';
+
+        test-wasm = pkgs.writeShellScriptBin "test-wasm" ''
+          set -euo pipefail
+          echo "=== Running tests in WebAssembly (Headless Chrome) ==="
+          ${rustToolchain}/bin/cargo test --target wasm32-unknown-unknown
         '';
 
         update-deps = pkgs.writeShellScriptBin "update-deps" ''
@@ -71,7 +79,7 @@
       in {
         packages = {
           default = ferrospice;
-          inherit ferrospice ci-build update-deps;
+          inherit ferrospice ci-build update-deps test-wasm;
         };
 
         apps.default = flake-utils.lib.mkApp {
@@ -86,6 +94,10 @@
           drv = update-deps;
         };
 
+        apps.test-wasm = flake-utils.lib.mkApp {
+          drv = test-wasm;
+        };
+
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             rustToolchain
@@ -93,6 +105,11 @@
             openssl
             git
             jq
+            wasmtime
+            wasm-bindgen-cli
+            nodejs
+            chromium
+            chromedriver
           ];
 
           shellHook = ''
@@ -103,6 +120,7 @@
             echo ""
             echo "  Build:   cargo build"
             echo "  Test:    cargo test"
+            echo "  Wasm:    cargo test --target wasm32-unknown-unknown"
             echo "  Check:   cargo clippy --workspace -- -D warnings"
           '';
         };

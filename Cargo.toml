@@ -5,6 +5,12 @@ resolver = "3"
 [workspace.dependencies]
 thiserror = "2"
 facet = "0.44"
+wasm-bindgen-test = "0.3"
+faer = {version = "0.24", default-features = false, features = ["npy", "rand", "sparse-linalg", "std"]}
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+faer = {version = "0.24", default-features = false, features = ["npy", "rand", "rayon", "sparse-linalg", "std"]}
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
 
 [package]
 name = "ferrospice"
@@ -15,3 +21,6 @@ license = "BSD-3-Clause"
 
 [dependencies]
 ferrospice-netlist = { path = "ferrospice-netlist" }
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true

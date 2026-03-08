@@ -883,6 +883,8 @@ fn expr_val(expr: &Expr, context: &str) -> Result<f64, MnaError> {
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     /// Helper to get a vector from a transient result.
     fn tran_vector<'a>(result: &'a SimResult, name: &str) -> &'a Vec<f64> {

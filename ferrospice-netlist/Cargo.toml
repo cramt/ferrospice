@@ -10,3 +10,4 @@ facet.workspace = true
 
 [dev-dependencies]
 approx = "0.5"
+wasm-bindgen-test.workspace = true

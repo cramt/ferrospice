@@ -446,6 +446,8 @@ mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
     use ferrospice_netlist::Param;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     #[test]
     fn test_default_jfet_model() {

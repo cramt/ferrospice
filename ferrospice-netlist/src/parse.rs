@@ -411,8 +411,16 @@ fn parse_source(tokens: &[String]) -> Source {
                 src.ac = Some(AcSpec { mag, phase });
             }
             _ => {
-                // Try as a waveform
-                if let Some(w) = parse_waveform(&tokens[i]) {
+                // Handle dc=VALUE or DC=VALUE format
+                if upper.starts_with("DC=") {
+                    let val_str = &tokens[i][3..]; // skip "dc=" or "DC="
+                    if let Some(v) = parse_spice_number(val_str) {
+                        src.dc = Some(Expr::Num(v));
+                    } else {
+                        src.dc = Some(parse_expr(val_str));
+                    }
+                } else if let Some(w) = parse_waveform(&tokens[i]) {
+                    // Try as a waveform
                     src.waveform = Some(w);
                 } else if src.dc.is_none() {
                     // Bare value with no keyword: treat as DC
@@ -804,11 +812,26 @@ fn parse_dot(
                 .get(1)
                 .ok_or_else(|| syntax(lineno, ".model: missing name"))?
                 .clone();
-            let kind = tokens
+            let raw_kind = tokens
                 .get(2)
                 .ok_or_else(|| syntax(lineno, ".model: missing type"))?
-                .to_uppercase();
-            let params = collect_params(&tokens[3..]);
+                .clone();
+
+            // Handle parenthesized params: "NPN(BF=80 RB=100 ...)"
+            // The tokenizer keeps everything inside parens as one token.
+            let (kind, params) = if let Some(paren_start) = raw_kind.find('(') {
+                let type_part = raw_kind[..paren_start].to_uppercase();
+                let inner = raw_kind[paren_start + 1..].trim_end_matches(')');
+                // Re-tokenize the inner params (they are space-separated key=value pairs)
+                let inner_tokens: Vec<String> =
+                    inner.split_whitespace().map(String::from).collect();
+                let mut params = collect_params(&inner_tokens);
+                // Also collect any params after the parenthesized token
+                params.extend(collect_params(&tokens[3..]));
+                (type_part, params)
+            } else {
+                (raw_kind.to_uppercase(), collect_params(&tokens[3..]))
+            };
             Ok(Item::Model(ModelDef { name, kind, params }))
         }
 
@@ -973,6 +996,8 @@ mod tests {
     use super::*;
     use crate::{ElementKind, Item};
     use approx::assert_abs_diff_eq;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     fn parse_ok(src: &str) -> Netlist {
         Netlist::parse(src).expect("parse failed")

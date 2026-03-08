@@ -1,0 +1,4 @@
+[target.wasm32-wasi]
+runner = "wasmtime"
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

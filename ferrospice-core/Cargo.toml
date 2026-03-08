@@ -6,8 +6,10 @@ description = "Core simulation engine types for ferrospice: sparse matrices, MNA
 
 [dependencies]
 thiserror.workspace = true
-faer = "0.24"
+faer.workspace = true
 ferrospice-netlist = { path = "../ferrospice-netlist" }
 
 [dev-dependencies]
 approx = "0.5"
+wasm-bindgen-test.workspace = true
+getrandom = { version = "0.3", features = ["wasm_js"] }

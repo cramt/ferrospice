@@ -141,6 +141,8 @@ pub struct VoltageSourceInstance {
 /// A resolved current source instance with matrix indices and waveform.
 #[derive(Debug, Clone)]
 pub struct CurrentSourceInstance {
+    /// Element name.
+    pub name: String,
     /// Positive node matrix index (None = ground).
     pub pos_idx: Option<usize>,
     /// Negative node matrix index (None = ground).
@@ -1046,6 +1048,7 @@ fn stamp_element(
             }
 
             current_sources.push(CurrentSourceInstance {
+                name: element.name.clone(),
                 pos_idx: ni,
                 neg_idx: nj,
                 dc_value: i_val,
@@ -1225,6 +1228,8 @@ mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
     use ferrospice_netlist::Netlist;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     #[test]
     fn test_voltage_divider() {

@@ -511,6 +511,8 @@ pub fn stamp_bjt(
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     #[test]
     fn test_default_bjt_model() {

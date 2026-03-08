@@ -484,6 +484,8 @@ fn resolve_source(
 mod tests {
     use super::*;
     use ferrospice_netlist::Netlist;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     #[test]
     fn test_simple_subcircuit_expansion() {

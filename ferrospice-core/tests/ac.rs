@@ -1,8 +1,12 @@
 //! Integration tests for AC analysis, porting ngspice-upstream/tests/filters/ tests.
 
+#[cfg(target_arch = "wasm32")]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use approx::assert_abs_diff_eq;
 use ferrospice_core::simulate_ac;
 use ferrospice_netlist::Netlist;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_test::wasm_bindgen_test as test;
 
 /// Port of ngspice-upstream/tests/filters/lowpass.cir
 ///

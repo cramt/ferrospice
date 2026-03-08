@@ -114,8 +114,23 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     })
 }
 
+/// Solve the DC operating point and return the raw solution vector.
+/// Layout: [node_voltages..., internal_nodes..., branch_currents...].
+pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
+    let has_nonlinear = !mna.diodes.is_empty()
+        || !mna.bjts.is_empty()
+        || !mna.mosfets.is_empty()
+        || !mna.jfets.is_empty();
+
+    if !has_nonlinear {
+        mna.system.solve().map_err(MnaError::from)
+    } else {
+        solve_nonlinear_op(mna)
+    }
+}
+
 /// Solve a nonlinear DC operating point using Newton-Raphson.
-fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
+pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     let dim = mna.system.dim();
     let num_ext_nodes = mna.node_map.len();
     let num_internal_diodes = mna
@@ -285,7 +300,7 @@ enum SweepSource {
 }
 
 /// Compute total number of nodes including internal nodes for all nonlinear devices.
-fn total_num_nodes(mna: &MnaSystem) -> usize {
+pub(crate) fn total_num_nodes(mna: &MnaSystem) -> usize {
     mna.node_map.len()
         + mna
             .diodes
@@ -626,6 +641,8 @@ mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
     use ferrospice_netlist::Netlist;
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     /// Helper to get a node voltage from the OP result.
     fn op_voltage(result: &SimResult, node: &str) -> f64 {
@@ -1035,7 +1052,7 @@ Q1 col base 0 QMOD
 VBE 1 0 0.6
 VCE 2 0 5
 Q1 2 1 0 QMOD
-.model QMOD NPN(BF=100 IS=1e-15)
+.model QMOD NPN(BF=100)
 .dc VBE 0.5 0.8 0.01
 .end
 ",
@@ -1073,9 +1090,9 @@ Q1 2 1 0 QMOD
     fn test_nmos_inverter_op() {
         // Simple NMOS inverter-like circuit: VDD=5V, RD=10k drain resistor,
         // VGS=3V (gate driven by voltage source).
-        // M1: NMOS with VTO=1V, KP=1e-4 (with W/L scaling)
+        // M1: NMOS with VTO=0.7V, KP=2e-5 (with W/L scaling)
         //
-        // At VGS=3V, VTO=1V → Vgst=2V.
+        // At VGS=3V, VTO=0.7V → Vgst=2.3V.
         // Check if MOSFET is conducting (V(drain) < VDD).
         let netlist = Netlist::parse(
             "NMOS inverter OP
@@ -1083,7 +1100,7 @@ VDD 1 0 5
 VGS 2 0 3
 RD 1 3 10k
 M1 3 2 0 0 NMOD W=10u L=1u
-.model NMOD NMOS(VTO=1 KP=1e-4)
+.model NMOD NMOS(VTO=0.7 KP=2e-5)
 .op
 .end
 ",
@@ -1111,7 +1128,7 @@ M1 3 2 0 0 NMOD W=10u L=1u
     #[test]
     fn test_nmos_dc_sweep_transfer_curve() {
         // Sweep VGS from 0 to 5V across NMOS with RD load.
-        // Below threshold (VGS < VTO=1V): V(drain) ≈ VDD (cutoff)
+        // Below threshold (VGS < VTO=0.7V): V(drain) ≈ VDD (cutoff)
         // Above threshold: V(drain) drops as MOSFET conducts.
         let netlist = Netlist::parse(
             "NMOS transfer curve
@@ -1119,7 +1136,7 @@ VDD 1 0 5
 VGS 2 0 0
 RD 1 3 10k
 M1 3 2 0 0 NMOD W=10u L=1u
-.model NMOD NMOS(VTO=1 KP=1e-4)
+.model NMOD NMOS(VTO=0.7 KP=2e-5)
 .dc VGS 0 5 0.5
 .end
 ",
@@ -1184,7 +1201,7 @@ M1 3 2 0 0 NMOD W=10u L=1u
 VDD 1 0 5
 RS 3 0 10k
 M1 3 0 1 1 PMOD W=10u L=1u
-.model PMOD PMOS(VTO=-1 KP=1e-4)
+.model PMOD PMOS(VTO=-0.7 KP=2e-5)
 .op
 .end
 ",
@@ -1213,8 +1230,8 @@ VDD 1 0 5
 VIN 2 0 0
 MP 3 2 1 1 PMOD W=10u L=1u
 MN 3 2 0 0 NMOD W=10u L=1u
-.model NMOD NMOS(VTO=1 KP=1e-4)
-.model PMOD PMOS(VTO=-1 KP=1e-4)
+.model NMOD NMOS(VTO=0.7 KP=2e-5)
+.model PMOD PMOS(VTO=-0.7 KP=2e-5)
 .op
 .end
 ",
@@ -1236,8 +1253,8 @@ VDD 1 0 5
 VIN 2 0 5
 MP 3 2 1 1 PMOD W=10u L=1u
 MN 3 2 0 0 NMOD W=10u L=1u
-.model NMOD NMOS(VTO=1 KP=1e-4)
-.model PMOD PMOS(VTO=-1 KP=1e-4)
+.model NMOD NMOS(VTO=0.7 KP=2e-5)
+.model PMOD PMOS(VTO=-0.7 KP=2e-5)
 .op
 .end
 ",
