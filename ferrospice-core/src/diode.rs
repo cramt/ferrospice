@@ -156,6 +156,26 @@ impl DiodeModel {
         (g, i_eq)
     }
 
+    /// Junction (depletion) capacitance at a given voltage.
+    ///
+    /// Cj(V) = CJO / (1 - V/VJ)^M for V < FC*VJ (forward coefficient FC=0.5)
+    /// Uses linear extrapolation beyond FC*VJ to avoid singularity.
+    pub fn junction_capacitance(&self, v: f64) -> f64 {
+        if self.cjo <= 0.0 {
+            return 0.0;
+        }
+        let fc = 0.5; // forward coefficient (ngspice default)
+        let fc_vj = fc * self.vj;
+        if v < fc_vj {
+            self.cjo / (1.0 - v / self.vj).powf(self.m)
+        } else {
+            // Linear extrapolation beyond FC*VJ
+            let base = self.cjo / (1.0 - fc).powf(self.m);
+            let slope = base * self.m / (self.vj * (1.0 - fc));
+            base + slope * (v - fc_vj)
+        }
+    }
+
     /// Whether this diode has series resistance.
     pub fn has_series_resistance(&self) -> bool {
         self.rs > 0.0

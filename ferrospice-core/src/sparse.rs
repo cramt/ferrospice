@@ -146,6 +146,82 @@ impl LinearSystem {
     }
 }
 
+/// A complex-valued linear system for AC analysis.
+///
+/// Uses separate real and imaginary sparse matrices (G + jB)
+/// assembled in triplet form, solved as a single complex system.
+#[derive(Debug, Clone)]
+pub struct ComplexLinearSystem {
+    dim: usize,
+    /// Real part of the matrix (conductance G).
+    pub real: SparseMatrix,
+    /// Imaginary part of the matrix (susceptance B = ωC etc.).
+    pub imag: SparseMatrix,
+    /// Real part of the RHS vector.
+    pub rhs_real: Vec<f64>,
+    /// Imaginary part of the RHS vector.
+    pub rhs_imag: Vec<f64>,
+}
+
+impl ComplexLinearSystem {
+    /// Create a new complex linear system of the given dimension.
+    pub fn new(dim: usize) -> Self {
+        Self {
+            dim,
+            real: SparseMatrix::new(dim),
+            imag: SparseMatrix::new(dim),
+            rhs_real: vec![0.0; dim],
+            rhs_imag: vec![0.0; dim],
+        }
+    }
+
+    /// Return the dimension.
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Solve the complex system (G + jB)x = (rhs_real + j*rhs_imag).
+    /// Returns pairs of (real, imag) for each unknown.
+    pub fn solve(&self) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
+        use faer::c64;
+
+        if self.dim == 0 {
+            return Ok(vec![]);
+        }
+
+        // Build complex dense matrix from real + j*imag triplets.
+        let mut mat = Mat::<c64>::zeros(self.dim, self.dim);
+        for t in self.real.triplets() {
+            mat[(t.row, t.col)] += c64::new(t.value, 0.0);
+        }
+        for t in self.imag.triplets() {
+            mat[(t.row, t.col)] += c64::new(0.0, t.value);
+        }
+
+        // Build complex RHS vector.
+        let mut b = Mat::<c64>::zeros(self.dim, 1);
+        for i in 0..self.dim {
+            b[(i, 0)] = c64::new(self.rhs_real[i], self.rhs_imag[i]);
+        }
+
+        let lu = FullPivLu::new(mat.as_ref());
+        let x = lu.solve(&b);
+
+        let result: Vec<(f64, f64)> = (0..self.dim)
+            .map(|i| (x[(i, 0)].re, x[(i, 0)].im))
+            .collect();
+
+        if result
+            .iter()
+            .any(|(re, im)| re.is_nan() || re.is_infinite() || im.is_nan() || im.is_infinite())
+        {
+            return Err(SparseMatrixError::Singular);
+        }
+
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +315,21 @@ mod tests {
         let sys = LinearSystem::new(0);
         let x = sys.solve().unwrap();
         assert!(x.is_empty());
+    }
+
+    #[test]
+    fn test_complex_system_solve() {
+        // Solve (1+j)*x = 2+j
+        // x = (2+j)/(1+j) = (2+j)(1-j)/((1+j)(1-j)) = (2+j-2j-j²)/(1+1) = (3-j)/2
+        // x = 1.5 - 0.5j
+        let mut sys = ComplexLinearSystem::new(1);
+        sys.real.add(0, 0, 1.0);
+        sys.imag.add(0, 0, 1.0);
+        sys.rhs_real[0] = 2.0;
+        sys.rhs_imag[0] = 1.0;
+
+        let result = sys.solve().unwrap();
+        assert_abs_diff_eq!(result[0].0, 1.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(result[0].1, -0.5, epsilon = 1e-12);
     }
 }

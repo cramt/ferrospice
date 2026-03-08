@@ -1,3 +1,4 @@
+pub mod ac;
 pub mod diode;
 pub mod mna;
 pub mod newton;
@@ -6,6 +7,7 @@ pub mod sparse;
 pub mod transient;
 pub mod waveform;
 
+pub use ac::simulate_ac;
 pub use diode::DiodeModel;
 pub use mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
@@ -13,5 +15,5 @@ pub use mna::{
 };
 pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
 pub use simulate::{simulate_dc, simulate_op};
-pub use sparse::{LinearSystem, SparseMatrix, SparseMatrixError};
+pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixError};
 pub use transient::simulate_tran;
