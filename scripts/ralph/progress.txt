@@ -32,6 +32,12 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Inductor in DC is modeled as a 0V voltage source (branch equation), added to `vsource_names`
 - Capacitor in DC has no MNA contribution — just register nodes, skip stamping
 - `simulate_op` automatically includes inductor branch currents since they share `vsource_names`
+- NR solver: `newton_raphson_solve(options, dim, num_nodes, load_system, initial_guess)` in ferrospice-core::newton
+- `load_system` callback signature: `Fn(&[f64], &mut LinearSystem, f64)` — (solution, system, source_factor)
+- NR convergence: voltages use `reltol * max(|old|,|new|) + vntol`, currents use `abstol` instead of `vntol`
+- NR fallback chain: direct NR → Gmin stepping (1e-2 down to 1e-12) → source stepping (0.0 to 1.0)
+- Diode companion model: g_d = IS/Vt * exp(V/Vt), i_eq = I(V) - g_d * V; stamp g_d as conductance, i_eq as current source
+- `NrOptions::default()` matches ngspice: ABSTOL=1e-12, RELTOL=1e-3, VNTOL=1e-6, ITL1=100, ITL2=50, GMIN=1e-12
 ---
 
 ## 2026-03-08 - US-001
@@ -118,4 +124,21 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - Double sweep: outer=src2, inner=src1 (matches ngspice behavior)
   - `generate_sweep_points()` handles positive/negative step directions
   - `NodeMap::len()` was private — needed to make public for simulate.rs access
+---
+
+## 2026-03-08 - US-007
+- Created `ferrospice-core/src/newton.rs` with Newton-Raphson nonlinear solver
+- `newton_raphson_solve()` with configurable `NrOptions` (ABSTOL, RELTOL, VNTOL, ITL1, ITL2, GMIN)
+- Convergence check: ngspice-style absolute+relative criteria, separate for voltages vs currents
+- Fallback chain: direct NR → Gmin stepping (1e-2 → 1e-12 by 10x) → source stepping (0→1 in 10 steps)
+- `NrAttempt` struct to avoid too-many-arguments clippy warning on internal `try_nr`
+- 4 tests: diode circuit convergence (<20 iters), linear system (2 iters), convergence check, high-voltage diode
+- Files: ferrospice-core/src/newton.rs (new), ferrospice-core/src/lib.rs
+- **Learnings for future iterations:**
+  - Diode companion model: g_d = IS/Vt * exp(V/Vt), i_eq = I(V) - g_d * V
+  - Stamp companion as conductance (g_d to matrix) + current source (i_eq to RHS)
+  - NR KCL residual accuracy limited by RELTOL (~0.1%), don't assert tighter than ~1e-4 for currents
+  - `load_system` callback takes source_factor (f64) for source stepping support
+  - Clippy enforces max 7 arguments per function — use structs to bundle params
+  - ngspice ITL2=50 is used for Gmin/source stepping sub-iterations
 ---
