@@ -91,8 +91,10 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   if [[ "$TOOL" == "amp" ]]; then
     OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
   else
-    # Claude Code: use --dangerously-skip-permissions for autonomous operation, --print for output
-    OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true
+    # Claude Code: use --dangerously-skip-permissions for autonomous operation
+    # Stream JSON output and format it for human-readable logging
+    OUTPUT=$(claude --dangerously-skip-permissions --print --output-format stream-json --verbose < "$SCRIPT_DIR/CLAUDE.md" 2>&1 \
+      | "$SCRIPT_DIR/stream-formatter.sh" | tee /dev/stderr) || true
   fi
   
   # Check for completion signal
