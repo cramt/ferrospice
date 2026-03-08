@@ -4,6 +4,7 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 pub mod ac;
 pub mod bjt;
+pub mod bsim3;
 pub mod diode;
 pub mod jfet;
 pub mod mna;
@@ -21,6 +22,7 @@ pub mod waveform;
 
 pub use ac::simulate_ac;
 pub use bjt::{BjtInstance, BjtModel, BjtType, stamp_bjt};
+pub use bsim3::{Bsim3Companion, Bsim3Instance, Bsim3Model, stamp_bsim3};
 pub use diode::DiodeModel;
 pub use jfet::{JfetInstance, JfetModel, JfetType, stamp_jfet};
 pub use mna::{

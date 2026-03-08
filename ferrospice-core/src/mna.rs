@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use crate::LinearSystem;
 use crate::bjt::{BjtInstance, BjtModel};
+use crate::bsim3::{Bsim3Instance, Bsim3Model};
 use crate::diode::DiodeModel;
 use crate::jfet::{JfetInstance, JfetModel};
 use crate::mosfet::{MosfetInstance, MosfetModel};
@@ -239,6 +240,8 @@ pub struct MnaSystem {
     pub mosfets: Vec<MosfetInstance>,
     /// Resolved JFET instances for NR iteration.
     pub jfets: Vec<JfetInstance>,
+    /// Resolved BSIM3 MOSFET instances for NR iteration.
+    pub bsim3s: Vec<Bsim3Instance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -303,6 +306,49 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
             element: element_name.to_string(),
         }),
     }
+}
+
+/// Extract the MOSFET LEVEL parameter from model definition and instance params.
+/// Checks instance params first (override), then model params. Default is 1.
+fn get_mosfet_level(
+    model_def: Option<&&ferrospice_netlist::ModelDef>,
+    instance_params: &[ferrospice_netlist::Param],
+) -> i32 {
+    // Check instance params first
+    for p in instance_params {
+        if p.name.eq_ignore_ascii_case("LEVEL")
+            && let Expr::Num(v) = &p.value
+        {
+            return *v as i32;
+        }
+    }
+    // Then model params
+    if let Some(mdef) = model_def {
+        for p in &mdef.params {
+            if p.name.eq_ignore_ascii_case("LEVEL")
+                && let Expr::Num(v) = &p.value
+            {
+                return *v as i32;
+            }
+        }
+    }
+    1 // default level
+}
+
+/// Extract NRD and NRS from instance params.
+fn get_nrd_nrs(params: &[ferrospice_netlist::Param]) -> (f64, f64) {
+    let mut nrd = 0.0;
+    let mut nrs = 0.0;
+    for p in params {
+        if let Expr::Num(v) = &p.value {
+            match p.name.to_uppercase().as_str() {
+                "NRD" => nrd = *v,
+                "NRS" => nrs = *v,
+                _ => {}
+            }
+        }
+    }
+    (nrd, nrs)
 }
 
 /// Assemble an MNA system from a parsed netlist.
@@ -417,13 +463,24 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 node_map.index(g);
                 node_map.index(s);
                 node_map.index(bulk);
-                let _ = params;
-                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    MosfetModel::from_model_def(mdef)
+                let level = get_mosfet_level(models.get(&model.to_uppercase()), params);
+                if level == 8 || level == 49 {
+                    // BSIM3
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        Bsim3Model::from_model_def(mdef)
+                    } else {
+                        Bsim3Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    let (nrd, nrs) = get_nrd_nrs(params);
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else {
-                    MosfetModel::new(crate::mosfet::MosfetType::Nmos)
-                };
-                internal_node_count += mm.internal_node_count();
+                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        MosfetModel::from_model_def(mdef)
+                    } else {
+                        MosfetModel::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    internal_node_count += mm.internal_node_count();
+                }
             }
             ElementKind::Jfet {
                 d,
@@ -499,6 +556,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut bjts = Vec::new();
     let mut mosfets = Vec::new();
     let mut jfets = Vec::new();
+    let mut bsim3s = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
@@ -622,41 +680,21 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 model,
                 params,
             } => {
-                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    MosfetModel::from_model_def(mdef)
-                } else {
-                    MosfetModel::new(crate::mosfet::MosfetType::Nmos)
-                };
-
                 let drain_idx = node_map.get(d);
                 let gate_idx = node_map.get(g);
                 let source_idx = node_map.get(s);
                 let bulk_idx = node_map.get(bulk);
 
-                // Create internal nodes for series resistances
-                let drain_prime_idx = if mm.rd > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    drain_idx
-                };
-                let source_prime_idx = if mm.rs > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    source_idx
-                };
-
-                // Extract W, L, AD, AS, PD, PS, M from instance params
-                let mut w = 1e-4; // default 100um
+                // Extract instance params
+                let mut w = 1e-4;
                 let mut l = 1e-4;
                 let mut ad = 0.0;
                 let mut as_ = 0.0;
                 let mut pd = 0.0;
                 let mut ps = 0.0;
                 let mut m_mult = 1.0;
+                let mut nrd = 0.0;
+                let mut nrs = 0.0;
                 for p in params {
                     if let Expr::Num(v) = &p.value {
                         match p.name.to_uppercase().as_str() {
@@ -667,28 +705,104 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                             "PD" => pd = *v,
                             "PS" => ps = *v,
                             "M" => m_mult = *v,
+                            "NRD" => nrd = *v,
+                            "NRS" => nrs = *v,
                             _ => {}
                         }
                     }
                 }
 
-                mosfets.push(MosfetInstance {
-                    name: element.name.clone(),
-                    drain_idx,
-                    gate_idx,
-                    source_idx,
-                    bulk_idx,
-                    drain_prime_idx,
-                    source_prime_idx,
-                    model: mm,
-                    w,
-                    l,
-                    ad,
-                    as_,
-                    pd,
-                    ps,
-                    m: m_mult,
-                });
+                let level = get_mosfet_level(models.get(&model.to_uppercase()), params);
+
+                if level == 8 || level == 49 {
+                    // BSIM3
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        Bsim3Model::from_model_def(mdef)
+                    } else {
+                        Bsim3Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+
+                    let drain_prime_idx = if bm.rsh > 0.0 && nrd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if bm.rsh > 0.0 && nrs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    let size_params = bm.size_dep_param(w, l, 300.15);
+                    bsim3s.push(Bsim3Instance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        nrd,
+                        nrs,
+                        m: m_mult,
+                        vth0_inst: size_params.vth0,
+                        vfb_inst: size_params.vfbzb
+                            + size_params.phi
+                            + size_params.k1 * size_params.sqrt_phi,
+                        vfbzb_inst: size_params.vfbzb,
+                        size_params,
+                        model: bm,
+                    });
+                } else {
+                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        MosfetModel::from_model_def(mdef)
+                    } else {
+                        MosfetModel::new(crate::mosfet::MosfetType::Nmos)
+                    };
+
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    mosfets.push(MosfetInstance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
+                }
                 // MOSFET stamps are applied during NR iteration, not here.
             }
             ElementKind::Jfet {
@@ -966,6 +1080,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         vccs_sources,
         cccs_sources,
         ccvs_sources,
+        bsim3s,
     })
 }
 

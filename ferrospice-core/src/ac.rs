@@ -112,6 +112,11 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 .jfets
                 .iter()
                 .map(|j| j.model.internal_node_count())
+                .sum::<usize>()
+            + mna
+                .bsim3s
+                .iter()
+                .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
                 .sum::<usize>();
         for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
             let idx = num_nodes + i;
@@ -446,6 +451,99 @@ fn solve_ac_point(
         let cgd = jfet.model.junction_cap(vgd, jfet.model.cgd);
         if cgd > 0.0 {
             stamp_imag_conductance(&mut sys.imag, g, dp, omega * m * cgd);
+        }
+    }
+
+    // 5d. Stamp BSIM3 small-signal model at DC operating point.
+    for bsim in &mna.bsim3s {
+        let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);
+        let comp = crate::bsim3::bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
+        let m = bsim.m;
+
+        let dp = bsim.drain_prime_idx;
+        let g = bsim.gate_idx;
+        let sp = bsim.source_prime_idx;
+        let b = bsim.bulk_idx;
+
+        // gds conductance d'-s' (real)
+        crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
+
+        // gm VCCS: Vgs controls current s'→d' (real)
+        let gm_scaled = m * comp.gm;
+        if let Some(d) = dp {
+            if let Some(gate) = g {
+                sys.real.add(d, gate, gm_scaled);
+            }
+            if let Some(s) = sp {
+                sys.real.add(d, s, -gm_scaled);
+            }
+        }
+        if let Some(s) = sp {
+            if let Some(gate) = g {
+                sys.real.add(s, gate, -gm_scaled);
+            }
+            sys.real.add(s, s, gm_scaled);
+        }
+
+        // gmbs: Vbs controls current s'→d' (real)
+        let gmbs_scaled = m * comp.gmbs;
+        if let Some(d) = dp {
+            if let Some(bulk) = b {
+                sys.real.add(d, bulk, gmbs_scaled);
+            }
+            if let Some(s) = sp {
+                sys.real.add(d, s, -gmbs_scaled);
+            }
+        }
+        if let Some(s) = sp {
+            if let Some(bulk) = b {
+                sys.real.add(s, bulk, -gmbs_scaled);
+            }
+            sys.real.add(s, s, gmbs_scaled);
+        }
+
+        // gbd conductance b-d' (real)
+        crate::stamp_conductance(&mut sys.real, b, dp, m * comp.gbd);
+        // gbs conductance b-s' (real)
+        crate::stamp_conductance(&mut sys.real, b, sp, m * comp.gbs);
+
+        // Series resistances (real)
+        let g_drain = bsim.drain_conductance();
+        if g_drain > 0.0 {
+            crate::stamp_conductance(&mut sys.real, bsim.drain_idx, dp, m * g_drain);
+        }
+        let g_source = bsim.source_conductance();
+        if g_source > 0.0 {
+            crate::stamp_conductance(&mut sys.real, bsim.source_idx, sp, m * g_source);
+        }
+
+        // Intrinsic capacitances (imaginary) - direct Y-matrix entries [G,D',S',B]
+        // These are direct admittance matrix entries, not conductances between nodes.
+        let cap_entries: &[(Option<usize>, Option<usize>, f64)] = &[
+            (g, g, comp.cggb),
+            (g, dp, comp.cgdb),
+            (g, sp, comp.cgsb),
+            (dp, g, comp.cdgb),
+            (dp, dp, comp.cddb),
+            (dp, sp, comp.cdsb),
+            (b, g, comp.cbgb),
+            (b, dp, comp.cbdb),
+            (b, sp, comp.cbsb),
+        ];
+        for &(row, col, cap) in cap_entries {
+            if cap.abs() > 0.0
+                && let (Some(r), Some(c)) = (row, col)
+            {
+                sys.imag.add(r, c, omega * m * cap);
+            }
+        }
+
+        // Junction capacitances (imaginary) - these ARE conductances between two nodes
+        if comp.capbd > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, b, dp, omega * m * comp.capbd);
+        }
+        if comp.capbs > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, b, sp, omega * m * comp.capbs);
         }
     }
 
