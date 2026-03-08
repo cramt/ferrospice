@@ -359,8 +359,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 21,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "BSIM3v3.2.4 implemented with ~380 params, size binning, 3 mobility models, Vth/SCE/DIBL, unified strong/weak inversion, velocity saturation, CLM, junction diodes, intrinsic capacitances, NR limiting, AC/noise stamps."
     },
     {
       "id": "US-022",

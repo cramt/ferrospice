@@ -40,6 +40,12 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - DC sweep result has sweep variable as first vector (e.g., "v1"), then node voltages and branch currents
 - Double sweep: outer loop is src2, inner loop is src1
 - `NodeMap::len()` and `NodeMap::is_empty()` are now public
+- BSIM3 model: `Bsim3Model`, `Bsim3Instance`, `Bsim3Companion`, `Bsim3SizeParam` in ferrospice-core::bsim3
+- BSIM3 size-dependent params: `param = base + l_param*Inv_L + w_param*Inv_W + p_param*Inv_LW` via `size_dep_param(w, l, temp)`
+- BSIM3 MOSFET level detection: `get_mosfet_level()` in mna.rs checks instance then model params (LEVEL=8 or 49)
+- BSIM3 integration: MNA assembly creates `Bsim3Instance`, NR solver calls `bsim3_companion()` + `stamp_bsim3()`
+- BSIM3 AC: intrinsic caps (cggb/cgdb/cgsb/cbgb/cbdb/cbsb/cdgb/cddb/cdsb) are direct Y-matrix entries, NOT conductances between nodes
+- BSIM3 noise: channel thermal (8/3)*4kT*|gm|, series R thermal, flicker noise NOIA*|Id|^EF/(f*Cox*Leff²)
 - Integration tests go in `ferrospice-core/tests/` — use `CARGO_MANIFEST_DIR` to locate ngspice test files
 - ngspice check.sh filters: SPARSE|KLU|CPU|Dynamic|Note|Circuit|Doing|---|Data|Index|trans|acan|etc.
 - ngspice .out data rows are tab-separated, start with integer index, use scientific notation
@@ -488,4 +494,30 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - 1×1 matrix special case needed: eigenvalue decomposition doesn't converge for 1×1 submatrices
   - `build_jacobian()` from tf.rs reusable for building G matrix (DC Jacobian at operating point)
   - AC resistance on resistors: `.pz` uses AC resistance if specified, adjusting G matrix with delta conductance
+---
+
+## 2026-03-08 - US-021
+- Implemented BSIM3v3.2.4 MOSFET model (ngspice level 8/49)
+- Files created: ferrospice-core/src/bsim3.rs (~1800 lines), ferrospice-core/tests/bsim3.rs
+- Files modified: lib.rs, mna.rs, simulate.rs, ac.rs, noise.rs, transient.rs
+- **What was implemented:**
+  - `Bsim3Model` struct with ~380 parameters including L/W/P size-dependent binning variants
+  - `Bsim3SizeParam` for computed size/temperature-dependent parameters
+  - `Bsim3Instance` with node indices and resolved params
+  - `Bsim3Companion` with Ids, gm, gds, gmbs, gbd, gbs, junction currents, intrinsic 9-cap matrix, junction caps
+  - `bsim3_companion()` — core load function: Vth (SCE, DIBL, narrow-width), unified strong/weak inversion, 3 mobility models, velocity saturation, CLM (VACLM), DIBL (VADIBL), SCBE (VASCBE), junction diodes
+  - `stamp_bsim3()` — MNA matrix stamping (gds, gm/gmbs VCCS, gbd/gbs, series R, RHS)
+  - `bsim3_limit()`, `fetlim()`, `pnjlim()` — NR voltage limiting
+  - MNA assembly: level detection, BSIM3 instance creation with internal nodes for series R
+  - NR solver integration in simulate.rs (DC OP and DC sweep)
+  - Transient integration
+  - AC small-signal: conductances + intrinsic cap 3×3 Y-matrix + junction caps
+  - Noise analysis: channel thermal, series R thermal, flicker (NOIA model)
+  - 6 unit tests + 3 integration tests (NMOS OP, NMOS DC sweep, PMOS OP)
+- **Learnings for future iterations:**
+  - BSIM3 intrinsic capacitances (cggb, cgdb, etc.) are direct Y-matrix entries, not conductances between two nodes — use `sys.imag.add(r, c, ωC)` not `stamp_imag_conductance`
+  - `get_mosfet_level()` helper needed in mna.rs to route MOSFET elements to Level 1 vs BSIM3 code paths
+  - BSIM3 tests in ngspice use CMC QA format (qaSpec + .standard files), not .cir/.out — need to generate test netlists manually
+  - Size-dependent param binning uses `param = base + l_param/Leff + w_param/Weff + p_param/(Leff*Weff)`
+  - BSIM3 derivative chain is extensive (~14K lines in C); simplified transconductance approximation (gm ~ dIds/dVgs numerically) works for NR convergence
 ---
