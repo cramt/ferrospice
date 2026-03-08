@@ -373,8 +373,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 22,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented BSIM4 level 14 model with ~2400 lines of Rust. Supports mobMod=0, capMod=2, igcMod/igbMod=1, dioMod=1, rdsmod=0. Integrated into MNA, simulate, AC, noise, and transient analysis."
     },
     {
       "id": "US-023",

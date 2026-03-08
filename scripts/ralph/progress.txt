@@ -520,4 +520,27 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - BSIM3 tests in ngspice use CMC QA format (qaSpec + .standard files), not .cir/.out — need to generate test netlists manually
   - Size-dependent param binning uses `param = base + l_param/Leff + w_param/Weff + p_param/(Leff*Weff)`
   - BSIM3 derivative chain is extensive (~14K lines in C); simplified transconductance approximation (gm ~ dIds/dVgs numerically) works for NR convergence
+  - BSIM4 follows same integration pattern as BSIM3: level=14 routing in mna.rs, companion+stamp in simulate/ac/noise/transient
+  - BSIM4 uses BTreeMap for L/W/P binning params instead of ~400 individual struct fields
+  - BSIM4 `size_dep_param()` takes an extra `nf` (number of fingers) parameter compared to BSIM3
+  - `ferrospice_netlist::Netlist::parse()` is the correct way to parse netlists in tests (not `ferrospice_netlist::parse()`)
+---
+
+## 2026-03-08 - US-022
+- Implemented BSIM4 MOSFET model (level=14) in ~2400 lines of Rust
+- Files changed:
+  - ferrospice-core/src/bsim4.rs (new: complete BSIM4 device model)
+  - ferrospice-core/src/lib.rs (added bsim4 module and exports)
+  - ferrospice-core/src/mna.rs (level 14 routing, Bsim4Instance creation)
+  - ferrospice-core/src/simulate.rs (NR iteration with BSIM4)
+  - ferrospice-core/src/ac.rs (small-signal AC stamps)
+  - ferrospice-core/src/noise.rs (noise sources and AC stamps)
+  - ferrospice-core/src/transient.rs (transient NR iteration)
+  - .gitignore (minor cleanup)
+  - src/main.rs (removed duplicate import)
+- **Learnings for future iterations:**
+  - BSIM4 has same structure as BSIM3 but with dual-oxide (toxe/toxp/toxm), multi-finger (nf), and more physics
+  - Simplified Vdsat calculation (removed series resistance effect) works for rdsmod=0
+  - BTreeMap approach for binning params is pragmatic but loses type safety — consider macro-generated fields for BSIM-SOI
+  - 8 unit tests + 1 integration test (OP convergence) all pass
 ---
