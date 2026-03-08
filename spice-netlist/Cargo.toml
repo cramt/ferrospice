@@ -1,0 +1,12 @@
+[package]
+name = "spice-netlist"
+version = "0.1.0"
+edition = "2024"
+description = "Parser and generator for SPICE netlists (ngspice dialect)"
+
+[dependencies]
+thiserror.workspace = true
+facet.workspace = true
+
+[dev-dependencies]
+approx = "0.5"

@@ -1,0 +1,8 @@
+[package]
+name = "ferrospice"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust rewrite of ngspice - open-source mixed-level/mixed-signal electronic circuit simulator"
+license = "BSD-3-Clause"
+
+[dependencies]
