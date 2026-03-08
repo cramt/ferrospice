@@ -23,7 +23,7 @@
 
 use crate::{
     AcSpec, AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, ModelDef, Netlist,
-    Param, PwlPoint, Source, SubcktDef, Waveform,
+    Param, PwlPoint, PzAnalysisType, PzInputType, Source, SubcktDef, Waveform,
 };
 
 // ---------------------------------------------------------------------------
@@ -805,6 +805,54 @@ fn parse_dot(
         ".SENS" => {
             let output = tokens[1..].to_vec();
             Ok(Item::Analysis(Analysis::Sens { output }))
+        }
+
+        ".PZ" => {
+            let node_i = tokens
+                .get(1)
+                .ok_or_else(|| syntax(lineno, ".pz: missing nodeI"))?
+                .clone();
+            let node_g = tokens
+                .get(2)
+                .ok_or_else(|| syntax(lineno, ".pz: missing nodeG"))?
+                .clone();
+            let node_j = tokens
+                .get(3)
+                .ok_or_else(|| syntax(lineno, ".pz: missing nodeJ"))?
+                .clone();
+            let node_k = tokens
+                .get(4)
+                .ok_or_else(|| syntax(lineno, ".pz: missing nodeK"))?
+                .clone();
+            let input_type = match tokens.get(5).map(|s| s.to_uppercase()).as_deref() {
+                Some("VOL") => PzInputType::Vol,
+                Some("CUR") => PzInputType::Cur,
+                _ => {
+                    return Err(syntax(
+                        lineno,
+                        ".pz: invalid input type, expected VOL or CUR",
+                    ));
+                }
+            };
+            let analysis_type = match tokens.get(6).map(|s| s.to_uppercase()).as_deref() {
+                Some("POL") => PzAnalysisType::Pol,
+                Some("ZER") => PzAnalysisType::Zer,
+                Some("PZ") => PzAnalysisType::Pz,
+                _ => {
+                    return Err(syntax(
+                        lineno,
+                        ".pz: invalid analysis type, expected POL, ZER, or PZ",
+                    ));
+                }
+            };
+            Ok(Item::Analysis(Analysis::Pz {
+                node_i,
+                node_g,
+                node_j,
+                node_k,
+                input_type,
+                analysis_type,
+            }))
         }
 
         ".MODEL" => {

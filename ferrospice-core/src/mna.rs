@@ -82,6 +82,8 @@ pub struct ResistorInstance {
     pub neg_idx: Option<usize>,
     /// Resistance value in Ohms.
     pub resistance: f64,
+    /// AC resistance value in Ohms (from `ac=` parameter), if different from DC.
+    pub ac_resistance: Option<f64>,
 }
 
 /// A resolved diode instance with matrix indices and model parameters.
@@ -982,18 +984,32 @@ fn stamp_element(
 ) -> Result<(), MnaError> {
     match &element.kind {
         ElementKind::Resistor {
-            pos, neg, value, ..
+            pos,
+            neg,
+            value,
+            params,
         } => {
             let r = expr_value(value, &element.name)?;
             let g = 1.0 / r;
             let ni = node_map.get(pos);
             let nj = node_map.get(neg);
             stamp_conductance(&mut system.matrix, ni, nj, g);
+            let ac_resistance = params
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case("ac"))
+                .and_then(|p| {
+                    if let ferrospice_netlist::Expr::Num(v) = &p.value {
+                        Some(*v)
+                    } else {
+                        None
+                    }
+                });
             resistors.push(ResistorInstance {
                 name: element.name.clone(),
                 pos_idx: ni,
                 neg_idx: nj,
                 resistance: r,
+                ac_resistance,
             });
         }
         ElementKind::VoltageSource { pos, neg, source } => {

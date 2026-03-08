@@ -10,6 +10,7 @@ pub mod mna;
 pub mod mosfet;
 pub mod newton;
 pub mod noise;
+pub mod pz;
 pub mod sens;
 pub mod simulate;
 pub mod sparse;
@@ -29,6 +30,7 @@ pub use mna::{
 pub use mosfet::{MosfetInstance, MosfetModel, MosfetType, stamp_mosfet};
 pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
 pub use noise::simulate_noise;
+pub use pz::simulate_pz;
 pub use sens::simulate_sens;
 pub use simulate::{simulate_dc, simulate_op};
 pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixError};

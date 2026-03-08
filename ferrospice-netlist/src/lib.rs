@@ -655,6 +655,47 @@ impl fmt::Display for AcVariation {
     }
 }
 
+/// Input type for pole-zero analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+#[repr(C)]
+pub enum PzInputType {
+    /// Voltage input
+    Vol,
+    /// Current input
+    Cur,
+}
+
+impl fmt::Display for PzInputType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PzInputType::Vol => write!(f, "VOL"),
+            PzInputType::Cur => write!(f, "CUR"),
+        }
+    }
+}
+
+/// Analysis type for pole-zero analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Facet)]
+#[repr(C)]
+pub enum PzAnalysisType {
+    /// Poles only
+    Pol,
+    /// Zeros only
+    Zer,
+    /// Both poles and zeros
+    Pz,
+}
+
+impl fmt::Display for PzAnalysisType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PzAnalysisType::Pol => write!(f, "POL"),
+            PzAnalysisType::Zer => write!(f, "ZER"),
+            PzAnalysisType::Pz => write!(f, "PZ"),
+        }
+    }
+}
+
 /// A simulation analysis command.
 #[derive(Debug, Clone, Facet)]
 #[repr(C)]
@@ -698,6 +739,15 @@ pub enum Analysis {
     Tf { output: String, input: String },
     /// `.sens output [AC DEC n fstart fstop]`
     Sens { output: Vec<String> },
+    /// `.pz nodeI nodeG nodeJ nodeK {VOL|CUR} {POL|ZER|PZ}`
+    Pz {
+        node_i: String,
+        node_g: String,
+        node_j: String,
+        node_k: String,
+        input_type: PzInputType,
+        analysis_type: PzAnalysisType,
+    },
 }
 
 impl fmt::Display for Analysis {
@@ -762,6 +812,19 @@ impl fmt::Display for Analysis {
                     write!(f, " {o}")?;
                 }
                 Ok(())
+            }
+            Analysis::Pz {
+                node_i,
+                node_g,
+                node_j,
+                node_k,
+                input_type,
+                analysis_type,
+            } => {
+                write!(
+                    f,
+                    ".pz {node_i} {node_g} {node_j} {node_k} {input_type} {analysis_type}"
+                )
             }
         }
     }
