@@ -7,6 +7,7 @@ pub mod mosfet;
 pub mod newton;
 pub mod simulate;
 pub mod sparse;
+pub mod subckt;
 pub mod transient;
 pub mod waveform;
 
@@ -22,4 +23,5 @@ pub use mosfet::{MosfetInstance, MosfetModel, MosfetType, stamp_mosfet};
 pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
 pub use simulate::{simulate_dc, simulate_op};
 pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixError};
+pub use subckt::{SubcktError, flatten_netlist};
 pub use transient::simulate_tran;

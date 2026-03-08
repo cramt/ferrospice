@@ -8,6 +8,7 @@ use crate::bjt::{BjtInstance, BjtModel};
 use crate::diode::DiodeModel;
 use crate::jfet::{JfetInstance, JfetModel};
 use crate::mosfet::{MosfetInstance, MosfetModel};
+use crate::subckt::flatten_netlist;
 
 /// Ground node name — the reference node excluded from the MNA matrix.
 const GROUND: &str = "0";
@@ -22,6 +23,8 @@ pub enum MnaError {
     NoVoltageValue(String),
     #[error("failed to solve MNA system: {0}")]
     SolveError(#[from] crate::SparseMatrixError),
+    #[error("subcircuit expansion error: {0}")]
+    SubcktError(#[from] crate::subckt::SubcktError),
 }
 
 /// Maps node names to matrix indices. Ground node "0" is excluded.
@@ -221,6 +224,13 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
 /// independent current sources (I), capacitors (C, open in DC),
 /// inductors (L, short in DC), and diodes (D, nonlinear).
 pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
+    // Flatten subcircuit calls before assembly.
+    let flat_netlist = flatten_netlist(netlist)?;
+    assemble_mna_flat(&flat_netlist)
+}
+
+/// Assemble an MNA system from a flattened (no subcircuit calls) netlist.
+fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     // Build a map of model definitions for lookup.
     let models: BTreeMap<String, &ferrospice_netlist::ModelDef> = netlist
         .items
