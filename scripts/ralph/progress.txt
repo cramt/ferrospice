@@ -106,6 +106,14 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Device noise params: KF (flicker coeff), AF (flicker exponent) on DiodeModel, BjtModel, MosfetModel, JfetModel
 - Noise result: two plots — noise1 (spectrum: frequency + onoise/inoise_spectrum) + noise2 (integrated: onoise/inoise_total)
 - `generate_ac_sweep()` and `stamp_imag_conductance()` are public in ac.rs — reusable by noise
+- PZ analysis: `simulate_pz(&Netlist) -> Result<SimResult>` in ferrospice-core::pz
+- PZ uses eigenvalue decomposition: poles from det(G+sC)=0, zeros from cofactor determinant
+- PZ eigenvalues: G^{-1}*C eigenvalues → poles = -1/λ for non-zero λ; fallback to GEV when G singular
+- PZ conjugate dedup: only remove conjugate pairs (opposite imaginary sign), preserve repeated real roots
+- PZ relative threshold: use `max_mag * 1e-10` (not absolute 1e-20) to distinguish real eigenvalues from numerical noise
+- `ResistorInstance` has `ac_resistance: Option<f64>` — PZ adjusts G matrix with delta conductance
+- PZ result: pz1 plot (poles or zeros), pz2 plot (zeros when both computed)
+- `build_jacobian()` from tf.rs reused by pz.rs for G matrix construction
 ---
 
 ## 2026-03-08 - US-001
@@ -460,4 +468,24 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - Sensitivity uses adjoint method for linear params (analytical) and numerical perturbation for nonlinear devices
   - Clippy enforces `type` aliases for complex tuple types with Box<dyn Fn(...)>
   - Edition 2024 supports `if let` chains (collapsed nested if + if let)
+---
+
+## 2026-03-08 - US-020
+- Implemented pole-zero analysis (.pz) using eigenvalue decomposition
+- New file: `ferrospice-core/src/pz.rs` — `simulate_pz()`, eigenvalue-based root finding, cofactor zero finding
+- Added `PzInputType`, `PzAnalysisType` enums and `Analysis::Pz` variant to ferrospice-netlist
+- Added `.PZ` parsing in ferrospice-netlist/src/parse.rs
+- Added `ac_resistance: Option<f64>` field to `ResistorInstance` in mna.rs
+- 6 unit tests: simple RC (current transfer), RC lowpass (voltage transfer), bridge-T, multistage, poles-only, AC resistance
+- Files changed: ferrospice-core/src/pz.rs (new), ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-netlist/src/lib.rs, ferrospice-netlist/src/parse.rs
+- **Learnings for future iterations:**
+  - Poles from eigenvalues of G^{-1}*C: λ → pole = -1/λ for non-zero λ
+  - When G is singular, use generalized eigenvalue decomposition (GEV) as fallback
+  - Conjugate pair dedup: only remove pairs with opposite imaginary sign, never deduplicate repeated real roots
+  - Relative threshold for distinguishing real from complex eigenvalues: `max_mag * 1e-10` (not absolute threshold)
+  - `faer::Scale` is a tuple struct (capital S), not `faer::scale`
+  - faer eigenvalue decomposition: `eigenvalues()` returns `Vec<Complex<f64>>`, `generalized_eigen()` for GEV
+  - 1×1 matrix special case needed: eigenvalue decomposition doesn't converge for 1×1 submatrices
+  - `build_jacobian()` from tf.rs reusable for building G matrix (DC Jacobian at operating point)
+  - AC resistance on resistors: `.pz` uses AC resistance if specified, adjusting G matrix with delta conductance
 ---
