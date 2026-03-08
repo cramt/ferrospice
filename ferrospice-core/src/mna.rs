@@ -138,6 +138,66 @@ pub struct CurrentSourceInstance {
     pub waveform: Option<ferrospice_netlist::Waveform>,
 }
 
+/// A resolved VCVS (E) instance with matrix indices.
+#[derive(Debug, Clone)]
+pub struct VcvsInstance {
+    /// Branch equation index in the solution vector.
+    pub branch_idx: usize,
+    /// Output positive node index (None = ground).
+    pub out_pos_idx: Option<usize>,
+    /// Output negative node index (None = ground).
+    pub out_neg_idx: Option<usize>,
+    /// Control positive node index (None = ground).
+    pub ctrl_pos_idx: Option<usize>,
+    /// Control negative node index (None = ground).
+    pub ctrl_neg_idx: Option<usize>,
+    /// Voltage gain.
+    pub gain: f64,
+}
+
+/// A resolved VCCS (G) instance with matrix indices.
+#[derive(Debug, Clone)]
+pub struct VccsInstance {
+    /// Output positive node index (None = ground).
+    pub out_pos_idx: Option<usize>,
+    /// Output negative node index (None = ground).
+    pub out_neg_idx: Option<usize>,
+    /// Control positive node index (None = ground).
+    pub ctrl_pos_idx: Option<usize>,
+    /// Control negative node index (None = ground).
+    pub ctrl_neg_idx: Option<usize>,
+    /// Transconductance.
+    pub gm: f64,
+}
+
+/// A resolved CCCS (F) instance with matrix indices.
+#[derive(Debug, Clone)]
+pub struct CccsInstance {
+    /// Output positive node index (None = ground).
+    pub out_pos_idx: Option<usize>,
+    /// Output negative node index (None = ground).
+    pub out_neg_idx: Option<usize>,
+    /// Branch index of the controlling voltage source.
+    pub ctrl_branch_idx: usize,
+    /// Current gain.
+    pub gain: f64,
+}
+
+/// A resolved CCVS (H) instance with matrix indices.
+#[derive(Debug, Clone)]
+pub struct CcvsInstance {
+    /// Branch equation index in the solution vector.
+    pub branch_idx: usize,
+    /// Output positive node index (None = ground).
+    pub out_pos_idx: Option<usize>,
+    /// Output negative node index (None = ground).
+    pub out_neg_idx: Option<usize>,
+    /// Branch index of the controlling voltage source.
+    pub ctrl_branch_idx: usize,
+    /// Transresistance.
+    pub rm: f64,
+}
+
 /// The assembled MNA system ready for solving.
 #[derive(Debug)]
 pub struct MnaSystem {
@@ -164,6 +224,14 @@ pub struct MnaSystem {
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
     pub current_sources: Vec<CurrentSourceInstance>,
+    /// Resolved VCVS (E) instances.
+    pub vcvs_sources: Vec<VcvsInstance>,
+    /// Resolved VCCS (G) instances.
+    pub vccs_sources: Vec<VccsInstance>,
+    /// Resolved CCCS (F) instances.
+    pub cccs_sources: Vec<CccsInstance>,
+    /// Resolved CCVS (H) instances.
+    pub ccvs_sources: Vec<CcvsInstance>,
 }
 
 impl MnaSystem {
@@ -245,9 +313,11 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         .collect();
 
     // First pass: collect all nodes and count voltage sources to determine matrix size.
+    // Also build a vsource name → offset map for F/H controlled source lookup.
     let mut node_map = NodeMap::new();
     let mut vsource_count = 0usize;
     let mut internal_node_count = 0usize;
+    let mut vsource_offset_map: BTreeMap<String, usize> = BTreeMap::new();
 
     for element in netlist.elements() {
         match &element.kind {
@@ -258,6 +328,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
             ElementKind::VoltageSource { pos, neg, .. } => {
                 node_map.index(pos);
                 node_map.index(neg);
+                vsource_offset_map.insert(element.name.to_lowercase(), vsource_count);
                 vsource_count += 1;
             }
             ElementKind::CurrentSource { pos, neg, .. } => {
@@ -271,6 +342,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
             ElementKind::Inductor { pos, neg, .. } => {
                 node_map.index(pos);
                 node_map.index(neg);
+                vsource_offset_map.insert(element.name.to_lowercase(), vsource_count);
                 vsource_count += 1;
             }
             ElementKind::Diode {
@@ -352,6 +424,48 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 };
                 internal_node_count += jm.internal_node_count();
             }
+            ElementKind::Vcvs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                ..
+            } => {
+                node_map.index(out_pos);
+                node_map.index(out_neg);
+                node_map.index(in_pos);
+                node_map.index(in_neg);
+                vsource_offset_map.insert(element.name.to_lowercase(), vsource_count);
+                vsource_count += 1; // VCVS adds a branch equation
+            }
+            ElementKind::Vccs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                ..
+            } => {
+                node_map.index(out_pos);
+                node_map.index(out_neg);
+                node_map.index(in_pos);
+                node_map.index(in_neg);
+                // No branch added — VCCS stamps directly into admittance matrix
+            }
+            ElementKind::Cccs {
+                out_pos, out_neg, ..
+            } => {
+                node_map.index(out_pos);
+                node_map.index(out_neg);
+                // No branch added — references existing vsource branch
+            }
+            ElementKind::Ccvs {
+                out_pos, out_neg, ..
+            } => {
+                node_map.index(out_pos);
+                node_map.index(out_neg);
+                vsource_offset_map.insert(element.name.to_lowercase(), vsource_count);
+                vsource_count += 1; // CCVS adds a branch equation
+            }
             _ => {}
         }
     }
@@ -369,6 +483,10 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
     let mut current_sources = Vec::new();
+    let mut vcvs_sources = Vec::new();
+    let mut vccs_sources = Vec::new();
+    let mut cccs_sources = Vec::new();
+    let mut ccvs_sources = Vec::new();
     let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
     // Second pass: stamp each element.
@@ -653,6 +771,148 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 vsource_names.push(element.name.clone());
                 vsource_idx += 1;
             }
+            ElementKind::Vcvs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                gain,
+            } => {
+                let gain_val = expr_value(gain, &element.name)?;
+                let out_pos_idx = node_map.get(out_pos);
+                let out_neg_idx = node_map.get(out_neg);
+                let ctrl_pos_idx = node_map.get(in_pos);
+                let ctrl_neg_idx = node_map.get(in_neg);
+                let branch = n + vsource_idx;
+
+                stamp_vcvs(
+                    &mut system,
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_pos_idx,
+                    ctrl_neg_idx,
+                    branch,
+                    gain_val,
+                );
+
+                vcvs_sources.push(VcvsInstance {
+                    branch_idx: branch,
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_pos_idx,
+                    ctrl_neg_idx,
+                    gain: gain_val,
+                });
+
+                vsource_names.push(element.name.clone());
+                vsource_idx += 1;
+            }
+            ElementKind::Vccs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                gm,
+            } => {
+                let gm_val = expr_value(gm, &element.name)?;
+                let out_pos_idx = node_map.get(out_pos);
+                let out_neg_idx = node_map.get(out_neg);
+                let ctrl_pos_idx = node_map.get(in_pos);
+                let ctrl_neg_idx = node_map.get(in_neg);
+
+                stamp_vccs(
+                    &mut system,
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_pos_idx,
+                    ctrl_neg_idx,
+                    gm_val,
+                );
+
+                vccs_sources.push(VccsInstance {
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_pos_idx,
+                    ctrl_neg_idx,
+                    gm: gm_val,
+                });
+            }
+            ElementKind::Cccs {
+                out_pos,
+                out_neg,
+                vsrc,
+                gain,
+            } => {
+                let gain_val = expr_value(gain, &element.name)?;
+                let out_pos_idx = node_map.get(out_pos);
+                let out_neg_idx = node_map.get(out_neg);
+                let ctrl_offset =
+                    vsource_offset_map
+                        .get(&vsrc.to_lowercase())
+                        .ok_or_else(|| {
+                            MnaError::UnsupportedElement(format!(
+                                "controlling voltage source '{}' not found for {}",
+                                vsrc, element.name
+                            ))
+                        })?;
+                let ctrl_branch_idx = n + ctrl_offset;
+
+                stamp_cccs(
+                    &mut system,
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_branch_idx,
+                    gain_val,
+                );
+
+                cccs_sources.push(CccsInstance {
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_branch_idx,
+                    gain: gain_val,
+                });
+            }
+            ElementKind::Ccvs {
+                out_pos,
+                out_neg,
+                vsrc,
+                rm,
+            } => {
+                let rm_val = expr_value(rm, &element.name)?;
+                let out_pos_idx = node_map.get(out_pos);
+                let out_neg_idx = node_map.get(out_neg);
+                let ctrl_offset =
+                    vsource_offset_map
+                        .get(&vsrc.to_lowercase())
+                        .ok_or_else(|| {
+                            MnaError::UnsupportedElement(format!(
+                                "controlling voltage source '{}' not found for {}",
+                                vsrc, element.name
+                            ))
+                        })?;
+                let ctrl_branch_idx = n + ctrl_offset;
+                let branch = n + vsource_idx;
+
+                stamp_ccvs(
+                    &mut system,
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_branch_idx,
+                    branch,
+                    rm_val,
+                );
+
+                ccvs_sources.push(CcvsInstance {
+                    branch_idx: branch,
+                    out_pos_idx,
+                    out_neg_idx,
+                    ctrl_branch_idx,
+                    rm: rm_val,
+                });
+
+                vsource_names.push(element.name.clone());
+                vsource_idx += 1;
+            }
             _ => {
                 stamp_element(
                     element,
@@ -680,6 +940,10 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         inductors,
         voltage_sources,
         current_sources,
+        vcvs_sources,
+        vccs_sources,
+        cccs_sources,
+        ccvs_sources,
     })
 }
 
@@ -801,6 +1065,113 @@ fn extract_ic_param(params: &[ferrospice_netlist::Param]) -> Option<f64> {
         }
     }
     None
+}
+
+/// Stamp a VCVS (E) element into the MNA system.
+///
+/// Branch equation: V(out+) - V(out-) = gain * (V(ctrl+) - V(ctrl-))
+/// KCL: branch current enters out+ and exits out-.
+fn stamp_vcvs(
+    system: &mut LinearSystem,
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+    ctrl_pos: Option<usize>,
+    ctrl_neg: Option<usize>,
+    branch: usize,
+    gain: f64,
+) {
+    // KCL stamps (same as voltage source topology)
+    if let Some(i) = out_pos {
+        system.matrix.add(i, branch, 1.0);
+        system.matrix.add(branch, i, 1.0);
+    }
+    if let Some(j) = out_neg {
+        system.matrix.add(j, branch, -1.0);
+        system.matrix.add(branch, j, -1.0);
+    }
+    // Control voltage contribution to branch equation:
+    // V(out+) - V(out-) - gain * (V(ctrl+) - V(ctrl-)) = 0
+    if let Some(cp) = ctrl_pos {
+        system.matrix.add(branch, cp, -gain);
+    }
+    if let Some(cn) = ctrl_neg {
+        system.matrix.add(branch, cn, gain);
+    }
+    // RHS = 0 (no independent source component)
+}
+
+/// Stamp a VCCS (G) element into the MNA system.
+///
+/// I = gm * (V(ctrl+) - V(ctrl-)), current flows from out+ to out-.
+fn stamp_vccs(
+    system: &mut LinearSystem,
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+    ctrl_pos: Option<usize>,
+    ctrl_neg: Option<usize>,
+    gm: f64,
+) {
+    if let Some(i) = out_pos {
+        if let Some(cp) = ctrl_pos {
+            system.matrix.add(i, cp, gm);
+        }
+        if let Some(cn) = ctrl_neg {
+            system.matrix.add(i, cn, -gm);
+        }
+    }
+    if let Some(j) = out_neg {
+        if let Some(cp) = ctrl_pos {
+            system.matrix.add(j, cp, -gm);
+        }
+        if let Some(cn) = ctrl_neg {
+            system.matrix.add(j, cn, gm);
+        }
+    }
+}
+
+/// Stamp a CCCS (F) element into the MNA system.
+///
+/// I_out = gain * I_ctrl, where I_ctrl is the branch current of the controlling source.
+fn stamp_cccs(
+    system: &mut LinearSystem,
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+    ctrl_branch: usize,
+    gain: f64,
+) {
+    if let Some(i) = out_pos {
+        system.matrix.add(i, ctrl_branch, gain);
+    }
+    if let Some(j) = out_neg {
+        system.matrix.add(j, ctrl_branch, -gain);
+    }
+}
+
+/// Stamp a CCVS (H) element into the MNA system.
+///
+/// Branch equation: V(out+) - V(out-) = rm * I_ctrl
+/// KCL: branch current enters out+ and exits out-.
+fn stamp_ccvs(
+    system: &mut LinearSystem,
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+    ctrl_branch: usize,
+    branch: usize,
+    rm: f64,
+) {
+    // KCL stamps (same as voltage source topology)
+    if let Some(i) = out_pos {
+        system.matrix.add(i, branch, 1.0);
+        system.matrix.add(branch, i, 1.0);
+    }
+    if let Some(j) = out_neg {
+        system.matrix.add(j, branch, -1.0);
+        system.matrix.add(branch, j, -1.0);
+    }
+    // Control current contribution to branch equation:
+    // V(out+) - V(out-) - rm * I_ctrl = 0
+    system.matrix.add(branch, ctrl_branch, -rm);
+    // RHS = 0
 }
 
 /// Stamp a conductance G between nodes ni and nj into the matrix.
@@ -1017,5 +1388,158 @@ L1 mid 0 1m
             5e-3,
             epsilon = 1e-12
         );
+    }
+
+    #[test]
+    fn test_vcvs_voltage_follower() {
+        // VCVS with gain=1 (voltage follower): V(out) = V(in)
+        // V1=5V at node "in", E1 copies to "out", R1=1k load on "out"
+        let netlist = Netlist::parse(
+            "VCVS voltage follower
+V1 in 0 5
+R1 in 0 10k
+E1 out 0 in 0 1
+R2 out 0 1k
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        // 2 nodes (in, out) + 2 branches (V1, E1)
+        assert_eq!(mna.vsource_names.len(), 2);
+
+        let solution = mna.solve().unwrap();
+        assert_abs_diff_eq!(solution.voltage("in").unwrap(), 5.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(solution.voltage("out").unwrap(), 5.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn test_vcvs_amplifier() {
+        // VCVS with gain=10: V(out) = 10 * V(in)
+        // V1=1V, E1 gain=10
+        let netlist = Netlist::parse(
+            "VCVS amplifier
+V1 in 0 1
+R1 in 0 10k
+E1 out 0 in 0 10
+R2 out 0 1k
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        let solution = mna.solve().unwrap();
+        assert_abs_diff_eq!(solution.voltage("in").unwrap(), 1.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(solution.voltage("out").unwrap(), 10.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn test_vcvs_inverting_amplifier() {
+        // Op-amp as high-gain VCVS in inverting configuration:
+        // V1=1V → R1=1k → inv node → R2=2k → out
+        // E1 out 0 0 inv 100000 (gain from 0 to inv, i.e., V(out) = -100000 * V(inv))
+        // With ideal gain: V(out) ≈ -R2/R1 * V(in) = -2V
+        let netlist = Netlist::parse(
+            "Inverting amplifier
+V1 in 0 1
+R1 in inv 1k
+R2 inv out 2k
+E1 out 0 0 inv 100000
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        let solution = mna.solve().unwrap();
+        // V(out) ≈ -2.0 (with high gain, very close to ideal)
+        assert_abs_diff_eq!(solution.voltage("out").unwrap(), -2.0, epsilon = 1e-3);
+        // V(inv) ≈ 0 (virtual ground)
+        assert_abs_diff_eq!(solution.voltage("inv").unwrap(), 0.0, epsilon = 1e-3);
+    }
+
+    #[test]
+    fn test_vccs_transconductance() {
+        // VCCS: G1 drives current gm * V(in) into node "out" through R2
+        // SPICE convention: current flows from out- to out+ externally,
+        // so G1 0 out means current enters "out" from ground.
+        // V1=2V at "in", G1 gm=1m, R2=1k load
+        // V(out) = gm * V(in) * R2 = 1e-3 * 2 * 1000 = 2V
+        let netlist = Netlist::parse(
+            "VCCS test
+V1 in 0 2
+R1 in 0 10k
+G1 0 out in 0 1m
+R2 out 0 1k
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        // No branch for G — only V1 has a branch
+        assert_eq!(mna.vsource_names.len(), 1);
+
+        let solution = mna.solve().unwrap();
+        assert_abs_diff_eq!(solution.voltage("in").unwrap(), 2.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(solution.voltage("out").unwrap(), 2.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn test_cccs_current_amplifier() {
+        // CCCS: F1 outputs gain * I(Vsense)
+        // Vsense is a 0V sensing source in series with R1
+        // V1=10V, R1=10k → I(Vsense) = 1mA (in MNA branch convention)
+        // F1 0 out: current enters "out" from ground
+        // F1 gain=5 → I_out = 5mA into R2=1k → V(out) = 5V
+        let netlist = Netlist::parse(
+            "CCCS test
+V1 1 0 10
+R1 1 sense 10k
+Vsense sense 0 0
+F1 0 out Vsense 5
+R2 out 0 1k
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        let solution = mna.solve().unwrap();
+        // I(Vsense) = 1mA, F1 gain=5 → 5mA into R2=1k
+        assert_abs_diff_eq!(solution.voltage("out").unwrap(), 5.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_ccvs_transresistance() {
+        // CCVS: H1 output voltage = rm * I(Vsense)
+        // V1=5V, R1=5k → I(Vsense) = 1mA
+        // H1 rm=2k → V(out) = 2k * 1mA = 2V
+        let netlist = Netlist::parse(
+            "CCVS test
+V1 1 0 5
+R1 1 sense 5k
+Vsense sense 0 0
+H1 out 0 Vsense 2k
+R2 out 0 10k
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        // V1, Vsense, H1 all have branches
+        assert_eq!(mna.vsource_names.len(), 3);
+
+        let solution = mna.solve().unwrap();
+        assert_abs_diff_eq!(solution.voltage("out").unwrap(), 2.0, epsilon = 1e-9);
     }
 }

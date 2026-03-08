@@ -1284,6 +1284,98 @@ VG 1 0 -2
     }
 
     #[test]
+    fn test_vcvs_inverting_amplifier_op() {
+        // Op-amp modeled as high-gain VCVS in inverting configuration.
+        // V1=1V → R1=1k → inv → R2=2k → out
+        // E1 out 0 0 inv 100000 (non-inverting=ground, inverting=inv)
+        // Ideal gain: V(out) = -R2/R1 * V(in) = -2V
+        let netlist = Netlist::parse(
+            "Inverting amplifier
+V1 in 0 1
+R1 in inv 1k
+R2 inv out 2k
+E1 out 0 0 inv 100000
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+
+        let v_out = op_voltage(&result, "out");
+        assert_abs_diff_eq!(v_out, -2.0, epsilon = 1e-3);
+
+        let v_inv = op_voltage(&result, "inv");
+        assert_abs_diff_eq!(v_inv, 0.0, epsilon = 1e-3);
+    }
+
+    #[test]
+    fn test_vccs_op() {
+        // VCCS driving load: G1 0 out in 0 2m, V(in)=3V, R=1k
+        // V(out) = gm * V(in) * R = 2e-3 * 3 * 1000 = 6V
+        let netlist = Netlist::parse(
+            "VCCS OP test
+V1 in 0 3
+R1 in 0 10k
+G1 0 out in 0 2m
+R2 out 0 1k
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+        let v_out = op_voltage(&result, "out");
+        assert_abs_diff_eq!(v_out, 6.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_cccs_op() {
+        // CCCS with gain=10: F1 0 out Vsense 10
+        // V1=5V, R1=5k → I(Vsense)=1mA, F1 → 10mA into R2=500 → V(out)=5V
+        let netlist = Netlist::parse(
+            "CCCS OP test
+V1 1 0 5
+R1 1 sense 5k
+Vsense sense 0 0
+F1 0 out Vsense 10
+R2 out 0 500
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+        let v_out = op_voltage(&result, "out");
+        assert_abs_diff_eq!(v_out, 5.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_ccvs_op() {
+        // CCVS: H1 out 0 Vsense 3k → V(out) = 3k * I(Vsense)
+        // V1=10V, R1=10k → I(Vsense)=1mA → V(out)=3V
+        let netlist = Netlist::parse(
+            "CCVS OP test
+V1 1 0 10
+R1 1 sense 10k
+Vsense sense 0 0
+H1 out 0 Vsense 3k
+R2 out 0 10k
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+        let v_out = op_voltage(&result, "out");
+        assert_abs_diff_eq!(v_out, 3.0, epsilon = 1e-9);
+    }
+
+    #[test]
     fn test_jfet_dc_sweep() {
         // JFET DC sweep: sweep VDS from 0 to 25V at VGS=-2V.
         // Current should increase in linear region then saturate.
