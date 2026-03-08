@@ -1,0 +1,490 @@
+{
+  "project": "Ferrospice",
+  "branchName": "ralph/simulation-engine",
+  "description": "Ferrospice Simulation Engine - SPICE circuit simulator library in Rust, rewriting ngspice. Done when all 113 ngspice base test suite .cir files pass.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Create ferrospice-core crate with sparse matrix types",
+      "description": "As a developer, I need a sparse matrix representation suitable for MNA so that circuit equations can be assembled and solved.",
+      "acceptanceCriteria": [
+        "New crate ferrospice-core in the workspace",
+        "Sparse matrix struct supporting dynamic insertion and triplet-form assembly",
+        "LU factorization and solve (use faer or similar — pick what fits, pure Rust preferred)",
+        "Unit tests: assemble a 3x3 system, solve it, verify result within 1e-12 tolerance",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "MNA matrix assembly from netlist",
+      "description": "As a developer, I need to convert a parsed Netlist into an MNA equation system so that the circuit can be solved.",
+      "acceptanceCriteria": [
+        "Function that takes a ferrospice_netlist::Netlist and produces an MNA system (matrix + RHS vector)",
+        "Node name to matrix index mapping (ground node 0 is the reference, not in matrix)",
+        "Stamps for: resistor, independent voltage source (adds branch equation), independent current source",
+        "Unit test: voltage divider (V1=5V, R1=1k, R2=1k) produces MNA system with correct dimensions and entries",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "DC operating point solver (.op)",
+      "description": "As a developer, I need a DC operating point solver so that node voltages and branch currents can be computed for a DC circuit.",
+      "acceptanceCriteria": [
+        "simulate_op(netlist: &Netlist) -> SimResult function in the public API",
+        "Returns node voltages and voltage source branch currents",
+        "Test: voltage divider V1=5V, R1=1k, R2=1k produces V(mid) = 2.5V within 1e-9",
+        "Test: series resistors with current source produce correct node voltages",
+        "Port ngspice-upstream/tests/resistance/res_simple.cir as a Rust integration test",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Capacitor and inductor device stamps",
+      "description": "As a developer, I need C and L device stamps so that reactive elements are represented in the MNA system (for DC: C=open, L=short).",
+      "acceptanceCriteria": [
+        "Capacitor stamp: open circuit in DC (no contribution to DC matrix)",
+        "Inductor stamp: short circuit in DC (zero-resistance branch equation)",
+        "Test: RC circuit DC op — capacitor acts as open, voltage across C equals source voltage through divider",
+        "Test: RL circuit DC op — inductor acts as short, full current flows",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Port ngspice resistance test suite",
+      "description": "As a developer, I need the ngspice resistance tests running against ferrospice to validate basic DC solving.",
+      "acceptanceCriteria": [
+        "Integration test module that loads .cir files from ngspice-upstream/tests/resistance/",
+        "Parse each .cir with ferrospice_netlist, simulate with ferrospice, compare output to .out",
+        "Output comparison uses the same filtering as ngspice check.sh (ignore metadata, compare numerical values)",
+        "All 3 resistance tests pass (skip temp-dependent ones with #[ignore] and a TODO if needed)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "DC sweep analysis (.dc)",
+      "description": "As a developer, I need DC sweep analysis so that a source can be swept across a range and the operating point computed at each step.",
+      "acceptanceCriteria": [
+        ".dc src start stop step sweeps the named source and computes OP at each point",
+        "Results returned as SimResult with one data point per sweep step",
+        "Test: sweep V1 from 0 to 5V in 1V steps across a resistor produces 6 data points with correct I(V1)",
+        "Double sweep (.dc V1 ... V2 ...) supported",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Newton-Raphson nonlinear solver",
+      "description": "As a developer, I need a Newton-Raphson iteration loop so that nonlinear devices (diodes, transistors) can be solved.",
+      "acceptanceCriteria": [
+        "NR iteration with configurable convergence tolerance (ABSTOL, RELTOL, VNTOL matching ngspice defaults)",
+        "Iteration limit (default 100, matching ngspice ITL1)",
+        "Convergence check: both absolute and relative criteria on node voltages and branch currents",
+        "Source stepping or Gmin stepping fallback when NR fails to converge",
+        "Test: solve a simple nonlinear equation (e.g., diode I-V) via NR, verify convergence in < 20 iterations",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Diode device model",
+      "description": "As a developer, I need a diode device model so that nonlinear circuits with PN junctions can be simulated.",
+      "acceptanceCriteria": [
+        "Shockley diode equation: I = IS * (exp(V/Vt) - 1)",
+        ".model parameters: IS, N, RS, BV (breakdown), CJO (junction capacitance for later)",
+        "NR stamp: companion model (conductance + current source) linearized at each iteration",
+        "Test: diode with 1V source and 1k resistor produces forward voltage ~0.6-0.7V",
+        "Test: diode I-V curve via .dc sweep matches ngspice within 1e-6 relative tolerance",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Transient analysis engine (.tran)",
+      "description": "As a developer, I need transient (time-domain) analysis so that circuits with time-varying sources and reactive elements can be simulated.",
+      "acceptanceCriteria": [
+        "Backward Euler integration method (simplest, matches ngspice default starter)",
+        "Trapezoidal integration method (ngspice default after startup)",
+        "Capacitor companion model: stamp updates each timestep based on integration method",
+        "Inductor companion model: stamp updates each timestep based on integration method",
+        "Fixed timestep initially (tstep from .tran command)",
+        "Test: RC step response — charge curve matches analytical V(t) = V0*(1-exp(-t/RC)) within 1% at 5 time constants",
+        "Test: LC oscillator — frequency matches 1/(2*pi*sqrt(LC)) within 1%",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Time-varying source waveforms",
+      "description": "As a developer, I need transient waveform evaluation (PULSE, SIN, PWL, etc.) so that time-dependent sources drive the circuit during .tran.",
+      "acceptanceCriteria": [
+        "PULSE waveform: v1, v2, td, tr, tf, pw, per — all parameters",
+        "SIN waveform: v0, va, freq, td, theta, phi",
+        "PWL waveform: piecewise linear interpolation between time-value pairs",
+        "EXP, SFFM, AM waveforms",
+        "Test: PULSE source into RC circuit produces output matching ngspice res_simple.cir transient output",
+        "Test: SIN source output samples match analytical sin() within 1e-6",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Adaptive timestep control",
+      "description": "As a developer, I need adaptive timestep control so that transient analysis is accurate and efficient.",
+      "acceptanceCriteria": [
+        "Local truncation error (LTE) estimation using the difference between BE and trap results",
+        "Timestep adjustment: reduce if LTE > RELTOL, increase if LTE << RELTOL",
+        "Respect tmax from .tran if specified",
+        "Breakpoint handling: force timestep at source discontinuities (PULSE edges, PWL corners)",
+        "Test: PULSE into RC — adaptive stepping places steps near edges, coasts during flat regions",
+        "Port ngspice-upstream/tests/transient/fourbitadder.cir as integration test (can be #[ignore] until BJT model exists)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "AC analysis (.ac)",
+      "description": "As a developer, I need AC small-signal analysis so that frequency response can be computed.",
+      "acceptanceCriteria": [
+        "Linearize circuit at DC operating point",
+        "Build complex-valued MNA matrix (G + jwC)",
+        "Sweep frequency: DEC, OCT, LIN modes",
+        "AC source magnitude and phase applied correctly",
+        "Results: complex node voltages at each frequency point",
+        "Test: RC lowpass filter, -3dB point at f = 1/(2*pi*RC) within 1%",
+        "Port ngspice-upstream/tests/filters/ test as integration test",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "BJT (bipolar junction transistor) model",
+      "description": "As a developer, I need a BJT device model so that bipolar transistor circuits can be simulated.",
+      "acceptanceCriteria": [
+        "Ebers-Moll model (level 1, matching ngspice default BJT)",
+        "NPN and PNP support",
+        ".model parameters: BF, BR, IS, VAF, VAR, IKF, IKR, ISE, ISC, NE, NC, RB, RC, RE, CJE, CJC, CJS, TF, TR",
+        "NR stamps for collector and base currents",
+        "Test: common-emitter amplifier DC bias point matches ngspice within 1e-6",
+        "Port ngspice-upstream/tests/general/ tests that use BJTs",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "MOSFET level 1 model",
+      "description": "As a developer, I need a basic MOSFET model so that MOS circuits can be simulated.",
+      "acceptanceCriteria": [
+        "Shichman-Hodges model (level 1)",
+        "NMOS and PMOS support",
+        ".model parameters: VTO, KP, LAMBDA, PHI, GAMMA, CBD, CBS, CGSO, CGDO, CGBO",
+        "Operating regions: cutoff, linear, saturation with correct equations",
+        "NR stamps for drain current",
+        "Test: NMOS inverter transfer curve matches ngspice within 1e-6",
+        "Port ngspice-upstream/tests/mos6/ tests (or simplest MOSFET tests available)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "JFET model",
+      "description": "As a developer, I need a JFET device model.",
+      "acceptanceCriteria": [
+        "Standard JFET model matching ngspice level 1",
+        "N-channel and P-channel support",
+        ".model parameters: VTO, BETA, LAMBDA, RD, RS, CGS, CGD, IS",
+        "Test: JFET amplifier bias matches ngspice",
+        "Port ngspice-upstream/tests/jfet/ test",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Subcircuit expansion (.subckt / X)",
+      "description": "As a developer, I need subcircuit instantiation so that hierarchical circuits can be flattened and simulated.",
+      "acceptanceCriteria": [
+        "Flatten nested .subckt definitions into a flat netlist before MNA assembly",
+        "Port mapping: subcircuit ports connected to caller nets",
+        "PARAMS: parameter substitution in subcircuit instances",
+        "Nested subcircuits (subcircuit containing another subcircuit call)",
+        "Test: voltage divider as subcircuit, instantiated and simulated, matches direct circuit",
+        "Port ngspice-upstream/tests/regression/subckt-processing/ tests",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Controlled sources (E, F, G, H)",
+      "description": "As a developer, I need linear controlled sources so that dependent sources can be simulated.",
+      "acceptanceCriteria": [
+        "VCVS (E): voltage-controlled voltage source",
+        "CCCS (F): current-controlled current source",
+        "VCCS (G): voltage-controlled current source",
+        "CCVS (H): current-controlled voltage source",
+        "MNA stamps for each type",
+        "Test: op-amp modeled as high-gain VCVS, inverting amplifier gain = -R2/R1",
+        "Port ngspice-upstream/tests/general/ tests that use controlled sources",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Noise analysis (.noise)",
+      "description": "As a developer, I need noise analysis to compute spectral noise density.",
+      "acceptanceCriteria": [
+        "Thermal noise for resistors: 4kTR",
+        "Shot noise for diodes/BJTs: 2qI",
+        "Flicker noise (1/f) for supported devices",
+        "Output: noise spectral density at each frequency point",
+        "Test: resistor thermal noise matches 4kTR analytically",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Transfer function (.tf) and sensitivity (.sens) analyses",
+      "description": "As a developer, I need .tf and .sens analyses.",
+      "acceptanceCriteria": [
+        ".tf output input computes small-signal transfer function, input/output resistance",
+        ".sens output computes sensitivity of output to each component",
+        "Port ngspice-upstream/tests/sensitivity/ test",
+        "Port ngspice-upstream/tests/regression/sens/ tests",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Pole-zero analysis (.pz)",
+      "description": "As a developer, I need pole-zero analysis.",
+      "acceptanceCriteria": [
+        "Compute poles and zeros of the transfer function",
+        "Port ngspice-upstream/tests/polezero/ tests (6 tests)",
+        "Port ngspice-upstream/tests/regression/pz/ test",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "BSIM3 MOSFET model",
+      "description": "As a developer, I need the BSIM3 model for accurate short-channel MOSFET simulation.",
+      "acceptanceCriteria": [
+        "BSIM3v3 model implementation (or port from ngspice C code)",
+        "NMOS and PMOS",
+        "Port ngspice-upstream/tests/bsim3/ tests",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-022",
+      "title": "BSIM4 MOSFET model",
+      "description": "As a developer, I need the BSIM4 model.",
+      "acceptanceCriteria": [
+        "BSIM4 model implementation",
+        "Port ngspice-upstream/tests/bsim4/ tests",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "BSIM-SOI models",
+      "description": "As a developer, I need BSIM3-SOI device models (PD, FD, DD variants).",
+      "acceptanceCriteria": [
+        "BSIM3-SOI Partially Depleted, Fully Depleted, and Double Diffused models",
+        "Port ngspice-upstream/tests/bsim3soipd/, bsim3soifd/, bsim3soidd/ tests (18 tests total)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-024",
+      "title": "VBIC bipolar model",
+      "description": "As a developer, I need the VBIC bipolar model.",
+      "acceptanceCriteria": [
+        "VBIC model implementation",
+        "Port ngspice-upstream/tests/vbic/ tests (6 tests)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "MESA, HFET, MOS6 and remaining device models",
+      "description": "As a developer, I need the remaining device models to complete test suite coverage.",
+      "acceptanceCriteria": [
+        "MESA FET model — port ngspice-upstream/tests/mesa/ (11 tests)",
+        "HFET model — port ngspice-upstream/tests/hfet/ (2 tests)",
+        "MOS6 model — port ngspice-upstream/tests/mos6/ (2 tests)",
+        "MESFET model — port ngspice-upstream/tests/mes/ (1 test)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-026",
+      "title": "Transmission line models",
+      "description": "As a developer, I need transmission line models (LTRA, TXL, CPL).",
+      "acceptanceCriteria": [
+        "Lossy transmission line (LTRA) model",
+        "Coupled multiconductor line (TXL/CPL) models",
+        "Port ngspice-upstream/tests/transmission/ tests (6 tests)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-027",
+      "title": "Port full regression test suite",
+      "description": "As a developer, I need all regression tests passing to ensure parser, control flow, and edge cases work.",
+      "acceptanceCriteria": [
+        "Port ngspice-upstream/tests/regression/misc/ (13 tests)",
+        "Port ngspice-upstream/tests/regression/lib-processing/ (7 tests)",
+        "Port ngspice-upstream/tests/regression/parser/ (5 tests)",
+        "Port ngspice-upstream/tests/regression/temper/ (4 tests)",
+        "Port ngspice-upstream/tests/regression/model/ (3 tests)",
+        "Port ngspice-upstream/tests/regression/func/ (1 test)",
+        "All 41 regression tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-028",
+      "title": "Test harness matching ngspice check.sh",
+      "description": "As a developer, I need an automated test harness that runs all 113 .cir files and compares output to .out references.",
+      "acceptanceCriteria": [
+        "Rust integration test or binary that iterates ngspice-upstream/tests/**/*.cir",
+        "For each .cir: parse, simulate, format output, filter, diff against .out",
+        "Filtering matches check.sh rules (strip metadata, normalize floats)",
+        "Summary report: N/113 tests passing",
+        "All 113 tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-029",
+      "title": "Minimal CLI for running netlists",
+      "description": "As a user, I want a CLI to run SPICE netlists so I can use ferrospice from the command line.",
+      "acceptanceCriteria": [
+        "ferrospice --batch input.cir runs all analyses and prints results to stdout",
+        "Output format matches ngspice batch output (for test compatibility)",
+        "CLI is a thin wrapper around the library — all logic lives in library crates",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

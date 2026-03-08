@@ -1,0 +1,60 @@
+# Ralph Progress Log
+Started: Sun  8 Mar 14:08:50 CET 2026
+---
+
+## Codebase Patterns
+- Use `faer` 0.24 for sparse matrix / linear algebra (pure Rust, supports LU via `FullPivLu`)
+- Import `faer::prelude::Solve` trait to use `.solve()` on LU decomposition
+- `SparseMatrix` uses triplet (COO) form with duplicate summing — standard for MNA stamp accumulation
+- `LinearSystem` wraps `SparseMatrix` + RHS vector and provides `.solve()` -> `Result<Vec<f64>>`
+- ferrospice-netlist already parses: R, C, L, V, I, D, Q, M, J, K, E, F, G, H, B, X elements
+- ferrospice-netlist already parses: .op, .dc, .tran, .ac, .noise, .tf, .sens analyses
+- Workspace deps: `thiserror` (workspace), `facet` (workspace), `approx` (dev)
+- MNA assembly: `assemble_mna(&Netlist) -> Result<MnaSystem>` in ferrospice-core::mna
+- DC OP solver: `simulate_op(&Netlist) -> Result<SimResult, MnaError>` in ferrospice-core::simulate
+- SimResult vectors: node voltages as `v(node_name)`, branch currents as `vsource_name#branch` (lowercase)
+- Node "0" is ground and excluded from the MNA matrix (NodeMap returns None for it)
+- MNA matrix size = num_non_ground_nodes + num_voltage_sources
+- Solution vector layout: [node voltages..., vsource branch currents...]
+- SPICE current source convention: `I n+ n-` → current exits n+ externally, enters n-
+- Use `stamp_conductance()` helper for resistor-like stamps between two nodes
+---
+
+## 2026-03-08 - US-001
+- Created `ferrospice-core` crate with `SparseMatrix` (triplet/COO form) and `LinearSystem` types
+- Uses `faer` 0.24 for LU factorization (`FullPivLu`) and solve
+- 5 unit tests: 3x3 system solve, triplet duplicate summing, identity, singular, empty
+- Fixed pre-existing clippy warnings in ferrospice-netlist (manual_strip, unnecessary_to_owned)
+- Files: ferrospice-core/Cargo.toml, ferrospice-core/src/lib.rs, ferrospice-core/src/sparse.rs, Cargo.toml
+- **Learnings for future iterations:**
+  - `faer` requires explicit `use faer::prelude::Solve` to call `.solve()` on decompositions
+  - ferrospice-netlist has comprehensive parser already — elements, analyses, subcircuits all parsed
+  - Rust 1.94 edition 2024 is in use
+---
+
+## 2026-03-08 - US-002
+- Created `ferrospice-core/src/mna.rs` with MNA matrix assembly from netlist
+- `assemble_mna(&Netlist) -> Result<MnaSystem>` builds LinearSystem from parsed elements
+- `NodeMap` maps node names to matrix indices, ground "0" excluded
+- Stamps implemented: resistor (conductance), voltage source (branch equation), current source (RHS)
+- `MnaSystem::solve()` returns `MnaSolution` with `.voltage(node)` and `.branch_current(vsrc)` accessors
+- 5 unit tests: voltage divider, current source, series resistors, ground exclusion, multiple sources
+- Files: ferrospice-core/Cargo.toml, ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs
+- **Learnings for future iterations:**
+  - SPICE current source convention: `I n+ n-` means current flows from n+ to n- externally (exits n+, enters n-)
+  - For KCL stamps: subtract current from n+ RHS, add to n- RHS
+  - Rust 1.94 requires explicit lifetime `'_` in return types when elided elsewhere (mismatched_lifetime_syntaxes)
+  - `ferrospice-core` now depends on `ferrospice-netlist` for the Netlist/Element types
+---
+
+## 2026-03-08 - US-003
+- Created `ferrospice-core/src/simulate.rs` with `simulate_op(&Netlist) -> Result<SimResult, MnaError>`
+- Assembles MNA, solves, returns SimResult with node voltages and branch currents
+- 3 unit tests: voltage divider (V(mid)=2.5V), series resistors with current source, res_simple.cir port
+- SimResult format: single plot "op1", vectors named "v(node)" and "vsource#branch"
+- Files: ferrospice-core/src/simulate.rs, ferrospice-core/src/lib.rs
+- **Learnings for future iterations:**
+  - SimResult/SimPlot/SimVector types live in ferrospice-netlist, not ferrospice-core
+  - Branch current vector naming convention: lowercase source name + "#branch" (e.g., "v1#branch")
+  - res_simple.cir uses .TRAN but the DC OP result is I(V1) = -0.0001A (V=1V, R=10kΩ)
+---
