@@ -348,4 +348,24 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - AC stamps: gds, gm, gmbs (real) + CGSO*W, CGDO*W, CGBO*L (gate overlap caps, imaginary) + CBD, CBS (junction caps, imaginary)
   - mos_limit: separate limiting for VGS (±0.5V step limit around VTO) and VDS (quadratic limit for large changes)
   - Bulk diode leakage causes small drain voltage drop even in cutoff — use relaxed tolerances in tests
+- JFET model: `JfetModel::companion(vgs, vgd) -> JfetCompanion` with Sydney University modified Shichman-Hodges
+- JFET Bfac in saturation: `Bfac = vgst * Bfac` (modified before computing gm/cpart)
+- JFET gate junctions: PN diode leakage (ggs, ggd) via `gate_junction_current()` with deep-reverse-bias cube approximation
+- `stamp_jfet()` stamps ggs, ggd, gds conductances + gm VCCS + series R + RHS current sources
+- JFET internal nodes: RD > 0 creates drain_prime, RS > 0 creates source_prime
+---
+
+## 2026-03-08 - US-015
+- Implemented Level 1 JFET model with Sydney University modification
+- Files changed: ferrospice-core/src/jfet.rs (new), ferrospice-core/tests/jfet.rs (new), ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/ac.rs, ferrospice-core/src/transient.rs
+- **Learnings for future iterations:**
+  - JFET Sydney University modification: `Bfac = (1-b)/(PB-VTO)`, b defaults to 1.0 (simplifies to standard quadratic)
+  - In saturation, ngspice modifies Bfac: `Bfac = vgst * Bfac` before computing gm and cpart — this is critical
+  - Linear region cpart formula: `vds*(vds*(Bfac*vds - b) + vgst*apart)` — NOT `vds*(vgst*apart - Bfac*vds²)`
+  - Linear region gm: `betap*vds*(apart + 3*Bfac*vgst)` — includes extra `3*Bfac*vgst` term
+  - Inverse mode uses `betap = beta*(1 - lambda*vds)` (note: vds is negative, so this increases beta)
+  - Inverse mode gds includes `-gm` term; inverse saturation gds = `lambda*beta*cpart - gm`
+  - JFET gate junctions are PN diodes (Shockley equation) — same gate_junction_current for GS and GD
+  - DC sweep source indexing must account for ALL internal nodes (diodes, BJTs, MOSFETs, JFETs) via total_num_nodes()
+  - Always read the actual ngspice C source (e.g., jfetload.c) rather than implementing from textbook equations — ngspice has specific modifications
 ---
