@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::LinearSystem;
 use crate::bjt::{BjtInstance, BjtModel};
 use crate::bsim3::{Bsim3Instance, Bsim3Model};
+use crate::bsim4::{Bsim4Instance, Bsim4Model};
 use crate::diode::DiodeModel;
 use crate::jfet::{JfetInstance, JfetModel};
 use crate::mosfet::{MosfetInstance, MosfetModel};
@@ -242,6 +243,8 @@ pub struct MnaSystem {
     pub jfets: Vec<JfetInstance>,
     /// Resolved BSIM3 MOSFET instances for NR iteration.
     pub bsim3s: Vec<Bsim3Instance>,
+    /// Resolved BSIM4 MOSFET instances for NR iteration.
+    pub bsim4s: Vec<Bsim4Instance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -473,6 +476,15 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     };
                     let (nrd, nrs) = get_nrd_nrs(params);
                     internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 14 {
+                    // BSIM4
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        Bsim4Model::from_model_def(mdef)
+                    } else {
+                        Bsim4Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    let (nrd, nrs) = get_nrd_nrs(params);
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
                 } else {
                     let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
                         MosfetModel::from_model_def(mdef)
@@ -557,6 +569,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut mosfets = Vec::new();
     let mut jfets = Vec::new();
     let mut bsim3s = Vec::new();
+    let mut bsim4s = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
@@ -762,6 +775,68 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         vfbzb_inst: size_params.vfbzb,
                         size_params,
                         model: bm,
+                    });
+                } else if level == 14 {
+                    // BSIM4
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        Bsim4Model::from_model_def(mdef)
+                    } else {
+                        Bsim4Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+
+                    let drain_prime_idx = if (bm.rsh > 0.0 && nrd > 0.0) || bm.rdsmod != 0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if (bm.rsh > 0.0 && nrs > 0.0) || bm.rdsmod != 0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    // Extract BSIM4-specific instance params
+                    let mut nf = 1.0;
+                    let mut sa = 0.0;
+                    let mut sb = 0.0;
+                    for p in params {
+                        if let Expr::Num(v) = &p.value {
+                            match p.name.to_uppercase().as_str() {
+                                "NF" => nf = *v,
+                                "SA" => sa = *v,
+                                "SB" => sb = *v,
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    let size_params = bm.size_dep_param(w, l, nf, 300.15);
+                    bsim4s.push(Bsim4Instance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        w,
+                        l,
+                        nf,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        nrd,
+                        nrs,
+                        m: m_mult,
+                        sa,
+                        sb,
+                        model: bm,
+                        size_params,
                     });
                 } else {
                     let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
@@ -1081,6 +1156,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         cccs_sources,
         ccvs_sources,
         bsim3s,
+        bsim4s,
     })
 }
 

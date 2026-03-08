@@ -515,6 +515,90 @@ fn build_ac_system(
         }
     }
 
+    // 5e. BSIM4 small-signal stamps.
+    for bsim in &mna.bsim4s {
+        let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);
+        let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
+        let m = bsim.m;
+
+        let dp = bsim.drain_prime_idx;
+        let g = bsim.gate_idx;
+        let sp = bsim.source_prime_idx;
+        let b = bsim.bulk_idx;
+
+        crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
+
+        let gm_scaled = m * comp.gm;
+        if let Some(d) = dp {
+            if let Some(gate) = g {
+                sys.real.add(d, gate, gm_scaled);
+            }
+            if let Some(s) = sp {
+                sys.real.add(d, s, -gm_scaled);
+            }
+        }
+        if let Some(s) = sp {
+            if let Some(gate) = g {
+                sys.real.add(s, gate, -gm_scaled);
+            }
+            sys.real.add(s, s, gm_scaled);
+        }
+
+        let gmbs_scaled = m * comp.gmbs;
+        if let Some(d) = dp {
+            if let Some(bulk) = b {
+                sys.real.add(d, bulk, gmbs_scaled);
+            }
+            if let Some(s) = sp {
+                sys.real.add(d, s, -gmbs_scaled);
+            }
+        }
+        if let Some(s) = sp {
+            if let Some(bulk) = b {
+                sys.real.add(s, bulk, -gmbs_scaled);
+            }
+            sys.real.add(s, s, gmbs_scaled);
+        }
+
+        crate::stamp_conductance(&mut sys.real, b, dp, m * comp.gbd);
+        crate::stamp_conductance(&mut sys.real, b, sp, m * comp.gbs);
+
+        let g_drain = bsim.drain_conductance();
+        if g_drain > 0.0 {
+            crate::stamp_conductance(&mut sys.real, bsim.drain_idx, dp, m * g_drain);
+        }
+        let g_source = bsim.source_conductance();
+        if g_source > 0.0 {
+            crate::stamp_conductance(&mut sys.real, bsim.source_idx, sp, m * g_source);
+        }
+
+        let cap_entries: &[(Option<usize>, Option<usize>, f64)] = &[
+            (g, g, comp.cggb),
+            (g, dp, comp.cgdb),
+            (g, sp, comp.cgsb),
+            (dp, g, comp.cdgb),
+            (dp, dp, comp.cddb),
+            (dp, sp, comp.cdsb),
+            (b, g, comp.cbgb),
+            (b, dp, comp.cbdb),
+            (b, sp, comp.cbsb),
+        ];
+        for &(row, col, cap) in cap_entries {
+            if cap.abs() > 0.0
+                && let (Some(r), Some(c)) = (row, col)
+            {
+                sys.imag.add(r, c, omega * m * cap);
+            }
+        }
+
+        if comp.capbd > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, b, dp, omega * m * comp.capbd);
+        }
+        if comp.capbs > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, b, sp, omega * m * comp.capbs);
+        }
+    }
+
     // 6. Apply AC source excitation to RHS (for forward solve / gain computation).
     apply_ac_excitation(&mut sys, netlist, mna, num_nodes);
 
@@ -857,6 +941,49 @@ fn compute_total_noise(
         }
     }
 
+    // BSIM4 noise sources.
+    for bsim in &mna.bsim4s {
+        let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);
+        let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
+        let m = bsim.m;
+
+        let dp = bsim.drain_prime_idx;
+        let sp = bsim.source_prime_idx;
+
+        // Channel thermal noise: (2/3) * 4kT * |gm|.
+        let gm = comp.gm.abs() * m;
+        let channel_noise = (8.0 / 3.0) * K_BOLTZ * T_NOM * gm;
+        total += channel_noise * adjoint_transfer_sq(adjoint, dp, sp);
+
+        // Drain resistance thermal noise.
+        let g_drain = bsim.drain_conductance() * m;
+        if g_drain > 0.0 {
+            let rd_noise = 4.0 * K_BOLTZ * T_NOM * g_drain;
+            total += rd_noise * adjoint_transfer_sq(adjoint, bsim.drain_idx, dp);
+        }
+
+        // Source resistance thermal noise.
+        let g_source = bsim.source_conductance() * m;
+        if g_source > 0.0 {
+            let rs_noise = 4.0 * K_BOLTZ * T_NOM * g_source;
+            total += rs_noise * adjoint_transfer_sq(adjoint, bsim.source_idx, sp);
+        }
+
+        // Flicker noise: NOIA * |Id|^EF / (f * Cox * Leff²).
+        let noia = bsim.model.noia;
+        if noia > 0.0 && freq > 0.0 {
+            let id = comp.ids.abs() * m;
+            let cox = bsim.model.coxe();
+            let l_eff = bsim.size_params.leff;
+            let cox_l_sq = cox * l_eff * l_eff;
+            if cox_l_sq > 0.0 {
+                let ef = bsim.model.ef;
+                let flicker = noia * id.powf(ef) / (freq * cox_l_sq);
+                total += flicker * adjoint_transfer_sq(adjoint, dp, sp);
+            }
+        }
+    }
+
     total
 }
 
@@ -968,6 +1095,11 @@ fn total_num_nodes(mna: &MnaSystem) -> usize {
             .sum::<usize>()
         + mna
             .bsim3s
+            .iter()
+            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
+            .sum::<usize>()
+        + mna
+            .bsim4s
             .iter()
             .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
             .sum::<usize>()

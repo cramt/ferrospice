@@ -3,6 +3,7 @@ use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimV
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::bsim3::{bsim3_companion, bsim3_limit, stamp_bsim3};
+use crate::bsim4::{bsim4_companion, bsim4_limit, stamp_bsim4};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
@@ -33,7 +34,8 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
         || !mna.bjts.is_empty()
         || !mna.mosfets.is_empty()
         || !mna.jfets.is_empty()
-        || !mna.bsim3s.is_empty();
+        || !mna.bsim3s.is_empty()
+        || !mna.bsim4s.is_empty();
     let solution_vec = if !has_nonlinear {
         // Pure linear circuit — direct solve.
         let sol = mna.solve()?;
@@ -123,7 +125,8 @@ pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
         || !mna.bjts.is_empty()
         || !mna.mosfets.is_empty()
         || !mna.jfets.is_empty()
-        || !mna.bsim3s.is_empty();
+        || !mna.bsim3s.is_empty()
+        || !mna.bsim4s.is_empty();
 
     if !has_nonlinear {
         mna.system.solve().map_err(MnaError::from)
@@ -157,12 +160,18 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
         .iter()
         .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
         .sum();
+    let num_internal_bsim4s: usize = mna
+        .bsim4s
+        .iter()
+        .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
+        .sum();
     let num_nodes = num_ext_nodes
         + num_internal_diodes
         + num_internal_bjts
         + num_internal_mosfets
         + num_internal_jfets
-        + num_internal_bsim3s;
+        + num_internal_bsim3s
+        + num_internal_bsim4s;
     let options = NrOptions::default();
 
     // The base linear system (matrix + RHS) from MNA assembly contains stamps
@@ -174,6 +183,7 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
     let mosfets = &mna.mosfets;
     let jfets = &mna.jfets;
     let bsim3s = &mna.bsim3s;
+    let bsim4s = &mna.bsim4s;
 
     // Precompute vcrit for each diode for voltage limiting.
     let vcrits: Vec<f64> = diodes
@@ -196,6 +206,8 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
         .collect();
     // Track previous BSIM3 voltages (vgs, vds, vbs) for limiting.
     let prev_bsim3_voltages = std::cell::RefCell::new(vec![(0.0, 0.0, 0.0); bsim3s.len()]);
+    // Track previous BSIM4 voltages (vgs, vds, vbs) for limiting.
+    let prev_bsim4_voltages = std::cell::RefCell::new(vec![(0.0, 0.0, 0.0); bsim4s.len()]);
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps.
@@ -313,6 +325,28 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
                 stamp_bsim3(&mut system.matrix, &mut system.rhs, bsim, &comp);
             }
         }
+
+        // 7. Stamp BSIM4 companion models.
+        {
+            let mut prev = prev_bsim4_voltages.borrow_mut();
+            for (bi, bsim) in bsim4s.iter().enumerate() {
+                let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
+
+                let (vgs, vds, vbs) = bsim4_limit(
+                    raw_vgs,
+                    raw_vds,
+                    raw_vbs,
+                    prev[bi].0,
+                    prev[bi].1,
+                    prev[bi].2,
+                    bsim.size_params.vth0,
+                );
+                prev[bi] = (vgs, vds, vbs);
+
+                let comp = bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
+                stamp_bsim4(&mut system.matrix, &mut system.rhs, bsim, &comp);
+            }
+        }
     };
 
     let initial = vec![0.0; dim];
@@ -359,6 +393,11 @@ pub(crate) fn total_num_nodes(mna: &MnaSystem) -> usize {
             .sum::<usize>()
         + mna
             .bsim3s
+            .iter()
+            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
+            .sum::<usize>()
+        + mna
+            .bsim4s
             .iter()
             .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
             .sum::<usize>()
@@ -610,7 +649,8 @@ fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), 
         || !mna.bjts.is_empty()
         || !mna.mosfets.is_empty()
         || !mna.jfets.is_empty()
-        || !mna.bsim3s.is_empty();
+        || !mna.bsim3s.is_empty()
+        || !mna.bsim4s.is_empty();
     if !has_nonlinear {
         // Linear circuit — direct solve.
         let solution = mna.solve()?;

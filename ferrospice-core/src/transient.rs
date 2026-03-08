@@ -357,6 +357,11 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .bsim3s
             .iter()
             .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
+            .sum::<usize>()
+        + mna
+            .bsim4s
+            .iter()
+            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
             .sum::<usize>();
     let num_nodes = num_ext_nodes + num_internal;
     let dim = mna.system.dim();
@@ -480,7 +485,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         || !mna.bjts.is_empty()
         || !mna.mosfets.is_empty()
         || !mna.jfets.is_empty()
-        || !mna.bsim3s.is_empty();
+        || !mna.bsim3s.is_empty()
+        || !mna.bsim4s.is_empty();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
     let tran_params = TranParams {
@@ -738,6 +744,15 @@ fn solve_timestep(
             .collect::<Vec<(f64, f64, f64)>>(),
     );
 
+    // Track previous BSIM4 voltages (vgs, vds, vbs) for limiting.
+    let bsim4s = &mna.bsim4s;
+    let prev_bsim4_voltages = std::cell::RefCell::new(
+        bsim4s
+            .iter()
+            .map(|b| b.terminal_voltages(prev_solution))
+            .collect::<Vec<(f64, f64, f64)>>(),
+    );
+
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
         for triplet in base_matrix.triplets() {
@@ -886,6 +901,27 @@ fn solve_timestep(
                 let comp =
                     crate::bsim3::bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
                 crate::bsim3::stamp_bsim3(&mut system.matrix, &mut system.rhs, bsim, &comp);
+            }
+
+            // 9. Stamp BSIM4 companion models.
+            let mut prev_b4 = prev_bsim4_voltages.borrow_mut();
+            for (bi, bsim) in bsim4s.iter().enumerate() {
+                let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
+
+                let (vgs, vds, vbs) = crate::bsim4::bsim4_limit(
+                    raw_vgs,
+                    raw_vds,
+                    raw_vbs,
+                    prev_b4[bi].0,
+                    prev_b4[bi].1,
+                    prev_b4[bi].2,
+                    bsim.size_params.vth0,
+                );
+                prev_b4[bi] = (vgs, vds, vbs);
+
+                let comp =
+                    crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
+                crate::bsim4::stamp_bsim4(&mut system.matrix, &mut system.rhs, bsim, &comp);
             }
         }
     };
