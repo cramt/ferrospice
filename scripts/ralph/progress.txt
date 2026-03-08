@@ -18,6 +18,9 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Solution vector layout: [node voltages..., vsource branch currents...]
 - SPICE current source convention: `I n+ n-` → current exits n+ externally, enters n-
 - Use `stamp_conductance()` helper for resistor-like stamps between two nodes
+- Inductor in DC is modeled as a 0V voltage source (branch equation), added to `vsource_names`
+- Capacitor in DC has no MNA contribution — just register nodes, skip stamping
+- `simulate_op` automatically includes inductor branch currents since they share `vsource_names`
 ---
 
 ## 2026-03-08 - US-001
@@ -57,4 +60,16 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - SimResult/SimPlot/SimVector types live in ferrospice-netlist, not ferrospice-core
   - Branch current vector naming convention: lowercase source name + "#branch" (e.g., "v1#branch")
   - res_simple.cir uses .TRAN but the DC OP result is I(V1) = -0.0001A (V=1V, R=10kΩ)
+---
+
+## 2026-03-08 - US-004
+- Added capacitor and inductor DC stamps to MNA assembly in `ferrospice-core/src/mna.rs`
+- Capacitor: open circuit in DC (registers nodes only, no matrix contribution)
+- Inductor: short circuit in DC (zero-voltage branch equation, reuses voltage source stamp pattern)
+- Added 2 tests: `test_rc_circuit_dc_op` and `test_rl_circuit_dc_op`
+- Files: ferrospice-core/src/mna.rs
+- **Learnings for future iterations:**
+  - Inductor DC stamp is identical to a voltage source stamp with V=0 — reuse the same pattern
+  - Inductor branch entries go into `vsource_names`, so `simulate_op` picks them up automatically
+  - No changes needed in `simulate.rs` — the existing loop over `vsource_names` handles inductors
 ---
