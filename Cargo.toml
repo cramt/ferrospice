@@ -1,5 +1,5 @@
 [workspace]
-members = ["ferrospice-netlist"]
+members = ["ferrospice-netlist", "ferrospice-core"]
 resolver = "3"
 
 [workspace.dependencies]

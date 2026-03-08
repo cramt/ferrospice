@@ -1,0 +1,12 @@
+[package]
+name = "ferrospice-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core simulation engine types for ferrospice: sparse matrices, MNA assembly, solvers"
+
+[dependencies]
+thiserror.workspace = true
+faer = "0.24"
+
+[dev-dependencies]
+approx = "0.5"

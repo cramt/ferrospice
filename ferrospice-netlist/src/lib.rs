@@ -259,7 +259,15 @@ fn write_optional_args(f: &mut fmt::Formatter<'_>, args: &[Option<&Expr>]) -> fm
 impl fmt::Display for Waveform {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Waveform::Pulse { v1, v2, td, tr, tf, pw, per } => {
+            Waveform::Pulse {
+                v1,
+                v2,
+                td,
+                tr,
+                tf,
+                pw,
+                per,
+            } => {
                 write!(f, "PULSE({v1} {v2}")?;
                 write_optional_args(
                     f,
@@ -273,7 +281,14 @@ impl fmt::Display for Waveform {
                 )?;
                 write!(f, ")")
             }
-            Waveform::Sin { v0, va, freq, td, theta, phi } => {
+            Waveform::Sin {
+                v0,
+                va,
+                freq,
+                td,
+                theta,
+                phi,
+            } => {
                 write!(f, "SIN({v0} {va}")?;
                 write_optional_args(
                     f,
@@ -281,7 +296,14 @@ impl fmt::Display for Waveform {
                 )?;
                 write!(f, ")")
             }
-            Waveform::Exp { v1, v2, td1, tau1, td2, tau2 } => {
+            Waveform::Exp {
+                v1,
+                v2,
+                td1,
+                tau1,
+                td2,
+                tau2,
+            } => {
                 write!(f, "EXP({v1} {v2}")?;
                 write_optional_args(
                     f,
@@ -331,17 +353,45 @@ pub struct Element {
 #[repr(C)]
 pub enum ElementKind {
     /// `Rname n+ n- value [params]`
-    Resistor { pos: String, neg: String, value: Expr, params: Vec<Param> },
+    Resistor {
+        pos: String,
+        neg: String,
+        value: Expr,
+        params: Vec<Param>,
+    },
     /// `Cname n+ n- value [IC=val]`
-    Capacitor { pos: String, neg: String, value: Expr, params: Vec<Param> },
+    Capacitor {
+        pos: String,
+        neg: String,
+        value: Expr,
+        params: Vec<Param>,
+    },
     /// `Lname n+ n- value [IC=val]`
-    Inductor { pos: String, neg: String, value: Expr, params: Vec<Param> },
+    Inductor {
+        pos: String,
+        neg: String,
+        value: Expr,
+        params: Vec<Param>,
+    },
     /// `Vname n+ n- source`
-    VoltageSource { pos: String, neg: String, source: Source },
+    VoltageSource {
+        pos: String,
+        neg: String,
+        source: Source,
+    },
     /// `Iname n+ n- source`
-    CurrentSource { pos: String, neg: String, source: Source },
+    CurrentSource {
+        pos: String,
+        neg: String,
+        source: Source,
+    },
     /// `Dname anode cathode model [params]`
-    Diode { anode: String, cathode: String, model: String, params: Vec<Param> },
+    Diode {
+        anode: String,
+        cathode: String,
+        model: String,
+        params: Vec<Param>,
+    },
     /// `Qname c b e [substrate] model [params]`
     Bjt {
         c: String,
@@ -352,19 +402,58 @@ pub enum ElementKind {
         params: Vec<Param>,
     },
     /// `Mname d g s bulk model [params]`
-    Mosfet { d: String, g: String, s: String, bulk: String, model: String, params: Vec<Param> },
+    Mosfet {
+        d: String,
+        g: String,
+        s: String,
+        bulk: String,
+        model: String,
+        params: Vec<Param>,
+    },
     /// `Jname d g s model [params]`
-    Jfet { d: String, g: String, s: String, model: String, params: Vec<Param> },
+    Jfet {
+        d: String,
+        g: String,
+        s: String,
+        model: String,
+        params: Vec<Param>,
+    },
     /// `Kname L1 L2 coupling`  (mutual inductance)
-    MutualCoupling { l1: String, l2: String, coupling: Expr },
+    MutualCoupling {
+        l1: String,
+        l2: String,
+        coupling: Expr,
+    },
     /// `Ename out+ out- in+ in- gain`  (voltage-controlled voltage source)
-    Vcvs { out_pos: String, out_neg: String, in_pos: String, in_neg: String, gain: Expr },
+    Vcvs {
+        out_pos: String,
+        out_neg: String,
+        in_pos: String,
+        in_neg: String,
+        gain: Expr,
+    },
     /// `Fname out+ out- vsource gain`  (current-controlled current source)
-    Cccs { out_pos: String, out_neg: String, vsrc: String, gain: Expr },
+    Cccs {
+        out_pos: String,
+        out_neg: String,
+        vsrc: String,
+        gain: Expr,
+    },
     /// `Gname out+ out- in+ in- gm`  (voltage-controlled current source)
-    Vccs { out_pos: String, out_neg: String, in_pos: String, in_neg: String, gm: Expr },
+    Vccs {
+        out_pos: String,
+        out_neg: String,
+        in_pos: String,
+        in_neg: String,
+        gm: Expr,
+    },
     /// `Hname out+ out- vsource rm`  (current-controlled voltage source)
-    Ccvs { out_pos: String, out_neg: String, vsrc: String, rm: Expr },
+    Ccvs {
+        out_pos: String,
+        out_neg: String,
+        vsrc: String,
+        rm: Expr,
+    },
     /// `Bname n+ n- V={expr}` or `I={expr}`  (behavioural source)
     BehavioralSource {
         pos: String,
@@ -373,7 +462,11 @@ pub enum ElementKind {
         spec: String,
     },
     /// `Xname port... subckt [PARAMS: key=val...]`
-    SubcktCall { ports: Vec<String>, subckt: String, params: Vec<Param> },
+    SubcktCall {
+        ports: Vec<String>,
+        subckt: String,
+        params: Vec<Param>,
+    },
     /// Any element type not explicitly handled — stored verbatim after name.
     Raw(String),
 }
@@ -388,15 +481,30 @@ fn write_params(f: &mut fmt::Formatter<'_>, params: &[Param]) -> fmt::Result {
 impl fmt::Display for Element {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            ElementKind::Resistor { pos, neg, value, params } => {
+            ElementKind::Resistor {
+                pos,
+                neg,
+                value,
+                params,
+            } => {
                 write!(f, "{} {pos} {neg} {value}", self.name)?;
                 write_params(f, params)
             }
-            ElementKind::Capacitor { pos, neg, value, params } => {
+            ElementKind::Capacitor {
+                pos,
+                neg,
+                value,
+                params,
+            } => {
                 write!(f, "{} {pos} {neg} {value}", self.name)?;
                 write_params(f, params)
             }
-            ElementKind::Inductor { pos, neg, value, params } => {
+            ElementKind::Inductor {
+                pos,
+                neg,
+                value,
+                params,
+            } => {
                 write!(f, "{} {pos} {neg} {value}", self.name)?;
                 write_params(f, params)
             }
@@ -406,11 +514,23 @@ impl fmt::Display for Element {
             ElementKind::CurrentSource { pos, neg, source } => {
                 write!(f, "{} {pos} {neg} {source}", self.name)
             }
-            ElementKind::Diode { anode, cathode, model, params } => {
+            ElementKind::Diode {
+                anode,
+                cathode,
+                model,
+                params,
+            } => {
                 write!(f, "{} {anode} {cathode} {model}", self.name)?;
                 write_params(f, params)
             }
-            ElementKind::Bjt { c, b, e, substrate, model, params } => {
+            ElementKind::Bjt {
+                c,
+                b,
+                e,
+                substrate,
+                model,
+                params,
+            } => {
                 write!(f, "{} {c} {b} {e}", self.name)?;
                 if let Some(sub) = substrate {
                     write!(f, " {sub}")?;
@@ -418,33 +538,80 @@ impl fmt::Display for Element {
                 write!(f, " {model}")?;
                 write_params(f, params)
             }
-            ElementKind::Mosfet { d, g, s, bulk, model, params } => {
+            ElementKind::Mosfet {
+                d,
+                g,
+                s,
+                bulk,
+                model,
+                params,
+            } => {
                 write!(f, "{} {d} {g} {s} {bulk} {model}", self.name)?;
                 write_params(f, params)
             }
-            ElementKind::Jfet { d, g, s, model, params } => {
+            ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params,
+            } => {
                 write!(f, "{} {d} {g} {s} {model}", self.name)?;
                 write_params(f, params)
             }
             ElementKind::MutualCoupling { l1, l2, coupling } => {
                 write!(f, "{} {l1} {l2} {coupling}", self.name)
             }
-            ElementKind::Vcvs { out_pos, out_neg, in_pos, in_neg, gain } => {
-                write!(f, "{} {out_pos} {out_neg} {in_pos} {in_neg} {gain}", self.name)
+            ElementKind::Vcvs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                gain,
+            } => {
+                write!(
+                    f,
+                    "{} {out_pos} {out_neg} {in_pos} {in_neg} {gain}",
+                    self.name
+                )
             }
-            ElementKind::Cccs { out_pos, out_neg, vsrc, gain } => {
+            ElementKind::Cccs {
+                out_pos,
+                out_neg,
+                vsrc,
+                gain,
+            } => {
                 write!(f, "{} {out_pos} {out_neg} {vsrc} {gain}", self.name)
             }
-            ElementKind::Vccs { out_pos, out_neg, in_pos, in_neg, gm } => {
-                write!(f, "{} {out_pos} {out_neg} {in_pos} {in_neg} {gm}", self.name)
+            ElementKind::Vccs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                gm,
+            } => {
+                write!(
+                    f,
+                    "{} {out_pos} {out_neg} {in_pos} {in_neg} {gm}",
+                    self.name
+                )
             }
-            ElementKind::Ccvs { out_pos, out_neg, vsrc, rm } => {
+            ElementKind::Ccvs {
+                out_pos,
+                out_neg,
+                vsrc,
+                rm,
+            } => {
                 write!(f, "{} {out_pos} {out_neg} {vsrc} {rm}", self.name)
             }
             ElementKind::BehavioralSource { pos, neg, spec } => {
                 write!(f, "{} {pos} {neg} {spec}", self.name)
             }
-            ElementKind::SubcktCall { ports, subckt, params } => {
+            ElementKind::SubcktCall {
+                ports,
+                subckt,
+                params,
+            } => {
                 write!(f, "{}", self.name)?;
                 for p in ports {
                     write!(f, " {p}")?;
@@ -534,14 +701,25 @@ impl fmt::Display for Analysis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Analysis::Op => write!(f, ".op"),
-            Analysis::Dc { src, start, stop, step, src2 } => {
+            Analysis::Dc {
+                src,
+                start,
+                stop,
+                step,
+                src2,
+            } => {
                 write!(f, ".dc {src} {start} {stop} {step}")?;
                 if let Some(s2) = src2 {
                     write!(f, " {s2}")?;
                 }
                 Ok(())
             }
-            Analysis::Tran { tstep, tstop, tstart, tmax } => {
+            Analysis::Tran {
+                tstep,
+                tstop,
+                tstart,
+                tmax,
+            } => {
                 write!(f, ".tran {tstep} {tstop}")?;
                 if let Some(ts) = tstart {
                     write!(f, " {ts}")?;
@@ -551,10 +729,23 @@ impl fmt::Display for Analysis {
                 }
                 Ok(())
             }
-            Analysis::Ac { variation, n, fstart, fstop } => {
+            Analysis::Ac {
+                variation,
+                n,
+                fstart,
+                fstop,
+            } => {
                 write!(f, ".ac {variation} {n} {fstart} {fstop}")
             }
-            Analysis::Noise { output, ref_node, src, variation, n, fstart, fstop } => {
+            Analysis::Noise {
+                output,
+                ref_node,
+                src,
+                variation,
+                n,
+                fstart,
+                fstop,
+            } => {
                 write!(f, ".noise {output}")?;
                 if let Some(r) = ref_node {
                     write!(f, " {r}")?;
@@ -718,14 +909,22 @@ impl Netlist {
     /// Iterate over all top-level elements (not descending into subckts).
     pub fn elements(&self) -> impl Iterator<Item = &Element> {
         self.items.iter().filter_map(|i| {
-            if let Item::Element(e) = i { Some(e) } else { None }
+            if let Item::Element(e) = i {
+                Some(e)
+            } else {
+                None
+            }
         })
     }
 
     /// Iterate over all top-level elements mutably.
     pub fn elements_mut(&mut self) -> impl Iterator<Item = &mut Element> {
         self.items.iter_mut().filter_map(|i| {
-            if let Item::Element(e) = i { Some(e) } else { None }
+            if let Item::Element(e) = i {
+                Some(e)
+            } else {
+                None
+            }
         })
     }
 
@@ -814,16 +1013,25 @@ mod tests {
 
     #[test]
     fn param_display() {
-        let p = Param { name: "W".into(), value: Expr::Num(10e-6) };
+        let p = Param {
+            name: "W".into(),
+            value: Expr::Num(10e-6),
+        };
         assert_eq!(p.to_string(), "W=10u");
     }
 
     #[test]
     fn ac_spec_display() {
-        let a = AcSpec { mag: Expr::Num(1.0), phase: None };
+        let a = AcSpec {
+            mag: Expr::Num(1.0),
+            phase: None,
+        };
         assert_eq!(a.to_string(), "AC 1");
 
-        let a2 = AcSpec { mag: Expr::Num(1.0), phase: Some(Expr::Num(90.0)) };
+        let a2 = AcSpec {
+            mag: Expr::Num(1.0),
+            phase: Some(Expr::Num(90.0)),
+        };
         assert_eq!(a2.to_string(), "AC 1 90");
     }
 
@@ -845,8 +1053,14 @@ mod tests {
     #[test]
     fn waveform_display_pwl() {
         let w = Waveform::Pwl(vec![
-            PwlPoint { time: Expr::Num(0.0), value: Expr::Num(0.0) },
-            PwlPoint { time: Expr::Num(1e-9), value: Expr::Num(5.0) },
+            PwlPoint {
+                time: Expr::Num(0.0),
+                value: Expr::Num(0.0),
+            },
+            PwlPoint {
+                time: Expr::Num(1e-9),
+                value: Expr::Num(5.0),
+            },
         ]);
         assert_eq!(w.to_string(), "PWL(0 0 1n 5)");
     }
@@ -872,7 +1086,10 @@ mod tests {
             kind: ElementKind::SubcktCall {
                 ports: vec!["in".into(), "out".into(), "gnd".into()],
                 subckt: "OPAMP".into(),
-                params: vec![Param { name: "gain".into(), value: Expr::Num(100.0) }],
+                params: vec![Param {
+                    name: "gain".into(),
+                    value: Expr::Num(100.0),
+                }],
             },
         };
         assert_eq!(e.to_string(), "X1 in out gnd OPAMP gain=100");
@@ -888,7 +1105,10 @@ mod tests {
                     kind: ElementKind::VoltageSource {
                         pos: "vcc".into(),
                         neg: "0".into(),
-                        source: Source { dc: Some(Expr::Num(5.0)), ..Default::default() },
+                        source: Source {
+                            dc: Some(Expr::Num(5.0)),
+                            ..Default::default()
+                        },
                     },
                 }),
                 Item::Analysis(Analysis::Op),
@@ -904,11 +1124,11 @@ mod tests {
     #[test]
     fn parse_spice_number_basic() {
         use crate::parse::parse_spice_number;
-        assert_abs_diff_eq!(parse_spice_number("1k").unwrap(),   1e3,  epsilon = 1e-9);
-        assert_abs_diff_eq!(parse_spice_number("1Meg").unwrap(), 1e6,  epsilon = 1e-9);
-        assert_abs_diff_eq!(parse_spice_number("1m").unwrap(),   1e-3, epsilon = 1e-12);
+        assert_abs_diff_eq!(parse_spice_number("1k").unwrap(), 1e3, epsilon = 1e-9);
+        assert_abs_diff_eq!(parse_spice_number("1Meg").unwrap(), 1e6, epsilon = 1e-9);
+        assert_abs_diff_eq!(parse_spice_number("1m").unwrap(), 1e-3, epsilon = 1e-12);
         assert_abs_diff_eq!(parse_spice_number("2.5n").unwrap(), 2.5e-9, epsilon = 1e-18);
-        assert_abs_diff_eq!(parse_spice_number("1e3").unwrap(),  1e3,  epsilon = 1e-9);
+        assert_abs_diff_eq!(parse_spice_number("1e3").unwrap(), 1e3, epsilon = 1e-9);
         assert_abs_diff_eq!(parse_spice_number("100p").unwrap(), 1e-10, epsilon = 1e-20);
     }
 }

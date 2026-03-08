@@ -39,7 +39,10 @@ pub enum ParseError {
 }
 
 fn syntax(line: usize, msg: impl Into<String>) -> ParseError {
-    ParseError::Syntax { line, msg: msg.into() }
+    ParseError::Syntax {
+        line,
+        msg: msg.into(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -72,11 +75,11 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
         if line.is_empty() {
             continue;
         }
-        if line.starts_with('+') {
+        if let Some(stripped) = line.strip_prefix('+') {
             // Continuation: append to the previous logical line.
             if let Some(prev) = out.last_mut() {
                 prev.1.push(' ');
-                prev.1.push_str(line[1..].trim());
+                prev.1.push_str(stripped.trim());
             }
             // If there's no previous line (continuation before anything),
             // silently drop it — malformed but recoverable.
@@ -238,7 +241,10 @@ fn parse_expr(tok: &str) -> Expr {
 /// Split a `"key=value"` token into a [`Param`].
 fn parse_kv(tok: &str) -> Option<Param> {
     let (k, v) = tok.split_once('=')?;
-    Some(Param { name: k.trim().to_string(), value: parse_expr(v.trim()) })
+    Some(Param {
+        name: k.trim().to_string(),
+        value: parse_expr(v.trim()),
+    })
 }
 
 /// Collect parameters from tokens: any token containing `=` (or following a
@@ -270,7 +276,10 @@ fn collect_params(tokens: &[String]) -> Vec<Param> {
                 i += 1;
                 &tokens[i][1..]
             };
-            params.push(Param { name: key, value: parse_expr(val_tok) });
+            params.push(Param {
+                name: key,
+                value: parse_expr(val_tok),
+            });
         }
         i += 1;
     }
@@ -331,13 +340,19 @@ fn parse_waveform(tok: &str) -> Option<Waveform> {
         })
     } else if let Some(inner) = find_inner("PWL(") {
         let nums: Vec<Expr> = inner.split_whitespace().map(parse_expr).collect();
-        let points = nums.chunks(2).filter_map(|c| {
-            if c.len() == 2 {
-                Some(PwlPoint { time: c[0].clone(), value: c[1].clone() })
-            } else {
-                None
-            }
-        }).collect();
+        let points = nums
+            .chunks(2)
+            .filter_map(|c| {
+                if c.len() == 2 {
+                    Some(PwlPoint {
+                        time: c[0].clone(),
+                        value: c[1].clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
         Some(Waveform::Pwl(points))
     } else if let Some(args) = args_of("SFFM(") {
         let g = |i| args.get(i).cloned();
@@ -386,7 +401,8 @@ fn parse_source(tokens: &[String]) -> Source {
                 } else {
                     Expr::Num(1.0)
                 };
-                let phase = if i + 1 < tokens.len() && parse_spice_number(&tokens[i + 1]).is_some() {
+                let phase = if i + 1 < tokens.len() && parse_spice_number(&tokens[i + 1]).is_some()
+                {
                     i += 1;
                     Some(parse_expr(&tokens[i]))
                 } else {
@@ -446,21 +462,36 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 .filter_map(|t| parse_kv(t))
                 .collect();
             match letter {
-                'R' => ElementKind::Resistor { pos, neg, value, params },
-                'C' => ElementKind::Capacitor { pos, neg, value, params },
-                _   => ElementKind::Inductor { pos, neg, value, params },
+                'R' => ElementKind::Resistor {
+                    pos,
+                    neg,
+                    value,
+                    params,
+                },
+                'C' => ElementKind::Capacitor {
+                    pos,
+                    neg,
+                    value,
+                    params,
+                },
+                _ => ElementKind::Inductor {
+                    pos,
+                    neg,
+                    value,
+                    params,
+                },
             }
         }
         'V' => {
             let pos = need!(0, "n+").to_string();
             let neg = need!(1, "n-").to_string();
-            let source = parse_source(&rest[2..].to_vec());
+            let source = parse_source(&rest[2..]);
             ElementKind::VoltageSource { pos, neg, source }
         }
         'I' => {
             let pos = need!(0, "n+").to_string();
             let neg = need!(1, "n-").to_string();
-            let source = parse_source(&rest[2..].to_vec());
+            let source = parse_source(&rest[2..]);
             ElementKind::CurrentSource { pos, neg, source }
         }
         'D' => {
@@ -468,7 +499,12 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let cathode = need!(1, "cathode").to_string();
             let model = need!(2, "model").to_string();
             let params: Vec<_> = rest[3..].iter().filter_map(|t| parse_kv(t)).collect();
-            ElementKind::Diode { anode, cathode, model, params }
+            ElementKind::Diode {
+                anode,
+                cathode,
+                model,
+                params,
+            }
         }
         'Q' => {
             // Q c b e [substrate] model [params]
@@ -487,10 +523,22 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let (substrate, model) = if positional.len() >= 2 {
                 (Some(positional[0].to_string()), positional[1].to_string())
             } else {
-                (None, positional.first().map(|s| s.to_string())
-                    .ok_or_else(|| syntax(lineno, "Q: missing model"))?)
+                (
+                    None,
+                    positional
+                        .first()
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| syntax(lineno, "Q: missing model"))?,
+                )
             };
-            ElementKind::Bjt { c, b: b_node, e, substrate, model, params }
+            ElementKind::Bjt {
+                c,
+                b: b_node,
+                e,
+                substrate,
+                model,
+                params,
+            }
         }
         'M' => {
             let d = need!(0, "drain").to_string();
@@ -499,7 +547,14 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let bulk = need!(3, "bulk").to_string();
             let model = need!(4, "model").to_string();
             let params: Vec<_> = rest[5..].iter().filter_map(|t| parse_kv(t)).collect();
-            ElementKind::Mosfet { d, g, s, bulk, model, params }
+            ElementKind::Mosfet {
+                d,
+                g,
+                s,
+                bulk,
+                model,
+                params,
+            }
         }
         'J' => {
             let d = need!(0, "drain").to_string();
@@ -507,7 +562,13 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let s = need!(2, "source").to_string();
             let model = need!(3, "model").to_string();
             let params: Vec<_> = rest[4..].iter().filter_map(|t| parse_kv(t)).collect();
-            ElementKind::Jfet { d, g, s, model, params }
+            ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params,
+            }
         }
         'K' => {
             let l1 = need!(0, "L1").to_string();
@@ -518,32 +579,54 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
         'E' => {
             let out_pos = need!(0, "out+").to_string();
             let out_neg = need!(1, "out-").to_string();
-            let in_pos  = need!(2, "in+").to_string();
-            let in_neg  = need!(3, "in-").to_string();
-            let gain    = parse_expr(need!(4, "gain"));
-            ElementKind::Vcvs { out_pos, out_neg, in_pos, in_neg, gain }
+            let in_pos = need!(2, "in+").to_string();
+            let in_neg = need!(3, "in-").to_string();
+            let gain = parse_expr(need!(4, "gain"));
+            ElementKind::Vcvs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                gain,
+            }
         }
         'F' => {
             let out_pos = need!(0, "out+").to_string();
             let out_neg = need!(1, "out-").to_string();
-            let vsrc    = need!(2, "vsrc").to_string();
-            let gain    = parse_expr(need!(3, "gain"));
-            ElementKind::Cccs { out_pos, out_neg, vsrc, gain }
+            let vsrc = need!(2, "vsrc").to_string();
+            let gain = parse_expr(need!(3, "gain"));
+            ElementKind::Cccs {
+                out_pos,
+                out_neg,
+                vsrc,
+                gain,
+            }
         }
         'G' => {
             let out_pos = need!(0, "out+").to_string();
             let out_neg = need!(1, "out-").to_string();
-            let in_pos  = need!(2, "in+").to_string();
-            let in_neg  = need!(3, "in-").to_string();
-            let gm      = parse_expr(need!(4, "gm"));
-            ElementKind::Vccs { out_pos, out_neg, in_pos, in_neg, gm }
+            let in_pos = need!(2, "in+").to_string();
+            let in_neg = need!(3, "in-").to_string();
+            let gm = parse_expr(need!(4, "gm"));
+            ElementKind::Vccs {
+                out_pos,
+                out_neg,
+                in_pos,
+                in_neg,
+                gm,
+            }
         }
         'H' => {
             let out_pos = need!(0, "out+").to_string();
             let out_neg = need!(1, "out-").to_string();
-            let vsrc    = need!(2, "vsrc").to_string();
-            let rm      = parse_expr(need!(3, "transresistance"));
-            ElementKind::Ccvs { out_pos, out_neg, vsrc, rm }
+            let vsrc = need!(2, "vsrc").to_string();
+            let rm = parse_expr(need!(3, "transresistance"));
+            ElementKind::Ccvs {
+                out_pos,
+                out_neg,
+                vsrc,
+                rm,
+            }
         }
         'B' => {
             let pos = need!(0, "n+").to_string();
@@ -569,7 +652,11 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let subckt = positional.last().unwrap().clone();
             let ports = positional[..positional.len() - 1].to_vec();
             let params = collect_params(rest);
-            ElementKind::SubcktCall { ports, subckt, params }
+            ElementKind::SubcktCall {
+                ports,
+                subckt,
+                params,
+            }
         }
         _ => {
             // Unknown element — store everything after the name verbatim
@@ -598,10 +685,13 @@ fn parse_dot(
 
         ".DC" => {
             // .dc src start stop step [src2 start2 stop2 step2]
-            let src = tokens.get(1).ok_or_else(|| syntax(lineno, ".dc: missing source"))?.clone();
+            let src = tokens
+                .get(1)
+                .ok_or_else(|| syntax(lineno, ".dc: missing source"))?
+                .clone();
             let start = parse_expr(tokens.get(2).map(|s| s.as_str()).unwrap_or("0"));
-            let stop  = parse_expr(tokens.get(3).map(|s| s.as_str()).unwrap_or("0"));
-            let step  = parse_expr(tokens.get(4).map(|s| s.as_str()).unwrap_or("0"));
+            let stop = parse_expr(tokens.get(3).map(|s| s.as_str()).unwrap_or("0"));
+            let step = parse_expr(tokens.get(4).map(|s| s.as_str()).unwrap_or("0"));
             let src2 = if tokens.len() > 8 {
                 Some(DcSweep {
                     src: tokens[5].clone(),
@@ -612,15 +702,26 @@ fn parse_dot(
             } else {
                 None
             };
-            Ok(Item::Analysis(Analysis::Dc { src, start, stop, step, src2 }))
+            Ok(Item::Analysis(Analysis::Dc {
+                src,
+                start,
+                stop,
+                step,
+                src2,
+            }))
         }
 
         ".TRAN" => {
-            let tstep  = parse_expr(tokens.get(1).map(|s| s.as_str()).unwrap_or("0"));
-            let tstop  = parse_expr(tokens.get(2).map(|s| s.as_str()).unwrap_or("0"));
+            let tstep = parse_expr(tokens.get(1).map(|s| s.as_str()).unwrap_or("0"));
+            let tstop = parse_expr(tokens.get(2).map(|s| s.as_str()).unwrap_or("0"));
             let tstart = tokens.get(3).map(|s| parse_expr(s));
-            let tmax   = tokens.get(4).map(|s| parse_expr(s));
-            Ok(Item::Analysis(Analysis::Tran { tstep, tstop, tstart, tmax }))
+            let tmax = tokens.get(4).map(|s| parse_expr(s));
+            Ok(Item::Analysis(Analysis::Tran {
+                tstep,
+                tstop,
+                tstart,
+                tmax,
+            }))
         }
 
         ".AC" => {
@@ -630,41 +731,66 @@ fn parse_dot(
                 Some("LIN") => AcVariation::Lin,
                 other => return Err(syntax(lineno, format!(".ac: unknown variation {other:?}"))),
             };
-            let n: u32 = tokens.get(2)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1);
+            let n: u32 = tokens.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
             let fstart = parse_expr(tokens.get(3).map(|s| s.as_str()).unwrap_or("0"));
-            let fstop  = parse_expr(tokens.get(4).map(|s| s.as_str()).unwrap_or("0"));
-            Ok(Item::Analysis(Analysis::Ac { variation, n, fstart, fstop }))
+            let fstop = parse_expr(tokens.get(4).map(|s| s.as_str()).unwrap_or("0"));
+            Ok(Item::Analysis(Analysis::Ac {
+                variation,
+                n,
+                fstart,
+                fstop,
+            }))
         }
 
         ".NOISE" => {
             // .noise output [ref] src DEC|OCT|LIN n fstart fstop
             // Detect variation keyword to split output/ref from src
-            let var_idx = tokens[1..].iter().position(|t| {
-                matches!(t.to_uppercase().as_str(), "DEC" | "OCT" | "LIN")
-            }).map(|i| i + 1); // adjust for slice offset
+            let var_idx = tokens[1..]
+                .iter()
+                .position(|t| matches!(t.to_uppercase().as_str(), "DEC" | "OCT" | "LIN"))
+                .map(|i| i + 1); // adjust for slice offset
             let var_idx = var_idx.ok_or_else(|| syntax(lineno, ".noise: missing variation"))?;
             let before_var = &tokens[1..var_idx]; // [output, maybe ref, src]
             let (output, ref_node, src) = match before_var.len() {
                 2 => (before_var[0].clone(), None, before_var[1].clone()),
-                3 => (before_var[0].clone(), Some(before_var[1].clone()), before_var[2].clone()),
+                3 => (
+                    before_var[0].clone(),
+                    Some(before_var[1].clone()),
+                    before_var[2].clone(),
+                ),
                 _ => return Err(syntax(lineno, ".noise: unexpected argument count")),
             };
             let variation = match tokens[var_idx].to_uppercase().as_str() {
                 "DEC" => AcVariation::Dec,
                 "OCT" => AcVariation::Oct,
-                _     => AcVariation::Lin,
+                _ => AcVariation::Lin,
             };
-            let n: u32 = tokens.get(var_idx + 1).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let n: u32 = tokens
+                .get(var_idx + 1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1);
             let fstart = parse_expr(tokens.get(var_idx + 2).map(|s| s.as_str()).unwrap_or("0"));
-            let fstop  = parse_expr(tokens.get(var_idx + 3).map(|s| s.as_str()).unwrap_or("0"));
-            Ok(Item::Analysis(Analysis::Noise { output, ref_node, src, variation, n, fstart, fstop }))
+            let fstop = parse_expr(tokens.get(var_idx + 3).map(|s| s.as_str()).unwrap_or("0"));
+            Ok(Item::Analysis(Analysis::Noise {
+                output,
+                ref_node,
+                src,
+                variation,
+                n,
+                fstart,
+                fstop,
+            }))
         }
 
         ".TF" => {
-            let output = tokens.get(1).ok_or_else(|| syntax(lineno, ".tf: missing output"))?.clone();
-            let input  = tokens.get(2).ok_or_else(|| syntax(lineno, ".tf: missing input"))?.clone();
+            let output = tokens
+                .get(1)
+                .ok_or_else(|| syntax(lineno, ".tf: missing output"))?
+                .clone();
+            let input = tokens
+                .get(2)
+                .ok_or_else(|| syntax(lineno, ".tf: missing input"))?
+                .clone();
             Ok(Item::Analysis(Analysis::Tf { output, input }))
         }
 
@@ -674,15 +800,23 @@ fn parse_dot(
         }
 
         ".MODEL" => {
-            let name = tokens.get(1).ok_or_else(|| syntax(lineno, ".model: missing name"))?.clone();
-            let kind = tokens.get(2).ok_or_else(|| syntax(lineno, ".model: missing type"))?.to_uppercase();
+            let name = tokens
+                .get(1)
+                .ok_or_else(|| syntax(lineno, ".model: missing name"))?
+                .clone();
+            let kind = tokens
+                .get(2)
+                .ok_or_else(|| syntax(lineno, ".model: missing type"))?
+                .to_uppercase();
             let params = collect_params(&tokens[3..]);
             Ok(Item::Model(ModelDef { name, kind, params }))
         }
 
         ".SUBCKT" => {
-            let name = tokens.get(1)
-                .ok_or_else(|| syntax(lineno, ".subckt: missing name"))?.clone();
+            let name = tokens
+                .get(1)
+                .ok_or_else(|| syntax(lineno, ".subckt: missing name"))?
+                .clone();
             // Ports are positional tokens before the first key=val or PARAMS:
             let mut ports = Vec::new();
             let mut params_start = tokens.len();
@@ -696,7 +830,12 @@ fn parse_dot(
             }
             let params = collect_params(&tokens[params_start..]);
             let items = parse_subckt_body(rest_lines)?;
-            Ok(Item::Subckt(SubcktDef { name, ports, params, items }))
+            Ok(Item::Subckt(SubcktDef {
+                name,
+                ports,
+                params,
+                items,
+            }))
         }
 
         ".ENDS" => {
@@ -711,14 +850,16 @@ fn parse_dot(
         }
 
         ".INCLUDE" => {
-            let file = tokens.get(1)
+            let file = tokens
+                .get(1)
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
             Ok(Item::Include(file))
         }
 
         ".LIB" => {
-            let file = tokens.get(1)
+            let file = tokens
+                .get(1)
                 .map(|s| s.trim_matches('"').to_string())
                 .unwrap_or_default();
             let entry = tokens.get(2).cloned();
@@ -855,7 +996,13 @@ mod tests {
         let n = parse_ok("Title\nR1 a b 1k $ this is a comment\n.end");
         let e = n.elements().next().unwrap();
         if let ElementKind::Resistor { value, .. } = &e.kind {
-            assert_abs_diff_eq!(match value { crate::Expr::Num(v) => *v, _ => panic!() }, 1e3);
+            assert_abs_diff_eq!(
+                match value {
+                    crate::Expr::Num(v) => *v,
+                    _ => panic!(),
+                },
+                1e3
+            );
         }
     }
 
@@ -864,7 +1011,16 @@ mod tests {
         // The $ inside PULSE(...) must NOT be treated as a comment delimiter
         let n = parse_ok("Title\nV1 a 0 PULSE(0 1 1n 1n 1n 5n 10n)\n.end");
         let e = n.elements().next().unwrap();
-        assert!(matches!(&e.kind, ElementKind::VoltageSource { source: crate::Source { waveform: Some(_), .. }, .. }));
+        assert!(matches!(
+            &e.kind,
+            ElementKind::VoltageSource {
+                source: crate::Source {
+                    waveform: Some(_),
+                    ..
+                },
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -886,12 +1042,20 @@ mod tests {
 
     #[test]
     fn mil_suffix() {
-        assert_abs_diff_eq!(parse_spice_number("1mil").unwrap(), 25.4e-6, epsilon = 1e-15);
+        assert_abs_diff_eq!(
+            parse_spice_number("1mil").unwrap(),
+            25.4e-6,
+            epsilon = 1e-15
+        );
     }
 
     #[test]
     fn scientific_notation_no_suffix() {
-        assert_abs_diff_eq!(parse_spice_number("1.5e-9").unwrap(), 1.5e-9, epsilon = 1e-18);
+        assert_abs_diff_eq!(
+            parse_spice_number("1.5e-9").unwrap(),
+            1.5e-9,
+            epsilon = 1e-18
+        );
         assert_abs_diff_eq!(parse_spice_number("2E3").unwrap(), 2000.0, epsilon = 1e-9);
     }
 
@@ -954,7 +1118,12 @@ mod tests {
     #[test]
     fn subcircuit_call_x() {
         let n = parse_ok("T\nX1 in out gnd OPAMP gain=100\n.end");
-        if let ElementKind::SubcktCall { ports, subckt, params } = &n.elements().next().unwrap().kind {
+        if let ElementKind::SubcktCall {
+            ports,
+            subckt,
+            params,
+        } = &n.elements().next().unwrap().kind
+        {
             assert_eq!(subckt, "OPAMP");
             assert_eq!(ports, &["in", "out", "gnd"]);
             assert_eq!(params.len(), 1);
@@ -967,7 +1136,10 @@ mod tests {
     #[test]
     fn bjt_with_substrate() {
         let n = parse_ok("T\nQ1 c b e sub BC547\n.end");
-        if let ElementKind::Bjt { substrate, model, .. } = &n.elements().next().unwrap().kind {
+        if let ElementKind::Bjt {
+            substrate, model, ..
+        } = &n.elements().next().unwrap().kind
+        {
             assert_eq!(substrate.as_deref(), Some("sub"));
             assert_eq!(model, "BC547");
         } else {
@@ -986,9 +1158,27 @@ mod tests {
     #[test]
     fn dot_tran() {
         let n = parse_ok("T\n.tran 0.1m 10m\n.end");
-        if let Item::Analysis(Analysis::Tran { tstep, tstop, tstart, tmax }) = &n.items[0] {
-            assert_abs_diff_eq!(match tstep { Expr::Num(v) => *v, _ => panic!() }, 1e-4);
-            assert_abs_diff_eq!(match tstop { Expr::Num(v) => *v, _ => panic!() }, 1e-2);
+        if let Item::Analysis(Analysis::Tran {
+            tstep,
+            tstop,
+            tstart,
+            tmax,
+        }) = &n.items[0]
+        {
+            assert_abs_diff_eq!(
+                match tstep {
+                    Expr::Num(v) => *v,
+                    _ => panic!(),
+                },
+                1e-4
+            );
+            assert_abs_diff_eq!(
+                match tstop {
+                    Expr::Num(v) => *v,
+                    _ => panic!(),
+                },
+                1e-2
+            );
             assert!(tstart.is_none());
             assert!(tmax.is_none());
         } else {
@@ -999,9 +1189,22 @@ mod tests {
     #[test]
     fn dot_dc() {
         let n = parse_ok("T\n.dc V1 0 5 1\n.end");
-        if let Item::Analysis(Analysis::Dc { src, start: _, stop, step: _, src2 }) = &n.items[0] {
+        if let Item::Analysis(Analysis::Dc {
+            src,
+            start: _,
+            stop,
+            step: _,
+            src2,
+        }) = &n.items[0]
+        {
             assert_eq!(src, "V1");
-            assert_abs_diff_eq!(match stop { Expr::Num(v) => *v, _ => panic!() }, 5.0);
+            assert_abs_diff_eq!(
+                match stop {
+                    Expr::Num(v) => *v,
+                    _ => panic!(),
+                },
+                5.0
+            );
             assert!(src2.is_none());
         } else {
             panic!();
@@ -1011,10 +1214,22 @@ mod tests {
     #[test]
     fn dot_ac() {
         let n = parse_ok("T\n.ac DEC 10 1 1Meg\n.end");
-        if let Item::Analysis(Analysis::Ac { variation, n: pts, fstart: _, fstop }) = &n.items[0] {
+        if let Item::Analysis(Analysis::Ac {
+            variation,
+            n: pts,
+            fstart: _,
+            fstop,
+        }) = &n.items[0]
+        {
             assert_eq!(*variation, AcVariation::Dec);
             assert_eq!(*pts, 10);
-            assert_abs_diff_eq!(match fstop { Expr::Num(v) => *v, _ => panic!() }, 1e6);
+            assert_abs_diff_eq!(
+                match fstop {
+                    Expr::Num(v) => *v,
+                    _ => panic!(),
+                },
+                1e6
+            );
         } else {
             panic!();
         }
