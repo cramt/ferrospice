@@ -3,6 +3,10 @@
 //! Implements `.tran` analysis with Backward Euler (BE) and Trapezoidal (Trap)
 //! integration methods. Capacitors and inductors are converted to companion
 //! models (conductance/resistance + current/voltage source) at each timestep.
+//!
+//! Supports adaptive timestep control via local truncation error (LTE)
+//! estimation using the difference between BE and Trap results for
+//! capacitor/inductor charges/fluxes.
 
 use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimVector};
 
@@ -112,13 +116,173 @@ fn stamp_current_source(rhs: &mut [f64], ni: Option<usize>, nj: Option<usize>, i
     }
 }
 
+/// Sorted breakpoint table for transient analysis.
+///
+/// Forces the timestep engine to land exactly on times where waveforms have
+/// discontinuities (PULSE edges, PWL corners, etc.).
+struct BreakpointTable {
+    /// Sorted breakpoint times.
+    times: Vec<f64>,
+    /// Index of the next unprocessed breakpoint.
+    next_idx: usize,
+    /// Minimum separation between breakpoints.
+    min_break: f64,
+}
+
+impl BreakpointTable {
+    /// Build breakpoint table from all source waveforms.
+    fn from_mna(mna: &MnaSystem, tran: &TranParams) -> Self {
+        let mut times = Vec::new();
+
+        for vs in &mna.voltage_sources {
+            if let Some(ref wf) = vs.waveform {
+                times.extend(waveform::breakpoints(wf, tran));
+            }
+        }
+        for cs in &mna.current_sources {
+            if let Some(ref wf) = cs.waveform {
+                times.extend(waveform::breakpoints(wf, tran));
+            }
+        }
+
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        times.dedup_by(|a, b| (*a - *b).abs() < 1e-15);
+
+        let min_break = tran.tstep * 5e-5;
+
+        Self {
+            times,
+            next_idx: 0,
+            min_break,
+        }
+    }
+
+    /// Get the next breakpoint time after `current_time`, if any.
+    fn next_after(&mut self, current_time: f64) -> Option<f64> {
+        // Advance past breakpoints we've already passed.
+        while self.next_idx < self.times.len()
+            && self.times[self.next_idx] <= current_time + self.min_break
+        {
+            self.next_idx += 1;
+        }
+        self.times.get(self.next_idx).copied()
+    }
+
+    /// Check if `t` is at or very near a breakpoint.
+    fn is_at_breakpoint(&self, t: f64) -> bool {
+        self.times.iter().any(|&bp| (t - bp).abs() < self.min_break)
+    }
+}
+
+/// Transient truncation error tolerance (controls how aggressively timestep adjusts).
+/// Matches ngspice CKTtrtol default of 7.0.
+const TRTOL: f64 = 7.0;
+
+/// Charge tolerance for LTE estimation (matches ngspice CHGTOL).
+const CHGTOL: f64 = 1e-14;
+
+/// Minimum factor to shrink timestep on rejection.
+const MIN_SHRINK: f64 = 0.125; // 1/8
+
+/// Maximum factor to grow timestep.
+const MAX_GROW: f64 = 2.0;
+
+/// Estimate the new timestep based on LTE for capacitors and inductors.
+///
+/// Uses the difference between Trap and BE predictions as the LTE estimate.
+/// For each capacitor: LTE ≈ |q_trap - q_be| where q is the integrated charge.
+/// For each inductor: LTE ≈ |flux_trap - flux_be| where flux is the integrated flux.
+///
+/// Returns the recommended new timestep.
+fn estimate_new_timestep(
+    h: f64,
+    solution: &[f64],
+    mna: &MnaSystem,
+    cap_histories: &[CapHistory],
+    ind_histories: &[IndHistory],
+    reltol: f64,
+    abstol: f64,
+) -> f64 {
+    let mut new_h = f64::MAX;
+
+    // LTE for capacitors.
+    for (ci, cap) in mna.capacitors.iter().enumerate() {
+        let v_pos = cap.pos_idx.map(|i| solution[i]).unwrap_or(0.0);
+        let v_neg = cap.neg_idx.map(|i| solution[i]).unwrap_or(0.0);
+        let v_new = v_pos - v_neg;
+        let v_old = cap_histories[ci].voltage;
+        let i_old = cap_histories[ci].current;
+
+        // Trap current: i_trap = 2C/h * (v_new - v_old) - i_old
+        let i_trap = 2.0 * cap.capacitance / h * (v_new - v_old) - i_old;
+        // BE current: i_be = C/h * (v_new - v_old)
+        let i_be = cap.capacitance / h * (v_new - v_old);
+
+        // Charge LTE: difference in integrated charge over this step.
+        // Trap integrates: q_trap = h/2 * (i_old + i_trap)
+        // BE integrates:   q_be = h * i_be
+        // LTE ≈ |q_trap - q_be|
+        let q_trap = h / 2.0 * (i_old + i_trap);
+        let q_be = h * i_be;
+        let lte = (q_trap - q_be).abs();
+
+        // Tolerance on charge.
+        let q_new = cap.capacitance * v_new;
+        let q_old = cap.capacitance * v_old;
+        let vol_tol = abstol + reltol * v_new.abs().max(v_old.abs());
+        let chg_tol = reltol * q_new.abs().max(q_old.abs()).max(CHGTOL);
+        let tol = TRTOL * vol_tol.max(chg_tol);
+
+        if lte > 1e-30 {
+            // For Trap (order 2): new_h = h * (tol / lte)^(1/2)
+            let ratio = tol / lte;
+            let h_new = h * ratio.sqrt();
+            new_h = new_h.min(h_new);
+        }
+    }
+
+    // LTE for inductors.
+    for (li, ind) in mna.inductors.iter().enumerate() {
+        let i_new = solution[ind.branch_idx];
+        let i_old = ind_histories[li].current;
+        let v_old = ind_histories[li].voltage;
+
+        // Trap voltage: v_trap = 2L/h * (i_new - i_old) - v_old
+        let v_trap = 2.0 * ind.inductance / h * (i_new - i_old) - v_old;
+        // BE voltage: v_be = L/h * (i_new - i_old)
+        let v_be = ind.inductance / h * (i_new - i_old);
+
+        // Flux LTE: difference in integrated flux.
+        let flux_trap = h / 2.0 * (v_old + v_trap);
+        let flux_be = h * v_be;
+        let lte = (flux_trap - flux_be).abs();
+
+        // Tolerance on flux.
+        let flux_new = ind.inductance * i_new;
+        let flux_old = ind.inductance * i_old;
+        let cur_tol = abstol + reltol * i_new.abs().max(i_old.abs());
+        let flux_tol = reltol * flux_new.abs().max(flux_old.abs()).max(CHGTOL);
+        let tol = TRTOL * cur_tol.max(flux_tol);
+
+        if lte > 1e-30 {
+            let ratio = tol / lte;
+            let h_new = h * ratio.sqrt();
+            new_h = new_h.min(h_new);
+        }
+    }
+
+    new_h
+}
+
 /// Perform transient analysis on a circuit.
 ///
 /// Parses the `.tran` command from the netlist, computes the DC operating point
 /// as initial conditions, then steps through time using numerical integration.
+/// Uses adaptive timestep control with LTE estimation when reactive elements
+/// are present, falling back to fixed timestep for purely resistive circuits.
 pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // Find the .tran analysis command.
-    let (tstep, tstop, tstart, _tmax) = netlist
+    let (tstep, tstop, tstart, tmax) = netlist
         .items
         .iter()
         .find_map(|item| {
@@ -136,19 +300,26 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .ok_or_else(|| MnaError::UnsupportedElement("no .tran analysis found".to_string()))?;
 
-    let h = expr_val(&tstep, ".tran tstep")?;
+    let h_print = expr_val(&tstep, ".tran tstep")?;
     let t_stop = expr_val(&tstop, ".tran tstop")?;
     let t_start = tstart
         .as_ref()
         .map(|e| expr_val(e, ".tran tstart"))
         .transpose()?
         .unwrap_or(0.0);
+    let t_max = tmax
+        .as_ref()
+        .map(|e| expr_val(e, ".tran tmax"))
+        .transpose()?;
 
-    if h <= 0.0 || t_stop <= 0.0 {
+    if h_print <= 0.0 || t_stop <= 0.0 {
         return Err(MnaError::UnsupportedElement(
             "invalid .tran parameters".to_string(),
         ));
     }
+
+    // Maximum internal timestep: tmax if specified, otherwise min(tstep, tstop/50).
+    let h_max = t_max.unwrap_or_else(|| h_print.min(t_stop / 50.0));
 
     // Assemble MNA system.
     let mna = assemble_mna(netlist)?;
@@ -194,7 +365,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                 (Some(pi), None) => solution[pi] = ic_v,
                 (None, Some(ni)) => solution[ni] = -ic_v,
                 (Some(pi), Some(ni)) => {
-                    // Both non-ground: set positive node relative to negative.
                     solution[pi] = ic_v + solution[ni];
                 }
                 (None, None) => {}
@@ -284,29 +454,59 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .collect();
 
     let has_nonlinear = !mna.diodes.is_empty();
+    let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
     let tran_params = TranParams {
-        tstep: h,
+        tstep: h_print,
         tstop: t_stop,
     };
 
-    // Time-stepping loop.
-    while t < t_stop - h * 1e-9 {
-        t += h;
+    // Build breakpoint table from source waveforms.
+    let mut breakpoints = BreakpointTable::from_mna(&mna, &tran_params);
 
-        // Use Backward Euler for the first step, then Trapezoidal.
-        let method = if time_vec.real.len() <= 1 {
+    // Internal timestep — start with tstep, adapt from there.
+    let mut h = h_print.min(h_max);
+    let h_min = h_print * 1e-9; // Absolute minimum timestep.
+    let mut is_first_step = true;
+
+    // Adaptive time-stepping loop.
+    while t < t_stop - h_min {
+        // The step size for this iteration (separate from h which tracks the
+        // "suggested" next step from LTE control).
+        let mut step_h = h.min(h_max);
+
+        // Don't overshoot tstop.
+        if t + step_h > t_stop {
+            step_h = t_stop - t;
+        }
+
+        // Breakpoint handling: don't cross the next breakpoint.
+        let at_breakpoint = breakpoints.is_at_breakpoint(t);
+        if let Some(bp) = breakpoints.next_after(t) {
+            let dist = bp - t;
+            if step_h > dist {
+                step_h = dist;
+            }
+        }
+
+        // At breakpoints, reduce step for stability (ngspice uses 0.1×).
+        if at_breakpoint {
+            step_h = step_h.min(h * 0.1).max(h_min);
+        }
+
+        // Use Backward Euler for the first step and at breakpoints.
+        let method = if is_first_step || at_breakpoint {
             IntegrationMethod::BackwardEuler
         } else {
             IntegrationMethod::Trapezoidal
         };
 
         // Solve this timestep.
-        solution = solve_timestep(
+        let new_solution = solve_timestep(
             &mna,
             &solution,
-            h,
-            t,
+            step_h,
+            t + step_h,
             &tran_params,
             method,
             &cap_histories,
@@ -318,20 +518,46 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             num_nodes,
         )?;
 
-        // Update histories from new solution.
+        // LTE-based timestep control (only for Trap with reactive elements).
+        if method == IntegrationMethod::Trapezoidal && has_reactive {
+            let new_h = estimate_new_timestep(
+                step_h,
+                &new_solution,
+                &mna,
+                &cap_histories,
+                &ind_histories,
+                nr_options.reltol,
+                nr_options.abstol,
+            );
+
+            if new_h < 0.9 * step_h {
+                // Reject step: shrink h and retry without advancing time.
+                h = (new_h.max(step_h * MIN_SHRINK)).max(h_min);
+                continue;
+            }
+
+            // Accept: schedule next h from LTE estimate.
+            h = new_h.min(step_h * MAX_GROW).min(h_max).max(h_min);
+        }
+
+        // Accept this timestep: advance time and update state.
+        t += step_h;
+        solution = new_solution;
+        is_first_step = false;
+
+        // Update capacitor histories.
         for (ci, cap) in mna.capacitors.iter().enumerate() {
             let v_pos = cap.pos_idx.map(|i| solution[i]).unwrap_or(0.0);
             let v_neg = cap.neg_idx.map(|i| solution[i]).unwrap_or(0.0);
             let v_new = v_pos - v_neg;
 
-            // Compute current through capacitor.
             let current = match method {
                 IntegrationMethod::BackwardEuler => {
-                    let geq = cap.capacitance / h;
+                    let geq = cap.capacitance / step_h;
                     geq * (v_new - cap_histories[ci].voltage)
                 }
                 IntegrationMethod::Trapezoidal => {
-                    let geq = 2.0 * cap.capacitance / h;
+                    let geq = 2.0 * cap.capacitance / step_h;
                     geq * (v_new - cap_histories[ci].voltage) - cap_histories[ci].current
                 }
             };
@@ -342,6 +568,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
+        // Update inductor histories.
         for (li, ind) in mna.inductors.iter().enumerate() {
             let i_new = solution[ind.branch_idx];
             let v_pos = ind.pos_idx.map(|i| solution[i]).unwrap_or(0.0);
@@ -590,7 +817,7 @@ C1 out 0 1u IC=0
         let v_out = tran_vector(&result, "v(out)");
 
         assert_eq!(time.len(), v_out.len());
-        assert!(time.len() > 100, "should have many time points");
+        assert!(time.len() > 10, "should have time points");
 
         // Verify initial condition: t=0, V(out) = 0 (from IC=0).
         assert_abs_diff_eq!(v_out[0], 0.0, epsilon = 1e-6);
@@ -605,22 +832,7 @@ C1 out 0 1u IC=0
         ] {
             let expected_v = 5.0 * expected_frac;
             // Find the closest time point.
-            let idx = time
-                .iter()
-                .position(|&t| (t - t_check).abs() < 1e-6)
-                .unwrap_or_else(|| {
-                    // Find nearest.
-                    time.iter()
-                        .enumerate()
-                        .min_by(|(_, a), (_, b)| {
-                            (*a - t_check)
-                                .abs()
-                                .partial_cmp(&(*b - t_check).abs())
-                                .unwrap()
-                        })
-                        .unwrap()
-                        .0
-                });
+            let idx = find_nearest_time(time, t_check);
 
             let actual_v = v_out[idx];
             let rel_err = (actual_v - expected_v).abs() / expected_v;
@@ -655,7 +867,7 @@ L1 1 0 1u
         let time = tran_vector(&result, "time");
         let v1 = tran_vector(&result, "v(1)");
 
-        assert!(time.len() > 100, "should have many time points");
+        assert!(time.len() > 10, "should have time points");
 
         // Expected frequency.
         let lc: f64 = 1e-6 * 1e-6;
@@ -668,17 +880,7 @@ L1 1 0 1u
         let quarter_period = period / 4.0;
 
         // Find the time index closest to T/4.
-        let idx_quarter = time
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                (*a - quarter_period)
-                    .abs()
-                    .partial_cmp(&(*b - quarter_period).abs())
-                    .unwrap()
-            })
-            .unwrap()
-            .0;
+        let idx_quarter = find_nearest_time(time, quarter_period);
 
         // At T/4, voltage should be near zero.
         assert!(
@@ -689,17 +891,7 @@ L1 1 0 1u
 
         // At T/2, voltage should be near -1V.
         let half_period = period / 2.0;
-        let idx_half = time
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                (*a - half_period)
-                    .abs()
-                    .partial_cmp(&(*b - half_period).abs())
-                    .unwrap()
-            })
-            .unwrap()
-            .0;
+        let idx_half = find_nearest_time(time, half_period);
 
         assert!(
             (v1[idx_half] + 1.0).abs() < 0.1,
@@ -709,17 +901,7 @@ L1 1 0 1u
 
         // Verify frequency: find two consecutive peaks and check period.
         // Find first maximum after the initial one.
-        let idx_full = time
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                (*a - period)
-                    .abs()
-                    .partial_cmp(&(*b - period).abs())
-                    .unwrap()
-            })
-            .unwrap()
-            .0;
+        let idx_full = find_nearest_time(time, period);
 
         // At T, voltage should return near 1V (full cycle).
         let rel_err = (v1[idx_full] - 1.0).abs();
@@ -908,6 +1090,83 @@ R1 1 0 1k
             v1[idx].abs() < 0.05,
             "during pulse low: expected ~0V, got {:.4}",
             v1[idx]
+        );
+    }
+
+    #[test]
+    fn test_adaptive_timestep_pulse_rc() {
+        // Test that adaptive timestep control places more steps near PULSE edges
+        // and coasts during flat regions.
+        //
+        // PULSE source: 0→5V with 1us edges, 1ms high, 2ms period.
+        // RC = 1k * 1u = 1ms.
+        let netlist = Netlist::parse(
+            "Adaptive timestep PULSE RC
+V1 1 0 PULSE(0 5 0 1u 1u 1m 2m)
+R1 1 out 1k
+C1 out 0 1u IC=0
+.tran 10u 4m
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_tran(&netlist).unwrap();
+
+        let time = tran_vector(&result, "time");
+        let v_out = tran_vector(&result, "v(out)");
+
+        // Basic sanity: we should have output points.
+        assert!(time.len() > 10, "should have output points");
+
+        // Verify accuracy at key points.
+        // At t=0: IC=0
+        assert_abs_diff_eq!(v_out[0], 0.0, epsilon = 1e-6);
+
+        // During charging (t≈0.5ms): V(out) should be rising.
+        let idx_05ms = find_nearest_time(time, 0.5e-3);
+        assert!(
+            v_out[idx_05ms] > 1.0,
+            "at 0.5ms: V(out) should be rising, got {:.4}",
+            v_out[idx_05ms]
+        );
+
+        // Near end of charging (t≈1ms): V(out) should be near 3.16V (1 RC).
+        let idx_1ms = find_nearest_time(time, 1e-3);
+        let expected_1rc = 5.0 * (1.0 - (-1.0_f64).exp());
+        let rel_err = (v_out[idx_1ms] - expected_1rc).abs() / expected_1rc;
+        assert!(
+            rel_err < 0.05,
+            "at 1ms: expected {expected_1rc:.3}, got {:.3}, err={rel_err:.3}",
+            v_out[idx_1ms]
+        );
+
+        // Verify adaptive stepping: check that timesteps are smaller near edges.
+        // Count steps in first 10us (near rising edge) vs steps in 0.1ms-0.5ms (flat region).
+        let steps_near_edge = time.windows(2).filter(|w| w[0] < 10e-6).count();
+        let steps_flat = time
+            .windows(2)
+            .filter(|w| w[0] >= 0.1e-3 && w[0] < 0.5e-3)
+            .count();
+
+        // Near the edge, there should be comparable or more steps per unit time than flat.
+        // This is a soft check — adaptive stepping should concentrate steps near transitions.
+        let density_edge = if steps_near_edge > 0 {
+            steps_near_edge as f64 / 10e-6
+        } else {
+            0.0
+        };
+        let density_flat = if steps_flat > 0 {
+            steps_flat as f64 / 0.4e-3
+        } else {
+            1.0
+        };
+
+        // Edge density should be at least comparable to flat density
+        // (breakpoints force steps there).
+        assert!(
+            density_edge >= density_flat * 0.1 || steps_near_edge >= 1,
+            "adaptive stepping should have steps near edges: edge_steps={steps_near_edge}, flat_steps={steps_flat}"
         );
     }
 

@@ -279,6 +279,98 @@ fn eval_am(va: f64, vo: f64, fc: f64, fs: f64, td: f64, t: f64) -> f64 {
     }
 }
 
+/// Collect breakpoint times from a waveform within [0, tstop].
+///
+/// Breakpoints are times where the waveform has a discontinuity in value or
+/// first derivative (e.g., PULSE edges, PWL corners, EXP transitions).
+/// The transient engine uses these to force timestep boundaries at these points.
+pub fn breakpoints(wf: &Waveform, tran: &TranParams) -> Vec<f64> {
+    let tstop = tran.tstop;
+    let mut bps = Vec::new();
+
+    match wf {
+        Waveform::Pulse {
+            td,
+            tr,
+            tf,
+            pw,
+            per,
+            ..
+        } => {
+            let td_val = opt(td).unwrap_or(0.0);
+            let tr_val = opt(tr).unwrap_or(tran.tstep).max(tran.tstep);
+            let tf_val = opt(tf).unwrap_or(tran.tstep).max(tran.tstep);
+            let pw_val = opt(pw).unwrap_or(0.0).max(0.0);
+            let period = per
+                .as_ref()
+                .map(val)
+                .unwrap_or(tr_val + pw_val + tf_val)
+                .max(tr_val + pw_val + tf_val)
+                .max(tran.tstep);
+
+            // Breakpoints within one period relative to td:
+            // td, td+tr, td+tr+pw, td+tr+pw+tf
+            let edges = [0.0, tr_val, tr_val + pw_val, tr_val + pw_val + tf_val];
+
+            let mut k = 0u64;
+            loop {
+                let base = td_val + k as f64 * period;
+                if base > tstop {
+                    break;
+                }
+                for &edge in &edges {
+                    let t = base + edge;
+                    if t >= 0.0 && t <= tstop {
+                        bps.push(t);
+                    }
+                }
+                k += 1;
+                // Safety limit to avoid infinite loop with tiny periods.
+                if k > 1_000_000 {
+                    break;
+                }
+            }
+        }
+        Waveform::Pwl(points) => {
+            for p in points {
+                let t = val(&p.time);
+                if t >= 0.0 && t <= tstop {
+                    bps.push(t);
+                }
+            }
+        }
+        Waveform::Exp { td1, td2, .. } => {
+            let td1_val = opt(td1).unwrap_or(tran.tstep);
+            let td2_val = opt(td2).unwrap_or(td1_val + tran.tstep);
+            if td1_val >= 0.0 && td1_val <= tstop {
+                bps.push(td1_val);
+            }
+            if td2_val >= 0.0 && td2_val <= tstop {
+                bps.push(td2_val);
+            }
+        }
+        Waveform::Sin { td, .. } => {
+            let td_val = opt(td).unwrap_or(0.0);
+            if td_val > 0.0 && td_val <= tstop {
+                bps.push(td_val);
+            }
+        }
+        Waveform::Am { td, .. } => {
+            let td_val = opt(td).unwrap_or(0.0);
+            if td_val > 0.0 && td_val <= tstop {
+                bps.push(td_val);
+            }
+        }
+        Waveform::Sffm { .. } => {
+            // SFFM is smooth everywhere, no breakpoints.
+        }
+    }
+
+    bps.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    bps.dedup_by(|a, b| (*a - *b).abs() < 1e-18);
+    bps
+}
+
 // ---- Helpers ----
 
 /// Extract a numeric value from an Expr. Panics on non-numeric (param exprs not supported yet).
