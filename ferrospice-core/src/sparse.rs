@@ -220,6 +220,47 @@ impl ComplexLinearSystem {
 
         Ok(result)
     }
+
+    /// Solve the adjoint (transposed) complex system (G + jB)^T x = rhs.
+    /// Returns pairs of (real, imag) for each unknown.
+    pub fn solve_transpose(&self) -> Result<Vec<(f64, f64)>, SparseMatrixError> {
+        use faer::c64;
+
+        if self.dim == 0 {
+            return Ok(vec![]);
+        }
+
+        // Build complex dense matrix from real + j*imag triplets (transposed).
+        let mut mat = Mat::<c64>::zeros(self.dim, self.dim);
+        for t in self.real.triplets() {
+            mat[(t.col, t.row)] += c64::new(t.value, 0.0); // transpose: swap row/col
+        }
+        for t in self.imag.triplets() {
+            mat[(t.col, t.row)] += c64::new(0.0, t.value); // transpose: swap row/col
+        }
+
+        // Build complex RHS vector.
+        let mut b = Mat::<c64>::zeros(self.dim, 1);
+        for i in 0..self.dim {
+            b[(i, 0)] = c64::new(self.rhs_real[i], self.rhs_imag[i]);
+        }
+
+        let lu = FullPivLu::new(mat.as_ref());
+        let x = lu.solve(&b);
+
+        let result: Vec<(f64, f64)> = (0..self.dim)
+            .map(|i| (x[(i, 0)].re, x[(i, 0)].im))
+            .collect();
+
+        if result
+            .iter()
+            .any(|(re, im)| re.is_nan() || re.is_infinite() || im.is_nan() || im.is_infinite())
+        {
+            return Err(SparseMatrixError::Singular);
+        }
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]

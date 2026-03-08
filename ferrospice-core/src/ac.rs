@@ -510,7 +510,7 @@ fn solve_ac_point(
 }
 
 /// Stamp an imaginary-part conductance (susceptance) between two nodes.
-fn stamp_imag_conductance(
+pub fn stamp_imag_conductance(
     matrix: &mut crate::SparseMatrix,
     ni: Option<usize>,
     nj: Option<usize>,
@@ -529,7 +529,7 @@ fn stamp_imag_conductance(
 }
 
 /// Generate frequency sweep points for AC analysis.
-fn generate_ac_sweep(variation: AcVariation, n: u32, fstart: f64, fstop: f64) -> Vec<f64> {
+pub fn generate_ac_sweep(variation: AcVariation, n: u32, fstart: f64, fstop: f64) -> Vec<f64> {
     let mut freqs = Vec::new();
 
     match variation {

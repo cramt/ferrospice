@@ -5,6 +5,7 @@ pub mod jfet;
 pub mod mna;
 pub mod mosfet;
 pub mod newton;
+pub mod noise;
 pub mod simulate;
 pub mod sparse;
 pub mod subckt;
@@ -17,10 +18,11 @@ pub use diode::DiodeModel;
 pub use jfet::{JfetInstance, JfetModel, JfetType, stamp_jfet};
 pub use mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
-    VoltageSourceInstance, assemble_mna, stamp_conductance,
+    ResistorInstance, VoltageSourceInstance, assemble_mna, stamp_conductance,
 };
 pub use mosfet::{MosfetInstance, MosfetModel, MosfetType, stamp_mosfet};
 pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
+pub use noise::simulate_noise;
 pub use simulate::{simulate_dc, simulate_op};
 pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixError};
 pub use subckt::{SubcktError, flatten_netlist};

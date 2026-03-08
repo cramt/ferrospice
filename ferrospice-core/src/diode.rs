@@ -42,6 +42,10 @@ pub struct DiodeModel {
     pub m: f64,
     /// Transit time (default 0.0 s).
     pub tt: f64,
+    /// Flicker noise coefficient (default 0).
+    pub kf: f64,
+    /// Flicker noise exponent (default 1).
+    pub af: f64,
 }
 
 impl Default for DiodeModel {
@@ -56,6 +60,8 @@ impl Default for DiodeModel {
             vj: 1.0,
             m: 0.5,
             tt: 0.0,
+            kf: 0.0,
+            af: 1.0,
         }
     }
 }
@@ -76,6 +82,8 @@ impl DiodeModel {
                     "VJ" => m.vj = *v,
                     "M" => m.m = *v,
                     "TT" => m.tt = *v,
+                    "KF" => m.kf = *v,
+                    "AF" => m.af = *v,
                     _ => {} // ignore unknown params
                 }
             }

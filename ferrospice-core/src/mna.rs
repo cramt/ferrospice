@@ -71,6 +71,19 @@ impl NodeMap {
     }
 }
 
+/// A resolved resistor instance with matrix indices (for noise analysis).
+#[derive(Debug, Clone)]
+pub struct ResistorInstance {
+    /// Resistor element name.
+    pub name: String,
+    /// Positive node matrix index (None = ground).
+    pub pos_idx: Option<usize>,
+    /// Negative node matrix index (None = ground).
+    pub neg_idx: Option<usize>,
+    /// Resistance value in Ohms.
+    pub resistance: f64,
+}
+
 /// A resolved diode instance with matrix indices and model parameters.
 #[derive(Debug, Clone)]
 pub struct DiodeInstance {
@@ -208,6 +221,8 @@ pub struct MnaSystem {
     /// Names of voltage sources whose branch currents appear in the solution
     /// (entries N..N+M of solution vector).
     pub vsource_names: Vec<String>,
+    /// Resolved resistor instances (for noise analysis).
+    pub resistors: Vec<ResistorInstance>,
     /// Resolved diode instances for NR iteration.
     pub diodes: Vec<DiodeInstance>,
     /// Resolved capacitor instances for transient analysis.
@@ -475,6 +490,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut system = LinearSystem::new(dim);
     let mut vsource_names = Vec::with_capacity(vsource_count);
     let mut vsource_idx = 0usize;
+    let mut resistors = Vec::new();
     let mut diodes = Vec::new();
     let mut bjts = Vec::new();
     let mut mosfets = Vec::new();
@@ -923,6 +939,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     n,
                     &mut voltage_sources,
                     &mut current_sources,
+                    &mut resistors,
                 )?;
             }
         }
@@ -932,6 +949,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         system,
         node_map,
         vsource_names,
+        resistors,
         diodes,
         bjts,
         mosfets,
@@ -958,15 +976,23 @@ fn stamp_element(
     num_nodes: usize,
     voltage_sources: &mut Vec<VoltageSourceInstance>,
     current_sources: &mut Vec<CurrentSourceInstance>,
+    resistors: &mut Vec<ResistorInstance>,
 ) -> Result<(), MnaError> {
     match &element.kind {
         ElementKind::Resistor {
             pos, neg, value, ..
         } => {
-            let g = 1.0 / expr_value(value, &element.name)?;
+            let r = expr_value(value, &element.name)?;
+            let g = 1.0 / r;
             let ni = node_map.get(pos);
             let nj = node_map.get(neg);
             stamp_conductance(&mut system.matrix, ni, nj, g);
+            resistors.push(ResistorInstance {
+                name: element.name.clone(),
+                pos_idx: ni,
+                neg_idx: nj,
+                resistance: r,
+            });
         }
         ElementKind::VoltageSource { pos, neg, source } => {
             let v = source

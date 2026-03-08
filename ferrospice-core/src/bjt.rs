@@ -94,6 +94,10 @@ pub struct BjtModel {
     pub tr: f64,
     /// Fraction of B-C cap connected to internal base (default 1).
     pub xcjc: f64,
+    /// Flicker noise coefficient (default 0).
+    pub kf: f64,
+    /// Flicker noise exponent (default 1).
+    pub af: f64,
 }
 
 impl BjtModel {
@@ -127,6 +131,8 @@ impl BjtModel {
             tf: 0.0,
             tr: 0.0,
             xcjc: 1.0,
+            kf: 0.0,
+            af: 1.0,
         }
     }
 
@@ -167,6 +173,8 @@ impl BjtModel {
                     "TF" => m.tf = *v,
                     "TR" => m.tr = *v,
                     "XCJC" => m.xcjc = *v,
+                    "KF" => m.kf = *v,
+                    "AF" => m.af = *v,
                     _ => {} // ignore unknown params (LEVEL, etc.)
                 }
             }

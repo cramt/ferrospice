@@ -66,6 +66,10 @@ pub struct JfetModel {
     pub fc: f64,
     /// Doping tail parameter (default 1.0, Sydney University mod).
     pub b: f64,
+    /// Flicker noise coefficient (default 0).
+    pub kf: f64,
+    /// Flicker noise exponent (default 1).
+    pub af: f64,
 }
 
 impl JfetModel {
@@ -85,6 +89,8 @@ impl JfetModel {
             n: 1.0,
             fc: 0.5,
             b: 1.0,
+            kf: 0.0,
+            af: 1.0,
         }
     }
 
@@ -111,6 +117,8 @@ impl JfetModel {
                     "N" => m.n = *v,
                     "FC" => m.fc = *v,
                     "B" => m.b = *v,
+                    "KF" => m.kf = *v,
+                    "AF" => m.af = *v,
                     _ => {} // ignore unknown params (LEVEL, etc.)
                 }
             }
