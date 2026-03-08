@@ -44,8 +44,13 @@ impl NodeMap {
     }
 
     /// Number of non-ground nodes.
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    /// Returns true if there are no non-ground nodes.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 
     /// Look up a node's index (returns None for ground or unknown nodes).
