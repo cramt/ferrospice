@@ -7,6 +7,8 @@ use thiserror::Error;
 pub enum SparseMatrixError {
     #[error("matrix is singular, cannot solve")]
     Singular,
+    #[error("singular matrix: {0}")]
+    SingularMatrix(String),
     #[error(
         "dimension mismatch: matrix is {matrix_dim}x{matrix_dim} but RHS has {rhs_len} elements"
     )]
@@ -15,10 +17,10 @@ pub enum SparseMatrixError {
 
 /// A triplet (row, col, value) for assembling a sparse matrix.
 #[derive(Debug, Clone, Copy)]
-struct Triplet {
-    row: usize,
-    col: usize,
-    value: f64,
+pub struct Triplet {
+    pub row: usize,
+    pub col: usize,
+    pub value: f64,
 }
 
 /// A sparse matrix builder using triplet-form (COO) assembly.
@@ -79,6 +81,11 @@ impl SparseMatrix {
     /// Clear all entries, keeping the dimension.
     pub fn clear(&mut self) {
         self.triplets.clear();
+    }
+
+    /// Iterate over the stored triplets.
+    pub fn triplets(&self) -> &[Triplet] {
+        &self.triplets
     }
 }
 

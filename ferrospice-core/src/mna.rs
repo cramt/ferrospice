@@ -4,6 +4,7 @@ use ferrospice_netlist::{Element, ElementKind, Expr, Netlist};
 use thiserror::Error;
 
 use crate::LinearSystem;
+use crate::diode::DiodeModel;
 
 /// Ground node name — the reference node excluded from the MNA matrix.
 const GROUND: &str = "0";
@@ -64,6 +65,21 @@ impl NodeMap {
     }
 }
 
+/// A resolved diode instance with matrix indices and model parameters.
+#[derive(Debug, Clone)]
+pub struct DiodeInstance {
+    /// Diode element name.
+    pub name: String,
+    /// Anode node matrix index (None = ground).
+    pub anode_idx: Option<usize>,
+    /// Cathode node matrix index (None = ground).
+    pub cathode_idx: Option<usize>,
+    /// Internal node index when RS > 0 (between RS and junction).
+    pub internal_idx: Option<usize>,
+    /// Resolved diode model parameters.
+    pub model: DiodeModel,
+}
+
 /// The assembled MNA system ready for solving.
 #[derive(Debug)]
 pub struct MnaSystem {
@@ -74,6 +90,8 @@ pub struct MnaSystem {
     /// Names of voltage sources whose branch currents appear in the solution
     /// (entries N..N+M of solution vector).
     pub vsource_names: Vec<String>,
+    /// Resolved diode instances for NR iteration.
+    pub diodes: Vec<DiodeInstance>,
 }
 
 impl MnaSystem {
@@ -132,11 +150,25 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
 ///
 /// Currently supports: resistors (R), independent voltage sources (V),
 /// independent current sources (I), capacitors (C, open in DC),
-/// and inductors (L, short in DC).
+/// inductors (L, short in DC), and diodes (D, nonlinear).
 pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
+    // Build a map of model definitions for lookup.
+    let models: BTreeMap<String, &ferrospice_netlist::ModelDef> = netlist
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let ferrospice_netlist::Item::Model(m) = item {
+                Some((m.name.to_uppercase(), m))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // First pass: collect all nodes and count voltage sources to determine matrix size.
     let mut node_map = NodeMap::new();
     let mut vsource_count = 0usize;
+    let mut internal_node_count = 0usize;
 
     for element in netlist.elements() {
         match &element.kind {
@@ -154,44 +186,99 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 node_map.index(neg);
             }
             ElementKind::Capacitor { pos, neg, .. } => {
-                // Capacitor is open circuit in DC — just register nodes.
                 node_map.index(pos);
                 node_map.index(neg);
             }
             ElementKind::Inductor { pos, neg, .. } => {
-                // Inductor is short circuit in DC — modeled as 0V voltage source.
                 node_map.index(pos);
                 node_map.index(neg);
                 vsource_count += 1;
             }
-            _ => {
-                // Skip unsupported elements for now
+            ElementKind::Diode {
+                anode,
+                cathode,
+                model,
+                params,
+            } => {
+                node_map.index(anode);
+                node_map.index(cathode);
+                // Check if RS > 0 — need an internal node.
+                let mut dm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    DiodeModel::from_model_def(mdef)
+                } else {
+                    DiodeModel::default()
+                };
+                dm = dm.with_instance_params(params);
+                if dm.has_series_resistance() {
+                    internal_node_count += 1;
+                }
             }
+            _ => {}
         }
     }
 
-    let n = node_map.len();
+    let n = node_map.len() + internal_node_count;
     let dim = n + vsource_count;
     let mut system = LinearSystem::new(dim);
     let mut vsource_names = Vec::with_capacity(vsource_count);
     let mut vsource_idx = 0usize;
+    let mut diodes = Vec::new();
+    let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
     // Second pass: stamp each element.
     for element in netlist.elements() {
-        stamp_element(
-            element,
-            &node_map,
-            &mut system,
-            &mut vsource_names,
-            &mut vsource_idx,
-            n,
-        )?;
+        match &element.kind {
+            ElementKind::Diode {
+                anode,
+                cathode,
+                model,
+                params,
+            } => {
+                let mut dm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    DiodeModel::from_model_def(mdef)
+                } else {
+                    DiodeModel::default()
+                };
+                dm = dm.with_instance_params(params);
+
+                let anode_idx = node_map.get(anode);
+                let cathode_idx = node_map.get(cathode);
+
+                let int_idx = if dm.has_series_resistance() {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    None
+                };
+
+                diodes.push(DiodeInstance {
+                    name: element.name.clone(),
+                    anode_idx,
+                    cathode_idx,
+                    internal_idx: int_idx,
+                    model: dm,
+                });
+                // Diode stamps are applied during NR iteration, not here.
+            }
+            _ => {
+                stamp_element(
+                    element,
+                    &node_map,
+                    &mut system,
+                    &mut vsource_names,
+                    &mut vsource_idx,
+                    n,
+                )?;
+            }
+        }
     }
 
     Ok(MnaSystem {
         system,
         node_map,
         vsource_names,
+        diodes,
     })
 }
 
@@ -290,7 +377,7 @@ fn stamp_element(
 
 /// Stamp a conductance G between nodes ni and nj into the matrix.
 /// `None` means ground (not in matrix).
-fn stamp_conductance(
+pub fn stamp_conductance(
     matrix: &mut crate::SparseMatrix,
     ni: Option<usize>,
     nj: Option<usize>,
