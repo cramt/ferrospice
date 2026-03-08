@@ -4,11 +4,12 @@ pub mod newton;
 pub mod simulate;
 pub mod sparse;
 pub mod transient;
+pub mod waveform;
 
 pub use diode::DiodeModel;
 pub use mna::{
-    CapacitorInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem, assemble_mna,
-    stamp_conductance,
+    CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
+    VoltageSourceInstance, assemble_mna, stamp_conductance,
 };
 pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
 pub use simulate::{simulate_dc, simulate_op};

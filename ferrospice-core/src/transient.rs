@@ -11,6 +11,7 @@ use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrOptions, newton_raphson_solve};
 use crate::simulate::simulate_op;
+use crate::waveform::{self, TranParams};
 
 /// Integration method for transient analysis.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -284,6 +285,10 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     let has_nonlinear = !mna.diodes.is_empty();
     let nr_options = NrOptions::default();
+    let tran_params = TranParams {
+        tstep: h,
+        tstop: t_stop,
+    };
 
     // Time-stepping loop.
     while t < t_stop - h * 1e-9 {
@@ -301,6 +306,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             &mna,
             &solution,
             h,
+            t,
+            &tran_params,
             method,
             &cap_histories,
             &ind_histories,
@@ -401,6 +408,8 @@ fn solve_timestep(
     mna: &MnaSystem,
     prev_solution: &[f64],
     h: f64,
+    t: f64,
+    tran_params: &TranParams,
     method: IntegrationMethod,
     cap_histories: &[CapHistory],
     ind_histories: &[IndHistory],
@@ -440,6 +449,28 @@ fn solve_timestep(
         }
         for (i, &val) in base_rhs.iter().enumerate() {
             system.rhs[i] += val * source_factor;
+        }
+
+        // 1b. Override source values with waveform-evaluated values at time t.
+        for vs in &mna.voltage_sources {
+            if let Some(ref wf) = vs.waveform {
+                let v_t = waveform::evaluate(wf, t, tran_params);
+                // Replace the DC value in the branch equation RHS.
+                system.rhs[vs.branch_idx] = v_t * source_factor;
+            }
+        }
+        for cs in &mna.current_sources {
+            if let Some(ref wf) = cs.waveform {
+                let i_t = waveform::evaluate(wf, t, tran_params);
+                // Undo DC stamp and apply transient value.
+                let i_diff = i_t - cs.dc_value;
+                if let Some(ni) = cs.pos_idx {
+                    system.rhs[ni] -= i_diff * source_factor;
+                }
+                if let Some(nj) = cs.neg_idx {
+                    system.rhs[nj] += i_diff * source_factor;
+                }
+            }
         }
 
         // 2. Stamp capacitor companion models.
@@ -720,5 +751,177 @@ L1 1 0 1u
                 "frequency error {freq_err:.4}: expected {f_expected:.1} Hz, got {measured_freq:.1} Hz"
             );
         }
+    }
+
+    #[test]
+    fn test_pulse_source_rc_circuit() {
+        // PULSE source into RC circuit.
+        // V1 is a PULSE from 0V to 5V with fast edges, 5ms pulse width, 10ms period.
+        // R1=1k, C1=1u → RC = 1ms.
+        // During the pulse high, cap charges toward 5V.
+        // During pulse low, cap discharges toward 0V.
+        let netlist = Netlist::parse(
+            "PULSE into RC
+V1 1 0 PULSE(0 5 0 1u 1u 5m 10m)
+R1 1 out 1k
+C1 out 0 1u IC=0
+.tran 10u 10m
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_tran(&netlist).unwrap();
+
+        let time = tran_vector(&result, "time");
+        let v_out = tran_vector(&result, "v(out)");
+
+        // At t=0, IC=0 so V(out)=0
+        assert_abs_diff_eq!(v_out[0], 0.0, epsilon = 1e-6);
+
+        // During pulse high (0 to 5ms), cap should charge toward 5V.
+        // At t=3ms (3 RC into charging), V ≈ 5*(1-exp(-3)) ≈ 4.75
+        let idx_3ms = find_nearest_time(time, 3e-3);
+        assert!(
+            v_out[idx_3ms] > 4.0,
+            "at t=3ms, V(out) should be > 4V, got {:.4}",
+            v_out[idx_3ms]
+        );
+
+        // After pulse falls at t=5ms, cap discharges toward 0V.
+        // At t=8ms (3 RC into discharge), voltage should be much lower.
+        let idx_8ms = find_nearest_time(time, 8e-3);
+        assert!(
+            v_out[idx_8ms] < 1.0,
+            "at t=8ms (discharge), V(out) should be < 1V, got {:.4}",
+            v_out[idx_8ms]
+        );
+    }
+
+    #[test]
+    fn test_sin_source_transient() {
+        // SIN source with known frequency, verify output matches analytical.
+        // V1 = SIN(0 1 1000) → 1V amplitude, 1kHz, no offset.
+        // With a simple R load (no reactive elements), V(1) should track V1.
+        let netlist = Netlist::parse(
+            "SIN source test
+V1 1 0 SIN(0 1 1000)
+R1 1 0 1k
+.tran 10u 2m
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_tran(&netlist).unwrap();
+
+        let time = tran_vector(&result, "time");
+        let v1 = tran_vector(&result, "v(1)");
+
+        // Verify at multiple points that V(1) matches sin(2*pi*1000*t)
+        for i in 1..v1.len() {
+            let t = time[i];
+            let expected = (2.0 * std::f64::consts::PI * 1000.0 * t).sin();
+            let err = (v1[i] - expected).abs();
+            assert!(
+                err < 1e-6,
+                "at t={t:.6e}: expected {expected:.10}, got {:.10}, err={err:.10}",
+                v1[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_pwl_source_transient() {
+        // PWL source: ramp from 0 to 5V in 1ms, hold 5V for 1ms, ramp to 0 in 1ms.
+        // With R load, V(1) should track the source.
+        let netlist = Netlist::parse(
+            "PWL source test
+V1 1 0 PWL(0 0 1m 5 2m 5 3m 0)
+R1 1 0 1k
+.tran 50u 3m
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_tran(&netlist).unwrap();
+
+        let time = tran_vector(&result, "time");
+        let v1 = tran_vector(&result, "v(1)");
+
+        // At t=0.5ms: should be about 2.5V (midway through ramp)
+        let idx = find_nearest_time(time, 0.5e-3);
+        assert!(
+            (v1[idx] - 2.5).abs() < 0.1,
+            "at 0.5ms: expected ~2.5V, got {:.4}",
+            v1[idx]
+        );
+
+        // At t=1.5ms: should be 5V (holding)
+        let idx = find_nearest_time(time, 1.5e-3);
+        assert!(
+            (v1[idx] - 5.0).abs() < 0.1,
+            "at 1.5ms: expected ~5V, got {:.4}",
+            v1[idx]
+        );
+
+        // At t=2.5ms: should be about 2.5V (ramping down)
+        let idx = find_nearest_time(time, 2.5e-3);
+        assert!(
+            (v1[idx] - 2.5).abs() < 0.1,
+            "at 2.5ms: expected ~2.5V, got {:.4}",
+            v1[idx]
+        );
+    }
+
+    #[test]
+    fn test_current_source_pulse() {
+        // PULSE current source into a resistor.
+        // I1 pulses from 0 to 1mA, R1=1k → V(1) should pulse from 0 to 1V.
+        let netlist = Netlist::parse(
+            "PULSE current source
+I1 0 1 PULSE(0 1m 0 1u 1u 1m 2m)
+R1 1 0 1k
+.tran 10u 4m
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_tran(&netlist).unwrap();
+
+        let time = tran_vector(&result, "time");
+        let v1 = tran_vector(&result, "v(1)");
+
+        // During high pulse (0 to 1ms): V(1) ≈ 1mA * 1kΩ = 1V
+        let idx = find_nearest_time(time, 0.5e-3);
+        assert!(
+            (v1[idx] - 1.0).abs() < 0.05,
+            "during pulse high: expected ~1V, got {:.4}",
+            v1[idx]
+        );
+
+        // During low pulse (1ms to 2ms): V(1) ≈ 0V
+        let idx = find_nearest_time(time, 1.5e-3);
+        assert!(
+            v1[idx].abs() < 0.05,
+            "during pulse low: expected ~0V, got {:.4}",
+            v1[idx]
+        );
+    }
+
+    /// Find the index of the time point nearest to `target`.
+    fn find_nearest_time(time: &[f64], target: f64) -> usize {
+        time.iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (*a - target)
+                    .abs()
+                    .partial_cmp(&(*b - target).abs())
+                    .unwrap()
+            })
+            .unwrap()
+            .0
     }
 }

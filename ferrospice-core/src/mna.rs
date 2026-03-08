@@ -108,6 +108,30 @@ pub struct InductorInstance {
     pub ic: Option<f64>,
 }
 
+/// A resolved voltage source instance with matrix indices and waveform.
+#[derive(Debug, Clone)]
+pub struct VoltageSourceInstance {
+    /// Index of this source's branch equation in the RHS vector.
+    pub branch_idx: usize,
+    /// DC value.
+    pub dc_value: f64,
+    /// Transient waveform, if any.
+    pub waveform: Option<ferrospice_netlist::Waveform>,
+}
+
+/// A resolved current source instance with matrix indices and waveform.
+#[derive(Debug, Clone)]
+pub struct CurrentSourceInstance {
+    /// Positive node matrix index (None = ground).
+    pub pos_idx: Option<usize>,
+    /// Negative node matrix index (None = ground).
+    pub neg_idx: Option<usize>,
+    /// DC value.
+    pub dc_value: f64,
+    /// Transient waveform, if any.
+    pub waveform: Option<ferrospice_netlist::Waveform>,
+}
+
 /// The assembled MNA system ready for solving.
 #[derive(Debug)]
 pub struct MnaSystem {
@@ -124,6 +148,10 @@ pub struct MnaSystem {
     pub capacitors: Vec<CapacitorInstance>,
     /// Resolved inductor instances for transient analysis.
     pub inductors: Vec<InductorInstance>,
+    /// Resolved voltage source instances (for transient waveform evaluation).
+    pub voltage_sources: Vec<VoltageSourceInstance>,
+    /// Resolved current source instances (for transient waveform evaluation).
+    pub current_sources: Vec<CurrentSourceInstance>,
 }
 
 impl MnaSystem {
@@ -257,6 +285,8 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut diodes = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
+    let mut voltage_sources = Vec::new();
+    let mut current_sources = Vec::new();
     let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
     // Second pass: stamp each element.
@@ -344,6 +374,8 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     &mut vsource_names,
                     &mut vsource_idx,
                     n,
+                    &mut voltage_sources,
+                    &mut current_sources,
                 )?;
             }
         }
@@ -356,10 +388,13 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         diodes,
         capacitors,
         inductors,
+        voltage_sources,
+        current_sources,
     })
 }
 
 /// Stamp a single element into the MNA system.
+#[expect(clippy::too_many_arguments)]
 fn stamp_element(
     element: &Element,
     node_map: &NodeMap,
@@ -367,6 +402,8 @@ fn stamp_element(
     vsource_names: &mut Vec<String>,
     vsource_idx: &mut usize,
     num_nodes: usize,
+    voltage_sources: &mut Vec<VoltageSourceInstance>,
+    current_sources: &mut Vec<CurrentSourceInstance>,
 ) -> Result<(), MnaError> {
     match &element.kind {
         ElementKind::Resistor {
@@ -400,6 +437,12 @@ fn stamp_element(
             // Branch equation: V(pos) - V(neg) = v
             system.rhs[branch] = v;
 
+            voltage_sources.push(VoltageSourceInstance {
+                branch_idx: branch,
+                dc_value: v,
+                waveform: source.waveform.clone(),
+            });
+
             vsource_names.push(element.name.clone());
             *vsource_idx += 1;
         }
@@ -421,6 +464,13 @@ fn stamp_element(
             if let Some(j) = nj {
                 system.rhs[j] += i_val;
             }
+
+            current_sources.push(CurrentSourceInstance {
+                pos_idx: ni,
+                neg_idx: nj,
+                dc_value: i_val,
+                waveform: source.waveform.clone(),
+            });
         }
         ElementKind::Capacitor { .. } | ElementKind::Inductor { .. } => {
             // Handled directly in assemble_mna (need instance info for transient).
