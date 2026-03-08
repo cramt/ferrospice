@@ -79,6 +79,14 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - `solve_nonlinear_op(mna)` builds NR load closure that replays base stamps + diode companions
 - Voltage limiting: `pnjlim(v_new, v_old, vt, vcrit)` prevents NR divergence from exp() overflow
 - `collect_solution_into` and `simulate_dc` also detect diodes and use NR for each sweep point
+- MOSFET Level 1: `MosfetModel` + `MosfetInstance` + `MosfetCompanion` + `stamp_mosfet()` in ferrospice-core::mosfet
+- MOSFET follows BJT pattern: companion() computes linearized model, stamp_mosfet() applies to MNA
+- MOSFET source-drain symmetry: mode=+1 (normal) or -1 (reversed when VDS<0)
+- MOSFET body effect: Vth = VTO + GAMMA*(sqrt(PHI-VBS)-sqrt(PHI)), gmbs = gm * 0.5*GAMMA/sqrt(PHI-VBS)
+- MOSFET mos_limit: VGS limited ±0.5V around VTO, VDS uses quadratic limiting for large changes
+- MOSFET AC: gds/gm/gmbs real conductances + gate overlap caps (CGSO*W, CGDO*W, CGBO*L) + junction caps (CBD, CBS)
+- MOSFET internal nodes: RD>0 creates internal drain, RS>0 creates internal source (like BJT series resistances)
+- `has_nonlinear` checks: `!mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty()`
 ---
 
 ## 2026-03-08 - US-001
@@ -320,4 +328,24 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - AC BJT: real conductances (gpi, gmu, gm, go) + imaginary junction capacitances (CJE+TF*gbe, CJC+TR*gbc)
   - IS=1e-16 gives VBE ≈ 0.81V (higher than textbook 0.7V) — use wider tolerance in tests
   - DC sweep VCE branch current is negative (source supplies current) — use .abs() in tests
+---
+
+## 2026-03-08 - US-014
+- Implemented MOSFET Level 1 (Shichman-Hodges) model for NMOS and PMOS
+- New file: `ferrospice-core/src/mosfet.rs` — MosfetModel, MosfetInstance, MosfetCompanion, stamp_mosfet, mos_limit
+- Modified: `lib.rs` (exports), `mna.rs` (MOSFET parsing/assembly), `simulate.rs` (OP + DC sweep NR + 4 tests), `ac.rs` (small-signal + caps), `transient.rs` (NR + companion)
+- Files changed: mosfet.rs (new), lib.rs, mna.rs, simulate.rs, ac.rs, transient.rs
+- **Learnings for future iterations:**
+  - MOSFET follows same pattern as BJT: companion() → stamp_mosfet(), type sign for NMOS/PMOS
+  - Source-drain symmetry: mode=+1 (normal) or mode=-1 (reversed, when VDS<0), swap internal drain/source
+  - Body effect: Vth = VTO + GAMMA * (sqrt(PHI - VBS) - sqrt(PHI)), derivative arg = 0.5*GAMMA/sqrt(PHI-VBS)
+  - gmbs (body transconductance) = gm * arg, stamps between source and bulk
+  - Shichman-Hodges: beta = KP * W / L_eff, L_eff = L - 2*LD
+  - Three regions: cutoff (Vgst≤0), saturation (Vds≥Vgst), linear (Vds<Vgst)
+  - Channel length modulation: multiply by (1 + LAMBDA * Vds)
+  - Bulk junction diodes at drain-bulk and source-bulk (gbd, gbs) use Shockley equation
+  - Series resistances (RD, RS > 0) create internal drain/source nodes
+  - AC stamps: gds, gm, gmbs (real) + CGSO*W, CGDO*W, CGBO*L (gate overlap caps, imaginary) + CBD, CBS (junction caps, imaginary)
+  - mos_limit: separate limiting for VGS (±0.5V step limit around VTO) and VDS (quadratic limit for large changes)
+  - Bulk diode leakage causes small drain voltage drop even in cutoff — use relaxed tolerances in tests
 ---
