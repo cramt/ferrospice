@@ -3,6 +3,14 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- Adaptive timestep: LTE estimated from BE vs Trap difference on capacitor charges and inductor fluxes
+- `BreakpointTable` collects discontinuity times from waveforms, forces timestep to land on them
+- `waveform::breakpoints(&Waveform, &TranParams) -> Vec<f64>` extracts breakpoint times from waveforms
+- Breakpoint behavior: at breakpoints, use BE integration and reduce step by 0.1× for stability
+- `h_max` = tmax from .tran if specified, otherwise min(tstep, tstop/50) — caps internal timestep
+- LTE tolerance: `TRTOL * max(vol_tol, chg_tol)` where TRTOL=7.0 (matching ngspice CKTtrtol)
+- Timestep adjustment: reject if new_h < 0.9×step_h, accept and grow up to 2× otherwise
+- step_h vs h: step_h is the actual step size used this iteration, h is the suggested next step from LTE
 - Waveform evaluation: `waveform::evaluate(&Waveform, t, &TranParams) -> f64` in ferrospice-core::waveform
 - `TranParams { tstep, tstop }` provides defaults for waveform parameters (rise/fall times, SIN freq, etc.)
 - `VoltageSourceInstance` and `CurrentSourceInstance` in MnaSystem track branch_idx/node indices + waveform
@@ -235,4 +243,27 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - AM waveform returns 0 before td (not the offset — matching ngspice)
   - `stamp_element()` now takes `voltage_sources` and `current_sources` vecs — needs `#[expect(clippy::too_many_arguments)]`
   - `TranParams` struct bundles tstep and tstop for waveform default computation
+---
+
+## 2026-03-08 - US-011
+- Added adaptive timestep control to transient analysis engine
+- LTE estimation using difference between BE and Trap integration for capacitor charges and inductor fluxes
+- `BreakpointTable` struct: collects breakpoint times from waveforms, prevents timestep from crossing discontinuities
+- `waveform::breakpoints()` function: extracts breakpoint times from PULSE edges, PWL corners, EXP/SIN/AM transitions
+- At breakpoints: use BE integration and reduce step by 0.1× for stability (matching ngspice behavior)
+- Timestep adjustment: reject step if new_h < 0.9×step_h (too much LTE), grow up to 2× max
+- `tmax` from .tran command respected as upper bound on internal timestep
+- Default h_max = min(tstep, tstop/50) when tmax not specified
+- Separate `step_h` (actual step used) from `h` (suggested next step) to avoid state confusion
+- Test: `test_adaptive_timestep_pulse_rc` verifies accuracy and step placement near edges
+- Ported `fourbitadder.cir` as `#[ignore]` integration test (needs BJT + subcircuit support)
+- Files: ferrospice-core/src/transient.rs, ferrospice-core/src/waveform.rs, ferrospice-core/tests/transient.rs (new)
+- **Learnings for future iterations:**
+  - step_h vs h distinction is critical: step_h is the actual step for this iteration, h is the LTE-suggested next step
+  - Breakpoints must be collected before the time loop starts — iterating waveform params during stepping is too slow
+  - PULSE breakpoints repeat every period — need a loop with safety limit to avoid infinite iteration with tiny periods
+  - ngspice TRTOL=7.0 is a "slack factor" on LTE tolerance — without it, timestep is too conservative
+  - CHGTOL=1e-14 prevents zero-charge elements from demanding infinitely small timesteps
+  - At breakpoints, BE is essential — Trap can oscillate (ringing) at discontinuities
+  - The `is_at_breakpoint()` check uses `min_break` tolerance to avoid floating-point near-miss issues
 ---
