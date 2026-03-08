@@ -3,6 +3,13 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- DC sweep: `simulate_dc(&Netlist) -> Result<SimResult>` in ferrospice-core::simulate
+- DC sweep reuses assembled MNA matrix, only modifies RHS entries per sweep point
+- Voltage source sweep: set `system.rhs[num_nodes + vsource_idx] = sweep_value`
+- Current source sweep: undo old stamp, apply new value at node RHS entries
+- DC sweep result has sweep variable as first vector (e.g., "v1"), then node voltages and branch currents
+- Double sweep: outer loop is src2, inner loop is src1
+- `NodeMap::len()` and `NodeMap::is_empty()` are now public
 - Integration tests go in `ferrospice-core/tests/` — use `CARGO_MANIFEST_DIR` to locate ngspice test files
 - ngspice check.sh filters: SPARSE|KLU|CPU|Dynamic|Note|Circuit|Doing|---|Data|Index|trans|acan|etc.
 - ngspice .out data rows are tab-separated, start with integer index, use scientific notation
@@ -94,4 +101,21 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - check.sh filtering is quite aggressive — removes analysis keywords, headers, solver info
   - res_array.cir needs model-based resistance (RSH, W/L geometry) — R = RSH * L / (W - NARROW) for R3=11kΩ
   - res_partition.cir uses ac=15k on r2 — changes AC behavior (V(2)=0.75) vs DC (V(2)=0.5)
+---
+
+## 2026-03-08 - US-006
+- Implemented `simulate_dc(&Netlist) -> Result<SimResult>` for DC sweep analysis
+- Supports single sweep (.dc V1 0 5 1) and double/nested sweep (.dc V1 0 5 1 V2 0 3 1)
+- Supports sweeping both voltage sources and current sources
+- Reuses MNA matrix assembly — only modifies RHS entries per sweep point for efficiency
+- Result includes sweep variable vector + node voltages + branch currents
+- Added `SweepSource` enum to track voltage vs current source sweep info
+- Made `NodeMap::len()` public and added `NodeMap::is_empty()` for clippy compliance
+- Files: ferrospice-core/src/simulate.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/lib.rs
+- **Learnings for future iterations:**
+  - For voltage source sweep, only RHS[branch_idx] changes — very efficient
+  - For current source sweep, need to track original DC value to undo/redo RHS contributions
+  - Double sweep: outer=src2, inner=src1 (matches ngspice behavior)
+  - `generate_sweep_points()` handles positive/negative step directions
+  - `NodeMap::len()` was private — needed to make public for simulate.rs access
 ---
