@@ -126,7 +126,8 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
 /// Assemble an MNA system from a parsed netlist.
 ///
 /// Currently supports: resistors (R), independent voltage sources (V),
-/// and independent current sources (I).
+/// independent current sources (I), capacitors (C, open in DC),
+/// and inductors (L, short in DC).
 pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     // First pass: collect all nodes and count voltage sources to determine matrix size.
     let mut node_map = NodeMap::new();
@@ -146,6 +147,17 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
             ElementKind::CurrentSource { pos, neg, .. } => {
                 node_map.index(pos);
                 node_map.index(neg);
+            }
+            ElementKind::Capacitor { pos, neg, .. } => {
+                // Capacitor is open circuit in DC — just register nodes.
+                node_map.index(pos);
+                node_map.index(neg);
+            }
+            ElementKind::Inductor { pos, neg, .. } => {
+                // Inductor is short circuit in DC — modeled as 0V voltage source.
+                node_map.index(pos);
+                node_map.index(neg);
+                vsource_count += 1;
             }
             _ => {
                 // Skip unsupported elements for now
@@ -240,6 +252,29 @@ fn stamp_element(
             if let Some(j) = nj {
                 system.rhs[j] += i_val;
             }
+        }
+        ElementKind::Capacitor { .. } => {
+            // Capacitor is open circuit in DC — no contribution to DC matrix.
+        }
+        ElementKind::Inductor { pos, neg, .. } => {
+            // Inductor is short circuit in DC — modeled as 0V voltage source.
+            let ni = node_map.get(pos);
+            let nj = node_map.get(neg);
+            let branch = num_nodes + *vsource_idx;
+
+            if let Some(i) = ni {
+                system.matrix.add(i, branch, 1.0);
+                system.matrix.add(branch, i, 1.0);
+            }
+            if let Some(j) = nj {
+                system.matrix.add(j, branch, -1.0);
+                system.matrix.add(branch, j, -1.0);
+            }
+            // V(pos) - V(neg) = 0 (short circuit)
+            system.rhs[branch] = 0.0;
+
+            vsource_names.push(element.name.clone());
+            *vsource_idx += 1;
         }
         _ => {
             // Skip unsupported elements silently for now
@@ -396,5 +431,75 @@ R1 1 0 1k
         let mna = assemble_mna(&netlist).unwrap();
         let solution = mna.solve().unwrap();
         assert_abs_diff_eq!(solution.voltage("1").unwrap(), 5.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn test_rc_circuit_dc_op() {
+        // RC circuit: V1=10V, R1=1k, C1=1u between mid and 0
+        // In DC, capacitor is open circuit, so no current flows through R1.
+        // V(mid) = V1 = 10V (no voltage drop across R1)
+        let netlist = Netlist::parse(
+            "RC circuit DC test
+V1 1 0 10
+R1 1 mid 1k
+C1 mid 0 1u
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        // 2 non-ground nodes (1, mid) + 1 voltage source = 3x3
+        // Capacitor adds no branch equation
+        assert_eq!(mna.system.dim(), 3);
+
+        let solution = mna.solve().unwrap();
+        assert_abs_diff_eq!(solution.voltage("1").unwrap(), 10.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(solution.voltage("mid").unwrap(), 10.0, epsilon = 1e-12);
+        // No current flows (capacitor is open)
+        assert_abs_diff_eq!(
+            solution.branch_current("V1").unwrap(),
+            0.0,
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn test_rl_circuit_dc_op() {
+        // RL circuit: V1=5V, R1=1k, L1=1m between mid and 0
+        // In DC, inductor is short circuit, so full current flows.
+        // V(mid) = 0V (inductor shorts mid to ground)
+        // I = V1/R1 = 5/1000 = 5mA
+        let netlist = Netlist::parse(
+            "RL circuit DC test
+V1 1 0 5
+R1 1 mid 1k
+L1 mid 0 1m
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let mna = assemble_mna(&netlist).unwrap();
+        // 2 non-ground nodes (1, mid) + 1 voltage source + 1 inductor branch = 4x4
+        assert_eq!(mna.system.dim(), 4);
+
+        let solution = mna.solve().unwrap();
+        assert_abs_diff_eq!(solution.voltage("1").unwrap(), 5.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(solution.voltage("mid").unwrap(), 0.0, epsilon = 1e-12);
+        // Current through V1 = -5mA (flows out of source into circuit)
+        assert_abs_diff_eq!(
+            solution.branch_current("V1").unwrap().abs(),
+            5e-3,
+            epsilon = 1e-12
+        );
+        // Inductor branch current = 5mA
+        assert_abs_diff_eq!(
+            solution.branch_current("L1").unwrap().abs(),
+            5e-3,
+            epsilon = 1e-12
+        );
     }
 }
