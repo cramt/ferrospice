@@ -14,6 +14,7 @@ use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
+use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::{NrOptions, newton_raphson_solve};
 use crate::simulate::simulate_op;
 use crate::waveform::{self, TranParams};
@@ -340,6 +341,11 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .bjts
             .iter()
             .map(|b| b.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .mosfets
+            .iter()
+            .map(|m| m.model.internal_node_count())
             .sum::<usize>();
     let num_nodes = num_ext_nodes + num_internal;
     let dim = mna.system.dim();
@@ -459,7 +465,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .map(|d| vcrit(d.model.n * VT_NOM, d.model.is))
         .collect();
 
-    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty();
+    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
     let tran_params = TranParams {
@@ -683,6 +689,18 @@ fn solve_timestep(
             .collect::<Vec<(f64, f64)>>(),
     );
 
+    // Track previous MOSFET voltages (vgs, vds) for limiting.
+    let mosfets = &mna.mosfets;
+    let prev_mos_voltages = std::cell::RefCell::new(
+        mosfets
+            .iter()
+            .map(|m| {
+                let (vgs, vds, _vbs) = m.terminal_voltages(prev_solution);
+                (vgs, vds)
+            })
+            .collect::<Vec<(f64, f64)>>(),
+    );
+
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
         for triplet in base_matrix.triplets() {
@@ -769,6 +787,27 @@ fn solve_timestep(
 
                 let comp = bjt.model.companion(vbe, vbc);
                 stamp_bjt(&mut system.matrix, &mut system.rhs, bjt, &comp);
+            }
+
+            // 6. Stamp MOSFET companion models.
+            let mut prev_mos = prev_mos_voltages.borrow_mut();
+            for (mi, mos) in mosfets.iter().enumerate() {
+                let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
+
+                let (vgs, vds) = mos_limit(
+                    raw_vgs,
+                    raw_vds,
+                    prev_mos[mi].0,
+                    prev_mos[mi].1,
+                    mos.model.vto,
+                );
+                prev_mos[mi] = (vgs, vds);
+
+                let mut eff_model = mos.model.clone();
+                eff_model.kp = mos.beta();
+
+                let comp = eff_model.companion(vgs, vds, vbs);
+                stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
     };

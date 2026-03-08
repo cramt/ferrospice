@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::LinearSystem;
 use crate::bjt::{BjtInstance, BjtModel};
 use crate::diode::DiodeModel;
+use crate::mosfet::{MosfetInstance, MosfetModel};
 
 /// Ground node name — the reference node excluded from the MNA matrix.
 const GROUND: &str = "0";
@@ -151,6 +152,8 @@ pub struct MnaSystem {
     pub inductors: Vec<InductorInstance>,
     /// Resolved BJT instances for NR iteration.
     pub bjts: Vec<BjtInstance>,
+    /// Resolved MOSFET instances for NR iteration.
+    pub mosfets: Vec<MosfetInstance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -298,6 +301,26 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 };
                 internal_node_count += bm.internal_node_count();
             }
+            ElementKind::Mosfet {
+                d,
+                g,
+                s,
+                bulk,
+                model,
+                params,
+            } => {
+                node_map.index(d);
+                node_map.index(g);
+                node_map.index(s);
+                node_map.index(bulk);
+                let _ = params;
+                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    MosfetModel::from_model_def(mdef)
+                } else {
+                    MosfetModel::new(crate::mosfet::MosfetType::Nmos)
+                };
+                internal_node_count += mm.internal_node_count();
+            }
             _ => {}
         }
     }
@@ -309,6 +332,7 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut vsource_idx = 0usize;
     let mut diodes = Vec::new();
     let mut bjts = Vec::new();
+    let mut mosfets = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
@@ -420,6 +444,83 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 });
                 // BJT stamps are applied during NR iteration, not here.
             }
+            ElementKind::Mosfet {
+                d,
+                g,
+                s,
+                bulk,
+                model,
+                params,
+            } => {
+                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    MosfetModel::from_model_def(mdef)
+                } else {
+                    MosfetModel::new(crate::mosfet::MosfetType::Nmos)
+                };
+
+                let drain_idx = node_map.get(d);
+                let gate_idx = node_map.get(g);
+                let source_idx = node_map.get(s);
+                let bulk_idx = node_map.get(bulk);
+
+                // Create internal nodes for series resistances
+                let drain_prime_idx = if mm.rd > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    drain_idx
+                };
+                let source_prime_idx = if mm.rs > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    source_idx
+                };
+
+                // Extract W, L, AD, AS, PD, PS, M from instance params
+                let mut w = 1e-4; // default 100um
+                let mut l = 1e-4;
+                let mut ad = 0.0;
+                let mut as_ = 0.0;
+                let mut pd = 0.0;
+                let mut ps = 0.0;
+                let mut m_mult = 1.0;
+                for p in params {
+                    if let Expr::Num(v) = &p.value {
+                        match p.name.to_uppercase().as_str() {
+                            "W" => w = *v,
+                            "L" => l = *v,
+                            "AD" => ad = *v,
+                            "AS" => as_ = *v,
+                            "PD" => pd = *v,
+                            "PS" => ps = *v,
+                            "M" => m_mult = *v,
+                            _ => {}
+                        }
+                    }
+                }
+
+                mosfets.push(MosfetInstance {
+                    name: element.name.clone(),
+                    drain_idx,
+                    gate_idx,
+                    source_idx,
+                    bulk_idx,
+                    drain_prime_idx,
+                    source_prime_idx,
+                    model: mm,
+                    w,
+                    l,
+                    ad,
+                    as_,
+                    pd,
+                    ps,
+                    m: m_mult,
+                });
+                // MOSFET stamps are applied during NR iteration, not here.
+            }
             ElementKind::Capacitor {
                 pos,
                 neg,
@@ -482,6 +583,7 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         vsource_names,
         diodes,
         bjts,
+        mosfets,
         capacitors,
         inductors,
         voltage_sources,

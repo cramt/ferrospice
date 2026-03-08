@@ -4,6 +4,7 @@ use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
+use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::{NrOptions, newton_raphson_solve};
 
 /// Stamp a current source into the RHS vector.
@@ -26,7 +27,7 @@ fn stamp_current_source(rhs: &mut [f64], ni: Option<usize>, nj: Option<usize>, i
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
 
-    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty();
+    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty();
     let solution_vec = if !has_nonlinear {
         // Pure linear circuit — direct solve.
         let sol = mna.solve()?;
@@ -76,6 +77,11 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .bjts
             .iter()
             .map(|b| b.model.internal_node_count())
+            .sum::<usize>()
+        + mna
+            .mosfets
+            .iter()
+            .map(|m| m.model.internal_node_count())
             .sum::<usize>();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
         let idx = num_nodes + i;
@@ -109,15 +115,21 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
         .filter(|d| d.internal_idx.is_some())
         .count();
     let num_internal_bjts: usize = mna.bjts.iter().map(|b| b.model.internal_node_count()).sum();
-    let num_nodes = num_ext_nodes + num_internal_diodes + num_internal_bjts;
+    let num_internal_mosfets: usize = mna
+        .mosfets
+        .iter()
+        .map(|m| m.model.internal_node_count())
+        .sum();
+    let num_nodes = num_ext_nodes + num_internal_diodes + num_internal_bjts + num_internal_mosfets;
     let options = NrOptions::default();
 
     // The base linear system (matrix + RHS) from MNA assembly contains stamps
-    // for R, V, I, C, L. We'll replay these plus diode/BJT companions each iteration.
+    // for R, V, I, C, L. We'll replay these plus diode/BJT/MOSFET companions each iteration.
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
     let diodes = &mna.diodes;
     let bjts = &mna.bjts;
+    let mosfets = &mna.mosfets;
 
     // Precompute vcrit for each diode for voltage limiting.
     let vcrits: Vec<f64> = diodes
@@ -129,6 +141,8 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     let prev_jct_voltages = std::cell::RefCell::new(vec![0.0; diodes.len()]);
     // Track previous BJT junction voltages (vbe, vbc) for pnjlim.
     let prev_bjt_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); bjts.len()]);
+    // Track previous MOSFET voltages (vgs, vds) for limiting.
+    let prev_mos_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); mosfets.len()]);
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps.
@@ -180,6 +194,25 @@ fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
 
                 let comp = bjt.model.companion(vbe, vbc);
                 stamp_bjt(&mut system.matrix, &mut system.rhs, bjt, &comp);
+            }
+        }
+
+        // 4. Stamp MOSFET companion models.
+        {
+            let mut prev = prev_mos_voltages.borrow_mut();
+            for (mi, mos) in mosfets.iter().enumerate() {
+                let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
+
+                // Apply voltage limiting
+                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
+                prev[mi] = (vgs, vds);
+
+                // Create a model with effective beta (KP * W/L)
+                let mut eff_model = mos.model.clone();
+                eff_model.kp = mos.beta();
+
+                let comp = eff_model.companion(vgs, vds, vbs);
+                stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
     };
@@ -444,7 +477,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
 /// Solve the MNA system and append the solution to result vectors.
 fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), MnaError> {
-    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty();
+    let has_nonlinear = !mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty();
     if !has_nonlinear {
         // Linear circuit — direct solve.
         let solution = mna.solve()?;
@@ -472,7 +505,13 @@ fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), 
             .filter(|d| d.internal_idx.is_some())
             .count();
         let num_internal_bjts: usize = mna.bjts.iter().map(|b| b.model.internal_node_count()).sum();
-        let num_nodes = num_ext_nodes + num_internal_diodes + num_internal_bjts;
+        let num_internal_mosfets: usize = mna
+            .mosfets
+            .iter()
+            .map(|m| m.model.internal_node_count())
+            .sum();
+        let num_nodes =
+            num_ext_nodes + num_internal_diodes + num_internal_bjts + num_internal_mosfets;
 
         for (_name, node_idx) in mna.node_map.iter() {
             vecs[idx].real.push(sol[node_idx]);
@@ -942,6 +981,191 @@ Q1 2 1 0 QMOD
         assert!(
             ic_08 > ic_07 * 5.0,
             "IC at 0.8V ({ic_08:.4e}) should be >> IC at 0.7V ({ic_07:.4e})"
+        );
+    }
+
+    #[test]
+    fn test_nmos_inverter_op() {
+        // Simple NMOS inverter-like circuit: VDD=5V, RD=10k drain resistor,
+        // VGS=3V (gate driven by voltage source).
+        // M1: NMOS with VTO=1V, KP=1e-4 (with W/L scaling)
+        //
+        // At VGS=3V, VTO=1V → Vgst=2V.
+        // Check if MOSFET is conducting (V(drain) < VDD).
+        let netlist = Netlist::parse(
+            "NMOS inverter OP
+VDD 1 0 5
+VGS 2 0 3
+RD 1 3 10k
+M1 3 2 0 0 NMOD W=10u L=1u
+.model NMOD NMOS(VTO=1 KP=1e-4)
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+
+        let v_drain = op_voltage(&result, "3");
+        let v_gate = op_voltage(&result, "2");
+        let v_dd = op_voltage(&result, "1");
+
+        assert_abs_diff_eq!(v_gate, 3.0, epsilon = 1e-6);
+        assert_abs_diff_eq!(v_dd, 5.0, epsilon = 1e-6);
+
+        // MOSFET should be ON (Vgs > Vto), pulling drain below VDD
+        assert!(
+            v_drain < v_dd,
+            "drain voltage {v_drain} should be < VDD {v_dd}"
+        );
+        // But drain should be above ground
+        assert!(v_drain >= 0.0, "drain voltage {v_drain} should be >= 0");
+    }
+
+    #[test]
+    fn test_nmos_dc_sweep_transfer_curve() {
+        // Sweep VGS from 0 to 5V across NMOS with RD load.
+        // Below threshold (VGS < VTO=1V): V(drain) ≈ VDD (cutoff)
+        // Above threshold: V(drain) drops as MOSFET conducts.
+        let netlist = Netlist::parse(
+            "NMOS transfer curve
+VDD 1 0 5
+VGS 2 0 0
+RD 1 3 10k
+M1 3 2 0 0 NMOD W=10u L=1u
+.model NMOD NMOS(VTO=1 KP=1e-4)
+.dc VGS 0 5 0.5
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_dc(&netlist).unwrap();
+        let vgs_sweep = dc_vector(&result, "vgs");
+        let v_drain = dc_vector(&result, "v(3)");
+
+        assert_eq!(vgs_sweep.len(), 11); // 0, 0.5, 1.0, ..., 5.0
+
+        // At VGS=0 (cutoff): drain should be near VDD=5V
+        assert!(
+            v_drain[0] > 4.9,
+            "at VGS=0: V(drain) should be ~VDD, got {:.4}",
+            v_drain[0]
+        );
+
+        // At VGS=0.5 (below threshold): mostly cutoff (bulk diode leakage is small)
+        assert!(
+            v_drain[1] > 4.5,
+            "at VGS=0.5: V(drain) should be ~VDD, got {:.4}",
+            v_drain[1]
+        );
+
+        // At VGS=3V (well above threshold): drain should be significantly below VDD
+        let idx_3v = vgs_sweep
+            .iter()
+            .position(|&v| (v - 3.0).abs() < 0.01)
+            .unwrap();
+        assert!(
+            v_drain[idx_3v] < 4.0,
+            "at VGS=3V: V(drain) should be < 4V, got {:.4}",
+            v_drain[idx_3v]
+        );
+
+        // Drain voltage should decrease monotonically with increasing VGS
+        // (after threshold)
+        let idx_2v = vgs_sweep
+            .iter()
+            .position(|&v| (v - 2.0).abs() < 0.01)
+            .unwrap();
+        for i in (idx_2v + 1)..vgs_sweep.len() {
+            assert!(
+                v_drain[i] <= v_drain[i - 1] + 1e-6,
+                "V(drain) should decrease: V[{}]={:.4} > V[{}]={:.4}",
+                i,
+                v_drain[i],
+                i - 1,
+                v_drain[i - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_pmos_op() {
+        // PMOS with VDD=5V. Gate at ground → VSG = 5V (well above |VTP|=1V).
+        // Should conduct, pulling drain up toward VDD.
+        let netlist = Netlist::parse(
+            "PMOS OP test
+VDD 1 0 5
+RS 3 0 10k
+M1 3 0 1 1 PMOD W=10u L=1u
+.model PMOD PMOS(VTO=-1 KP=1e-4)
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result = simulate_op(&netlist).unwrap();
+
+        let v_drain = op_voltage(&result, "3");
+
+        // PMOS should be ON (VSG = VDD > |VTP|), pulling drain toward VDD
+        assert!(
+            v_drain > 0.5,
+            "PMOS drain should be pulled up, got {v_drain:.4}"
+        );
+    }
+
+    #[test]
+    fn test_cmos_inverter_op() {
+        // CMOS inverter: NMOS + PMOS complementary pair.
+        // VIN=0 → PMOS on, NMOS off → VOUT ≈ VDD
+        // VIN=VDD → PMOS off, NMOS on → VOUT ≈ 0
+        let netlist_low = Netlist::parse(
+            "CMOS inverter VIN=0
+VDD 1 0 5
+VIN 2 0 0
+MP 3 2 1 1 PMOD W=10u L=1u
+MN 3 2 0 0 NMOD W=10u L=1u
+.model NMOD NMOS(VTO=1 KP=1e-4)
+.model PMOD PMOS(VTO=-1 KP=1e-4)
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result_low = simulate_op(&netlist_low).unwrap();
+        let vout_low = op_voltage(&result_low, "3");
+
+        // VIN=0: NMOS off, PMOS on → VOUT ≈ VDD=5V
+        assert!(
+            vout_low > 4.5,
+            "CMOS inv with VIN=0: VOUT should be ~5V, got {vout_low:.4}"
+        );
+
+        let netlist_high = Netlist::parse(
+            "CMOS inverter VIN=5
+VDD 1 0 5
+VIN 2 0 5
+MP 3 2 1 1 PMOD W=10u L=1u
+MN 3 2 0 0 NMOD W=10u L=1u
+.model NMOD NMOS(VTO=1 KP=1e-4)
+.model PMOD PMOS(VTO=-1 KP=1e-4)
+.op
+.end
+",
+        )
+        .unwrap();
+
+        let result_high = simulate_op(&netlist_high).unwrap();
+        let vout_high = op_voltage(&result_high, "3");
+
+        // VIN=5: NMOS on, PMOS off → VOUT ≈ 0V
+        assert!(
+            vout_high < 0.5,
+            "CMOS inv with VIN=5: VOUT should be ~0V, got {vout_high:.4}"
         );
     }
 }
