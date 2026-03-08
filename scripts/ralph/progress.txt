@@ -3,6 +3,12 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- Waveform evaluation: `waveform::evaluate(&Waveform, t, &TranParams) -> f64` in ferrospice-core::waveform
+- `TranParams { tstep, tstop }` provides defaults for waveform parameters (rise/fall times, SIN freq, etc.)
+- `VoltageSourceInstance` and `CurrentSourceInstance` in MnaSystem track branch_idx/node indices + waveform
+- In transient, after copying base stamps, waveform values override source RHS entries at each timestep
+- PULSE defaults: td=0, tr=tstep, tf=tstep, pw=0, per=tr+pw+tf; repeats via time modulo period
+- SIN phase parameter is in degrees (converted to radians internally), damping via exp(-theta*(t-td))
 - Transient: `simulate_tran(&Netlist) -> Result<SimResult>` in ferrospice-core::transient
 - Transient uses BE for first timestep, then switches to Trapezoidal (matching ngspice)
 - Capacitor companion model: BE → geq=C/h, ieq=-C/h*v_prev; Trap → geq=2C/h, ieq=-(2C/h*v_prev + i_prev)
@@ -206,4 +212,27 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - History current for capacitor must be computed from the companion model equation, not just C*dv/dt
   - For LC oscillator test, trapezoidal method preserves energy well — no amplitude decay over 2 cycles
   - `#[expect(clippy::too_many_arguments)]` needed for `solve_timestep` with 11 params
+---
+
+## 2026-03-08 - US-010
+- Created `ferrospice-core/src/waveform.rs` with evaluation functions for all 6 waveform types
+- PULSE, SIN, EXP, PWL, SFFM, AM — all matching ngspice semantics from vsrcload.c
+- Added `VoltageSourceInstance` and `CurrentSourceInstance` structs to `MnaSystem` (mna.rs)
+- Source instances track branch_idx/node_indices, DC value, and optional waveform
+- Modified `stamp_element()` to collect source instances during MNA assembly
+- Modified `solve_timestep()` in transient.rs to evaluate waveforms at current time and override RHS
+- Voltage source waveform: replaces `system.rhs[branch_idx]` with evaluated value
+- Current source waveform: adjusts node RHS entries by `(i_transient - i_dc)` difference
+- 10 waveform unit tests: PULSE, SIN (basic, offset+phase, damping, analytical), EXP, PWL, SFFM, AM
+- 4 transient integration tests: PULSE into RC, SIN with R load, PWL source, current source PULSE
+- Files: ferrospice-core/src/waveform.rs (new), ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/transient.rs
+- **Learnings for future iterations:**
+  - Waveform evaluation is pure math — no MNA dependency, easy to unit test in isolation
+  - Current source waveforms need to compute delta from DC value (undo DC stamp, apply transient)
+  - SIN phase is in degrees (ngspice convention), converted to radians internally
+  - PULSE default period = tr + pw + tf (if per not specified or <= 0)
+  - SFFM modulation depth is clamped to [0, fc/fs] (ngspice enforces this with warning)
+  - AM waveform returns 0 before td (not the offset — matching ngspice)
+  - `stamp_element()` now takes `voltage_sources` and `current_sources` vecs — needs `#[expect(clippy::too_many_arguments)]`
+  - `TranParams` struct bundles tstep and tstop for waveform default computation
 ---
