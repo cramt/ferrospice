@@ -448,3 +448,16 @@ Started: Sun  8 Mar 14:08:50 CET 2026
   - Flicker noise uses device-specific formulas: diode/BJT: KF*|I|^AF/f, MOSFET: KF*|Id|^AF/(f*Cox*Leff²), JFET: KF*|Id|^AF/f
   - Noise integration uses piecewise power-law interpolation (not trapezoidal) for accuracy with 1/f noise
 ---
+
+## 2026-03-08 - US-019
+- Transfer function (.tf) and sensitivity (.sens) were already implemented in previous iterations
+- Fixed 3 clippy warnings: collapsed nested if/let in tf.rs, type alias for complex types in sens.rs
+- Files changed: ferrospice-core/src/tf.rs, ferrospice-core/src/sens.rs
+- **Learnings for future iterations:**
+  - .tf and .sens implementations exist in tf.rs and sens.rs with full test coverage
+  - `build_jacobian()` in tf.rs is `pub(crate)` — reused by sens.rs for adjoint method
+  - `solve_op_raw()` and `total_num_nodes()` in simulate.rs are shared helpers used by tf/sens
+  - Sensitivity uses adjoint method for linear params (analytical) and numerical perturbation for nonlinear devices
+  - Clippy enforces `type` aliases for complex tuple types with Box<dyn Fn(...)>
+  - Edition 2024 supports `if let` chains (collapsed nested if + if let)
+---
