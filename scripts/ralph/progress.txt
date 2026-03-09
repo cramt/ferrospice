@@ -173,6 +173,11 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - BSIM4 uses BTreeMap for L/W/P binning params instead of ~400 individual struct fields
   - BSIM4 `size_dep_param()` takes an extra `nf` (number of fingers) parameter compared to BSIM3
   - `ferrospice_netlist::Netlist::parse()` is the correct way to parse netlists in tests (not `ferrospice_netlist::parse()`)
+- BSIM3 capMod dispatch: capMod 0/1 use simple linear overlap caps, capMod 2/3 use smooth overlap (DELTA_1/ckappa)
+- BSIM3 charge partition helper: `charge_partition(xpart, cox_wl, vgsteff, t0, t1)` shared across capMod 0/1/2
+- qaSpec BSIM3 tests are NOT .cir/.out format — need manual conversion to SPICE netlists
+- AC analysis vectors: `v.complex` (not `v.real`) contains the frequency response data
+- Full qaSpec BSIM3 NMOS model params: see `BSIM3_NMOS_PARAMS` const in ferrospice-core/tests/bsim3.rs
 ---
 
 ## 2026-03-08 - US-022
@@ -192,4 +197,27 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Simplified Vdsat calculation (removed series resistance effect) works for rdsmod=0
   - BTreeMap approach for binning params is pragmatic but loses type safety — consider macro-generated fields for BSIM-SOI
   - 8 unit tests + 1 integration test (OP convergence) all pass
+---
+
+## 2026-03-09 - US-023 (implementation)
+- Implemented capMod 0/1/2 charge models for BSIM3 (previously only capMod=3)
+- Ported ngspice qaSpec BSIM3 tests as 11 integration tests
+- Files changed:
+  - ferrospice-core/src/bsim3.rs (refactored bsim3_total_charges to dispatch by cap_mod, added charge_partition, compute_vfbeff, compute_qac0_qsub0 helpers)
+  - ferrospice-core/tests/bsim3.rs (rewrote with full qaSpec model parameters, 11 tests)
+- **What was implemented:**
+  - capMod=0: Simple charge model (no Qac0/Qsub0, no centroid)
+  - capMod=1: k1ox sqrt model for bulk charge + VdsatCV charge partition
+  - capMod=2: Qac0/Qsub0 corrections, VdseffCV smoothing (no centroid)
+  - capMod=3: Already existed (centroid model + DeltaPhi)
+  - Overlap charges: capMod 0/1 use simple linear, capMod 2/3 use smooth model
+  - Charge partition helper: xpart 0/100, 40/60, 50/50 shared across capMod 0/1/2
+  - Integration tests: DC sweep at 3 Vg biases, short channel, NRD/NRS, AC freq sweep (capMod=3, capMod=1, xpart=1), transient, OP (NMOS+PMOS)
+- **Learnings for future iterations:**
+  - qaSpec tests need manual conversion to .cir — not a standard .cir/.out format
+  - qaSpec reference data is in .standard files with space-separated columns
+  - AC analysis returns complex vectors (v.complex), not real vectors (v.real)
+  - capMod dispatch needs shared DC core (VbseffCV, Vth, Vgsteff, Abulk) before branching on charge model
+  - capMod=0 and capMod=1 share the same charge partition code — factor into helper
+  - Overlap charge model differs by capMod: 0/1 use linear (cgdo*vgd), 2/3 use smooth clamping with DELTA_1
 ---

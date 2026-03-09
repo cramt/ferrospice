@@ -2323,7 +2323,8 @@ fn bsim3_overlap_charges(
     (qgdo, qgso, qgb)
 }
 
-/// Compute total charges (gate, bulk, source) for BSIM3 capMod=3.
+/// Compute total charges (gate, bulk, source) for BSIM3.
+/// Dispatches to the appropriate charge model based on cap_mod (0/1/2/3).
 /// Includes intrinsic charges + overlap charges.
 /// Returns (Qg_total, Qb_total, Qs_total).
 #[expect(clippy::too_many_lines)]
@@ -2354,7 +2355,7 @@ fn bsim3_total_charges(
     if vbseff < vbs_i {
         vbseff = vbs_i;
     }
-    let vbs_eff_cv = vbseff; // For capMod=3, use same vbseff as DC
+    let vbs_eff_cv = vbseff;
 
     // Surface potential
     let sqrt_phis = if vbseff > 0.0 {
@@ -2588,158 +2589,298 @@ fn bsim3_total_charges(
         v.min(vds_i)
     };
 
-    // === CapMod=3 Charge Model (from b3v32ld.c) ===
+    // === Charge model dispatch (capMod 0/1/2/3) ===
 
     let cox_wl = cox * sp.weff_cv * sp.leff_cv;
-    let tox_ang = 1.0e8 * model.tox; // tox in Angstroms
 
-    // Vfbeff (effective flat-band voltage)
-    let v3 = sp.vfbzb - vgs_eff + vbs_eff_cv - DELTA_3;
-    let (vfbeff, _d_vfbeff_d_vg);
-    if sp.vfbzb <= 0.0 {
-        let t0 = (v3 * v3 - 4.0 * DELTA_3 * sp.vfbzb).sqrt();
-        let t1 = 0.5 * (1.0 + v3 / t0);
-        vfbeff = sp.vfbzb - 0.5 * (v3 + t0);
-        _d_vfbeff_d_vg = t1;
-    } else {
-        let t0 = (v3 * v3 + 4.0 * DELTA_3 * sp.vfbzb).sqrt();
-        let t1 = 0.5 * (1.0 + v3 / t0);
-        vfbeff = sp.vfbzb - 0.5 * (v3 + t0);
-        _d_vfbeff_d_vg = t1;
-    }
-
-    // Centroid thickness (first pass — depletion)
-    let t0 = (vgs_eff - vbs_eff_cv - sp.vfbzb) / tox_ang;
-    let tmp = t0 * sp.acde;
-    let tcen = if tmp > -EXP_THRESHOLD && tmp < EXP_THRESHOLD {
-        sp.ldeb * tmp.exp()
-    } else if tmp <= -EXP_THRESHOLD {
-        sp.ldeb * MIN_EXP
-    } else {
-        sp.ldeb * MAX_EXP
-    };
-
-    // Smooth doping transition
-    let link = 1.0e-3 * model.tox;
-    let v3l = sp.ldeb - tcen - link;
-    let v4l = (v3l * v3l + 4.0 * link * sp.ldeb).sqrt();
-    let tcen = sp.ldeb - 0.5 * (v3l + v4l);
-
-    // Centroid capacitance
-    let ccen = EPSSI / tcen;
-    let t2 = cox / (cox + ccen);
-    let coxeff = t2 * ccen;
-    let cox_wl_cen = cox_wl * coxeff / cox;
-
-    // Qac0 (accumulation charge)
-    let qac0 = cox_wl_cen * (vfbeff - sp.vfbzb);
-
-    // Qsub0 (substrate charge)
-    let t0_k = 0.5 * sp.k1ox;
-    let t3_sub = vgs_eff - vfbeff - vbs_eff_cv - vgsteff;
-    let (t1_sub, t2_sub);
-    if sp.k1ox == 0.0 {
-        t1_sub = 0.0;
-        t2_sub = 0.0;
-    } else if t3_sub < 0.0 {
-        t1_sub = t0_k + t3_sub / sp.k1ox;
-        t2_sub = cox_wl_cen;
-    } else {
-        t1_sub = (t0_k * t0_k + t3_sub).sqrt();
-        t2_sub = cox_wl_cen * t0_k / t1_sub;
-    }
-    let _ = t2_sub;
-    let qsub0 = cox_wl_cen * sp.k1ox * (t1_sub - t0_k);
-
-    // DeltaPhi
-    let denomi_dp = if sp.k1ox <= 0.0 {
-        0.25 * sp.moin * vtm
-    } else {
-        sp.moin * vtm * sp.k1ox * sp.k1ox
-    };
-    let t0_dp = if sp.k1ox <= 0.0 {
-        0.5 * sp.sqrt_phi
-    } else {
-        sp.k1ox * sp.sqrt_phi
-    };
-    let t1_dp = 2.0 * t0_dp + vgsteff;
-    let delta_phi = vtm * (1.0 + t1_dp * vgsteff / denomi_dp).ln();
-
-    // Second centroid calculation (inversion layer)
-    let t3_inv = 4.0 * (vth - sp.vfbzb - sp.phi);
-    let tox_2 = tox_ang * 2.0;
-    let t0_inv = if t3_inv >= 0.0 {
-        (vgsteff + t3_inv) / tox_2
-    } else {
-        (vgsteff + 1.0e-20) / tox_2
-    };
-    let tmp_inv = t0_inv.powf(0.7);
-    let t1_inv = 1.0 + tmp_inv;
-    let tcen2 = 1.9e-9 / t1_inv;
-
-    let ccen2 = EPSSI / tcen2;
-    let t0_c2 = cox / (cox + ccen2);
-    let coxeff2 = t0_c2 * ccen2;
-    let cox_wl_cen2 = cox_wl * coxeff2 / cox;
-
-    // AbulkCV
-    let abulk_cv = abulk0 * sp.abulk_cv_factor;
-
-    // VdsatCV
-    let vdsat_cv = (vgsteff - delta_phi) / abulk_cv;
-
-    // VdseffCV (smooth clamping to VdsatCV)
-    let v4_cv = vdsat_cv - vds_i - DELTA_4;
-    let t0_cv = (v4_cv * v4_cv + 4.0 * DELTA_4 * vdsat_cv).sqrt();
-    let vdseff_cv = if vds_i == 0.0 {
-        0.0
-    } else {
-        let v = vdsat_cv - 0.5 * (v4_cv + t0_cv);
-        v.min(vds_i).max(0.0)
-    };
-
-    // Gate charge (qgate) and bulk charge (qbulk)
-    let t0_q = abulk_cv * vdseff_cv;
-    let t1_q = vgsteff - delta_phi;
-    let t2_q = 12.0 * (t1_q - 0.5 * t0_q + 1.0e-20);
-    let t3_q = t0_q / t2_q;
-
-    let qgate = cox_wl_cen2 * (t1_q - t0_q * (0.5 - t3_q));
-
-    let t7_q = 1.0 - abulk_cv;
-    let qbulk = cox_wl_cen2 * t7_q * (0.5 * vdseff_cv - t0_q * vdseff_cv / t2_q);
-
-    // Source charge (xpart-dependent)
-    let qsrc;
-    if model.xpart > 0.5 {
-        // 0/100 partition (all charge to source)
-        qsrc = -cox_wl_cen2 * (t1_q / 2.0 + t0_q / 4.0 - 0.5 * t0_q * t0_q / t2_q);
-    } else if model.xpart < 0.5 {
-        // 40/60 partition (default)
-        let t2_s = t2_q / 12.0;
-        let t3_s = 0.5 * cox_wl_cen2 / (t2_s * t2_s);
-        let t4_s = t1_q * (2.0 * t0_q * t0_q / 3.0 + t1_q * (t1_q - 4.0 * t0_q / 3.0))
-            - 2.0 * t0_q * t0_q * t0_q / 15.0;
-        qsrc = -t3_s * t4_s;
-    } else {
-        // 50/50 partition
-        qsrc = -0.5 * qgate;
-    }
-
-    // Combine with Qac0 and Qsub0
-    let qgate_total_intr = qgate + qac0 + qsub0 - qbulk;
-    let qbulk_total_intr = qbulk - (qac0 + qsub0);
-
-    // Overlap charges
+    // Overlap charges: capMod 0/1 use simple linear, capMod 2/3 use smooth model
     let vgd = vgs - vds;
     let vgb = vgs - vbs;
-    let (qgdo, qgso, qgb_charge) = bsim3_overlap_charges(vgs, vgd, vgb, sp, model);
+    let (qgdo, qgso, qgb_charge) = if model.cap_mod <= 1 {
+        // Simple linear overlap
+        (sp.cgdo_eff * vgd, sp.cgso_eff * vgs, sp.cgbo_eff * vgb)
+    } else {
+        bsim3_overlap_charges(vgs, vgd, vgb, sp, model)
+    };
 
-    let qg_total = qgate_total_intr + qgdo + qgso + qgb_charge;
-    let qb_total = qbulk_total_intr - qgb_charge;
+    // AbulkCV (shared by capMod 1/2/3)
+    let abulk_cv = abulk0 * sp.abulk_cv_factor;
+
+    let (qgate_intr, qbulk_intr, qsrc) = match model.cap_mod {
+        0 => {
+            // capMod=0: Simple charge model (no Qac0/Qsub0, no centroid)
+            let arg1 = vgs_eff - vbs_eff_cv - sp.vfbzb - vgsteff;
+            if arg1 <= 0.0 {
+                let qg = cox_wl * arg1;
+                (qg, -qg, 0.0)
+            } else {
+                let t0 = 0.5 * sp.k1ox;
+                let t1 = (t0 * t0 + arg1).sqrt();
+                let qg_acc = cox_wl * sp.k1ox * (t1 - t0);
+                let qb_acc = -qg_acc;
+
+                let vdsat_cv = vgsteff / abulk_cv;
+                let (qg_ch, qb_ch, qs) = if vdsat_cv < vds_i {
+                    // Saturation
+                    let qg = cox_wl * (vgsteff - vdsat_cv / 3.0);
+                    let qb = cox_wl / 3.0 * (vdsat_cv - vgsteff);
+                    let qs = if model.xpart > 0.5 {
+                        -2.0 / 3.0 * cox_wl * vgsteff
+                    } else if model.xpart < 0.5 {
+                        -0.4 * cox_wl * vgsteff
+                    } else {
+                        -cox_wl / 3.0 * vgsteff
+                    };
+                    (qg, qb, qs)
+                } else {
+                    // Linear
+                    let t0 = abulk_cv * vds_i;
+                    let t1 = 12.0 * (vgsteff - 0.5 * t0 + 1e-20);
+                    let t2 = vds_i / t1;
+                    let t3 = t0 * t2;
+                    let qg = cox_wl * (vgsteff - 0.5 * vds_i + t3);
+                    let qb = cox_wl * (1.0 - abulk_cv) * (0.5 * vds_i - t3);
+                    let qs = charge_partition(model.xpart, cox_wl, vgsteff, t0, t1);
+                    (qg, qb, qs)
+                };
+                (qg_acc + qg_ch, qb_acc + qb_ch, qs)
+            }
+        }
+        1 => {
+            // capMod=1: k1ox model with charge partition
+            let arg1 = vgs_eff - vbs_eff_cv - sp.vfbzb - vgsteff;
+            if arg1 <= 0.0 {
+                let qg = cox_wl * arg1;
+                (qg, -qg, 0.0)
+            } else {
+                let t0 = 0.5 * sp.k1ox;
+                let t1 = (t0 * t0 + arg1).sqrt();
+                let qg_acc = cox_wl * sp.k1ox * (t1 - t0);
+                let qb_acc = -qg_acc;
+
+                let vdsat_cv = vgsteff / abulk_cv;
+                let (qg_ch, qb_ch, qs) = if vdsat_cv < vds_i {
+                    let qg = cox_wl * (vgsteff - vdsat_cv / 3.0);
+                    let qb = cox_wl / 3.0 * (vdsat_cv - vgsteff);
+                    let qs = if model.xpart > 0.5 {
+                        -2.0 / 3.0 * cox_wl * vgsteff
+                    } else if model.xpart < 0.5 {
+                        -0.4 * cox_wl * vgsteff
+                    } else {
+                        -cox_wl / 3.0 * vgsteff
+                    };
+                    (qg, qb, qs)
+                } else {
+                    let t0 = abulk_cv * vds_i;
+                    let t1 = 12.0 * (vgsteff - 0.5 * t0 + 1e-20);
+                    let t2 = vds_i / t1;
+                    let t3 = t0 * t2;
+                    let qg = cox_wl * (vgsteff - 0.5 * vds_i + t3);
+                    let qb = cox_wl * (1.0 - abulk_cv) * (0.5 * vds_i - t3);
+                    let qs = charge_partition(model.xpart, cox_wl, vgsteff, t0, t1);
+                    (qg, qb, qs)
+                };
+                (qg_acc + qg_ch, qb_acc + qb_ch, qs)
+            }
+        }
+        2 => {
+            // capMod=2: Qac0/Qsub0 corrections, no centroid
+            let (_vfbeff, qac0, qsub0) =
+                compute_qac0_qsub0(vgs_eff, vbs_eff_cv, vgsteff, cox_wl, sp);
+
+            let vdsat_cv = vgsteff / abulk_cv;
+            let v4_cv = vdsat_cv - vds_i - DELTA_4;
+            let t0_cv = (v4_cv * v4_cv + 4.0 * DELTA_4 * vdsat_cv).sqrt();
+            let vdseff_cv = if vds_i == 0.0 {
+                0.0
+            } else {
+                (vdsat_cv - 0.5 * (v4_cv + t0_cv)).min(vds_i).max(0.0)
+            };
+
+            let t0_q = abulk_cv * vdseff_cv;
+            let t1_q = 12.0 * (vgsteff - 0.5 * t0_q + 1e-20);
+            let t3_q = t0_q * vdseff_cv / t1_q;
+
+            let qgate = cox_wl * (vgsteff - 0.5 * vdseff_cv + t3_q);
+            let qbulk = cox_wl * (1.0 - abulk_cv) * (0.5 * vdseff_cv - t3_q);
+            let qsrc = charge_partition(model.xpart, cox_wl, vgsteff, t0_q, t1_q);
+
+            let qg_intr = qgate + qac0 + qsub0 - qbulk;
+            let qb_intr = qbulk - (qac0 + qsub0);
+            (qg_intr, qb_intr, qsrc)
+        }
+        _ => {
+            // capMod=3 (default): Centroid model with Qac0/Qsub0 + DeltaPhi
+            let tox_ang = 1.0e8 * model.tox;
+
+            // Vfbeff and Qac0/Qsub0 with centroid-corrected CoxWL
+            let (vfbeff, _) = compute_vfbeff(vgs_eff, vbs_eff_cv, sp);
+
+            // Centroid thickness (depletion)
+            let t0 = (vgs_eff - vbs_eff_cv - sp.vfbzb) / tox_ang;
+            let tmp = t0 * sp.acde;
+            let tcen = if tmp > -EXP_THRESHOLD && tmp < EXP_THRESHOLD {
+                sp.ldeb * tmp.exp()
+            } else if tmp <= -EXP_THRESHOLD {
+                sp.ldeb * MIN_EXP
+            } else {
+                sp.ldeb * MAX_EXP
+            };
+            let link = 1.0e-3 * model.tox;
+            let v3l = sp.ldeb - tcen - link;
+            let v4l = (v3l * v3l + 4.0 * link * sp.ldeb).sqrt();
+            let tcen = sp.ldeb - 0.5 * (v3l + v4l);
+
+            let ccen = EPSSI / tcen;
+            let t2 = cox / (cox + ccen);
+            let coxeff = t2 * ccen;
+            let cox_wl_cen = cox_wl * coxeff / cox;
+
+            let qac0 = cox_wl_cen * (vfbeff - sp.vfbzb);
+
+            let t0_k = 0.5 * sp.k1ox;
+            let t3_sub = vgs_eff - vfbeff - vbs_eff_cv - vgsteff;
+            let t1_sub = if sp.k1ox == 0.0 {
+                0.0
+            } else if t3_sub < 0.0 {
+                t0_k + t3_sub / sp.k1ox
+            } else {
+                (t0_k * t0_k + t3_sub).sqrt()
+            };
+            let qsub0 = cox_wl_cen * sp.k1ox * (t1_sub - t0_k);
+
+            // DeltaPhi
+            let denomi_dp = if sp.k1ox <= 0.0 {
+                0.25 * sp.moin * vtm
+            } else {
+                sp.moin * vtm * sp.k1ox * sp.k1ox
+            };
+            let t0_dp = if sp.k1ox <= 0.0 {
+                0.5 * sp.sqrt_phi
+            } else {
+                sp.k1ox * sp.sqrt_phi
+            };
+            let t1_dp = 2.0 * t0_dp + vgsteff;
+            let delta_phi = vtm * (1.0 + t1_dp * vgsteff / denomi_dp).ln();
+
+            // Second centroid (inversion layer)
+            let t3_inv = 4.0 * (vth - sp.vfbzb - sp.phi);
+            let tox_2 = tox_ang * 2.0;
+            let t0_inv = if t3_inv >= 0.0 {
+                (vgsteff + t3_inv) / tox_2
+            } else {
+                (vgsteff + 1.0e-20) / tox_2
+            };
+            let tmp_inv = t0_inv.powf(0.7);
+            let tcen2 = 1.9e-9 / (1.0 + tmp_inv);
+            let ccen2 = EPSSI / tcen2;
+            let t0_c2 = cox / (cox + ccen2);
+            let coxeff2 = t0_c2 * ccen2;
+            let cox_wl_cen2 = cox_wl * coxeff2 / cox;
+
+            // VdsatCV with DeltaPhi
+            let vdsat_cv = (vgsteff - delta_phi) / abulk_cv;
+            let v4_cv = vdsat_cv - vds_i - DELTA_4;
+            let t0_cv = (v4_cv * v4_cv + 4.0 * DELTA_4 * vdsat_cv).sqrt();
+            let vdseff_cv = if vds_i == 0.0 {
+                0.0
+            } else {
+                (vdsat_cv - 0.5 * (v4_cv + t0_cv)).min(vds_i).max(0.0)
+            };
+
+            let t0_q = abulk_cv * vdseff_cv;
+            let t1_q = vgsteff - delta_phi;
+            let t2_q = 12.0 * (t1_q - 0.5 * t0_q + 1.0e-20);
+            let t3_q = t0_q / t2_q;
+
+            let qgate = cox_wl_cen2 * (t1_q - t0_q * (0.5 - t3_q));
+            let t7_q = 1.0 - abulk_cv;
+            let qbulk = cox_wl_cen2 * t7_q * (0.5 * vdseff_cv - t0_q * vdseff_cv / t2_q);
+
+            let qsrc = if model.xpart > 0.5 {
+                -cox_wl_cen2 * (t1_q / 2.0 + t0_q / 4.0 - 0.5 * t0_q * t0_q / t2_q)
+            } else if model.xpart < 0.5 {
+                let t2_s = t2_q / 12.0;
+                let t3_s = 0.5 * cox_wl_cen2 / (t2_s * t2_s);
+                let t4_s = t1_q * (2.0 * t0_q * t0_q / 3.0 + t1_q * (t1_q - 4.0 * t0_q / 3.0))
+                    - 2.0 * t0_q * t0_q * t0_q / 15.0;
+                -t3_s * t4_s
+            } else {
+                -0.5 * qgate
+            };
+
+            let qg_intr = qgate + qac0 + qsub0 - qbulk;
+            let qb_intr = qbulk - (qac0 + qsub0);
+            (qg_intr, qb_intr, qsrc)
+        }
+    };
+
+    let qg_total = qgate_intr + qgdo + qgso + qgb_charge;
+    let qb_total = qbulk_intr - qgb_charge;
     let qs_total = qsrc - qgso;
 
     (qg_total, qb_total, qs_total)
+}
+
+/// Compute charge partition for source charge.
+/// Used by capMod 0/1/2 in the linear region.
+fn charge_partition(xpart: f64, cox_wl: f64, vgsteff: f64, t0: f64, t1: f64) -> f64 {
+    if xpart > 0.5 {
+        // 0/100 partition
+        let t1_2 = t1 + t1;
+        -cox_wl * (0.5 * vgsteff + 0.25 * t0 - t0 * t0 / t1_2)
+    } else if xpart < 0.5 {
+        // 40/60 partition
+        let t1_s = t1 / 12.0;
+        let t2_s = 0.5 * cox_wl / (t1_s * t1_s);
+        let t3_s = vgsteff * (2.0 * t0 * t0 / 3.0 + vgsteff * (vgsteff - 4.0 * t0 / 3.0))
+            - 2.0 * t0 * t0 * t0 / 15.0;
+        -t2_s * t3_s
+    } else {
+        // 50/50 partition: qsrc = -0.5 * (qgate + qbulk)
+        -0.5 * cox_wl * vgsteff
+    }
+}
+
+/// Compute Vfbeff (effective flat-band voltage).
+/// Returns (vfbeff, d_vfbeff_d_vg).
+fn compute_vfbeff(vgs_eff: f64, vbs_eff_cv: f64, sp: &Bsim3SizeParam) -> (f64, f64) {
+    let v3 = sp.vfbzb - vgs_eff + vbs_eff_cv - DELTA_3;
+    if sp.vfbzb <= 0.0 {
+        let t0 = (v3 * v3 - 4.0 * DELTA_3 * sp.vfbzb).sqrt();
+        let t1 = 0.5 * (1.0 + v3 / t0);
+        (sp.vfbzb - 0.5 * (v3 + t0), t1)
+    } else {
+        let t0 = (v3 * v3 + 4.0 * DELTA_3 * sp.vfbzb).sqrt();
+        let t1 = 0.5 * (1.0 + v3 / t0);
+        (sp.vfbzb - 0.5 * (v3 + t0), t1)
+    }
+}
+
+/// Compute Qac0 and Qsub0 for capMod=2 (without centroid).
+/// Returns (vfbeff, qac0, qsub0).
+fn compute_qac0_qsub0(
+    vgs_eff: f64,
+    vbs_eff_cv: f64,
+    vgsteff: f64,
+    cox_wl: f64,
+    sp: &Bsim3SizeParam,
+) -> (f64, f64, f64) {
+    let (vfbeff, _) = compute_vfbeff(vgs_eff, vbs_eff_cv, sp);
+    let qac0 = cox_wl * (vfbeff - sp.vfbzb);
+
+    let t0_k = 0.5 * sp.k1ox;
+    let t3_sub = vgs_eff - vfbeff - vbs_eff_cv - vgsteff;
+    let t1_sub = if sp.k1ox == 0.0 {
+        0.0
+    } else if t3_sub < 0.0 {
+        t0_k + t3_sub / sp.k1ox
+    } else {
+        (t0_k * t0_k + t3_sub).sqrt()
+    };
+    let qsub0 = cox_wl * sp.k1ox * (t1_sub - t0_k);
+
+    (vfbeff, qac0, qsub0)
 }
 
 /// Compute junction capacitances for BSIM3.

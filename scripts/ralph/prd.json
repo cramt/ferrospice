@@ -2,7 +2,15 @@
   "project": "Ferrospice",
   "branchName": "ralph/simulation-engine",
   "description": "Ferrospice Simulation Engine - SPICE circuit simulator library in Rust, rewriting ngspice. Done when all 113 ngspice base test suite .cir files pass.",
-  "passLog": [],
+  "passLog": [
+    {
+      "iteration": 1,
+      "passType": "implementation",
+      "summary": "Implemented capMod 0/1/2 charge models for BSIM3, ported qaSpec tests as 11 integration tests covering DC sweep, AC frequency, transient, and OP analyses",
+      "date": "2026-03-09",
+      "storyId": "US-023"
+    }
+  ],
   "userStories": [
     {
       "id": "US-001",
@@ -402,8 +410,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 23,
-      "passes": false,
-      "notes": "Reference: second half of b3ld.c (charge equations), b3acld.c. The qaSpec tests use a parametric format — may need a simple qaSpec parser or manual conversion to .cir files."
+      "passes": true,
+      "notes": "capMod 0/1/2/3 charge models implemented. qaSpec tests manually converted to .cir integration tests: DC sweep (3 Vg biases, short channel, NRD/NRS), AC freq (capMod=3, capMod=1, xpart=1), transient, OP (NMOS+PMOS). 11 integration tests total."
     },
     {
       "id": "US-024",
