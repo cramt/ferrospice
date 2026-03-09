@@ -75,7 +75,10 @@
       ],
       "priority": 1,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-002",
@@ -91,7 +94,10 @@
       ],
       "priority": 2,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-003",
@@ -108,7 +114,10 @@
       ],
       "priority": 3,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-004",
@@ -124,7 +133,10 @@
       ],
       "priority": 4,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-005",
@@ -140,7 +152,11 @@
       ],
       "priority": 5,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation",
+        "testing"
+      ]
     },
     {
       "id": "US-006",
@@ -156,7 +172,10 @@
       ],
       "priority": 6,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-007",
@@ -173,7 +192,10 @@
       ],
       "priority": 7,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-008",
@@ -190,7 +212,10 @@
       ],
       "priority": 8,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-009",
@@ -209,7 +234,10 @@
       ],
       "priority": 9,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-010",
@@ -227,7 +255,10 @@
       ],
       "priority": 10,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-011",
@@ -245,7 +276,10 @@
       ],
       "priority": 11,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-012",
@@ -264,7 +298,10 @@
       ],
       "priority": 12,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-013",
@@ -282,7 +319,10 @@
       ],
       "priority": 13,
       "passes": true,
-      "notes": "Ebers-Moll/Gummel-Poon level 1 BJT with NPN/PNP, Early effect, high-injection rolloff, series resistances, junction caps. Integrated into OP, DC sweep, AC, and transient analyses."
+      "notes": "Ebers-Moll/Gummel-Poon level 1 BJT with NPN/PNP, Early effect, high-injection rolloff, series resistances, junction caps. Integrated into OP, DC sweep, AC, and transient analyses.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-014",
@@ -301,7 +341,10 @@
       ],
       "priority": 14,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-015",
@@ -318,7 +361,10 @@
       ],
       "priority": 15,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-016",
@@ -336,7 +382,10 @@
       ],
       "priority": 16,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-017",
@@ -355,7 +404,10 @@
       ],
       "priority": 17,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-018",
@@ -372,7 +424,10 @@
       ],
       "priority": 18,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-019",
@@ -388,7 +443,10 @@
       ],
       "priority": 19,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-020",
@@ -403,7 +461,10 @@
       ],
       "priority": 20,
       "passes": true,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-021",
@@ -422,7 +483,10 @@
       ],
       "priority": 21,
       "passes": true,
-      "notes": "BSIM3v3.2.4 implemented with ~380 params, size binning, 3 mobility models, Vth/SCE/DIBL, unified strong/weak inversion, velocity saturation, CLM, junction diodes, intrinsic capacitances, NR limiting, AC/noise stamps."
+      "notes": "BSIM3v3.2.4 implemented with ~380 params, size binning, 3 mobility models, Vth/SCE/DIBL, unified strong/weak inversion, velocity saturation, CLM, junction diodes, intrinsic capacitances, NR limiting, AC/noise stamps.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-022",
@@ -442,7 +506,10 @@
       ],
       "priority": 22,
       "passes": true,
-      "notes": "Implemented BSIM4 level 14 model with ~2400 lines of Rust. Supports mobMod=0, capMod=2, igcMod/igbMod=1, dioMod=1, rdsmod=0. Integrated into MNA, simulate, AC, noise, and transient analysis."
+      "notes": "Implemented BSIM4 level 14 model with ~2400 lines of Rust. Supports mobMod=0, capMod=2, igcMod/igbMod=1, dioMod=1, rdsmod=0. Integrated into MNA, simulate, AC, noise, and transient analysis.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-023",
@@ -460,7 +527,10 @@
       ],
       "priority": 23,
       "passes": true,
-      "notes": "capMod 0/1/2/3 charge models implemented. qaSpec tests manually converted to .cir integration tests: DC sweep (3 Vg biases, short channel, NRD/NRS), AC freq (capMod=3, capMod=1, xpart=1), transient, OP (NMOS+PMOS). 11 integration tests total."
+      "notes": "capMod 0/1/2/3 charge models implemented. qaSpec tests manually converted to .cir integration tests: DC sweep (3 Vg biases, short channel, NRD/NRS), AC freq (capMod=3, capMod=1, xpart=1), transient, OP (NMOS+PMOS). 11 integration tests total.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-024",
@@ -479,7 +549,10 @@
       ],
       "priority": 24,
       "passes": true,
-      "notes": "Implemented during US-022. Bsim4Model with 237 parse arms (~212+ unique params), size_dep_param() temperature preprocessing, Bsim4Instance struct, wpemod/geomod support, 8 unit tests."
+      "notes": "Implemented during US-022. Bsim4Model with 237 parse arms (~212+ unique params), size_dep_param() temperature preprocessing, Bsim4Instance struct, wpemod/geomod support, 8 unit tests.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-025",
@@ -498,7 +571,10 @@
       ],
       "priority": 25,
       "passes": true,
-      "notes": "GISL implemented, mobMod 0/1/2 supported, vtfbphi1 preprocessing added, critical VADITS bug fixed. 7 integration tests with full qaSpec CMC parameters (NMOS DC sweep at 3 biases + saturation plateau + PMOS OP/cutoff + NMOS OP)."
+      "notes": "GISL implemented, mobMod 0/1/2 supported, vtfbphi1 preprocessing added, critical VADITS bug fixed. 7 integration tests with full qaSpec CMC parameters (NMOS DC sweep at 3 biases + saturation plateau + PMOS OP/cutoff + NMOS OP).",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-026",
@@ -515,7 +591,10 @@
       ],
       "priority": 26,
       "passes": true,
-      "notes": "Reference: b4noi.c for noise, second half of b4ld.c for charges. BSIM4 has more sophisticated noise than BSIM3 (tnoimod, fnoimod combinations)."
+      "notes": "Reference: b4noi.c for noise, second half of b4ld.c for charges. BSIM4 has more sophisticated noise than BSIM3 (tnoimod, fnoimod combinations).",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-027",
@@ -533,7 +612,10 @@
       ],
       "priority": 27,
       "passes": true,
-      "notes": "Implemented. 4 tests passing, 3 ignored (convergence needs source-stepping). Model core complete: DC load, AC stamps, transient, noise integration. SOI-specific: floating body, 4-component junction model, GIDL, impact ionization."
+      "notes": "Implemented. 4 tests passing, 3 ignored (convergence needs source-stepping). Model core complete: DC load, AC stamps, transient, noise integration. SOI-specific: floating body, 4-component junction model, GIDL, impact ionization.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-028",
@@ -549,7 +631,10 @@
       ],
       "priority": 28,
       "passes": true,
-      "notes": "Reference: ngspice bsim3soifd/ — 13,884 lines. Should share significant infrastructure with BSIM3SOI-PD."
+      "notes": "Reference: ngspice bsim3soifd/ — 13,884 lines. Should share significant infrastructure with BSIM3SOI-PD.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-029",
@@ -565,7 +650,10 @@
       ],
       "priority": 29,
       "passes": true,
-      "notes": "Reference: ngspice bsim3soidd/ — 14,860 lines. Third SOI variant, should reuse most of PD/FD infrastructure."
+      "notes": "Reference: ngspice bsim3soidd/ — 14,860 lines. Third SOI variant, should reuse most of PD/FD infrastructure.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-030",
@@ -584,7 +672,10 @@
       ],
       "priority": 30,
       "passes": false,
-      "notes": "Reference: ngspice vbic/ — 9,742 lines total. vbicload.c (4118 lines) has the core equations. 108-element parameter array per instance."
+      "notes": "Reference: ngspice vbic/ — 9,742 lines total. vbicload.c (4118 lines) has the core equations. 108-element parameter array per instance.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-031",
@@ -601,7 +692,10 @@
       ],
       "priority": 31,
       "passes": false,
-      "notes": "Builds on US-030 DC implementation. The charge model adds junction capacitances and transit time effects."
+      "notes": "Builds on US-030 DC implementation. The charge model adds junction capacitances and transit time effects.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-032",
@@ -617,7 +711,10 @@
       ],
       "priority": 32,
       "passes": false,
-      "notes": "MESA is a MESFET variant. Reference: ngspice mesa/ — 3,570 lines total, moderate complexity."
+      "notes": "MESA is a MESFET variant. Reference: ngspice mesa/ — 3,570 lines total, moderate complexity.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-033",
@@ -633,7 +730,10 @@
       ],
       "priority": 33,
       "passes": false,
-      "notes": "Reference: ngspice mos6/ — 3,594 lines. Can build on existing MOSFET level 1 infrastructure."
+      "notes": "Reference: ngspice mos6/ — 3,594 lines. Can build on existing MOSFET level 1 infrastructure.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-034",
@@ -650,7 +750,10 @@
       ],
       "priority": 34,
       "passes": false,
-      "notes": "Two small related FET models. HFET and MES are both ~3,500 lines each, moderate complexity, related to JFET/MESA family."
+      "notes": "Two small related FET models. HFET and MES are both ~3,500 lines each, moderate complexity, related to JFET/MESA family.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-035",
@@ -668,7 +771,10 @@
       ],
       "priority": 35,
       "passes": false,
-      "notes": "Reference: ngspice ltra/ — 4,660 lines. Key challenge is ltramisc.c (1727 lines) with history/convolution. Most complex transmission line model."
+      "notes": "Reference: ngspice ltra/ — 4,660 lines. Key challenge is ltramisc.c (1727 lines) with history/convolution. Most complex transmission line model.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-036",
@@ -684,7 +790,10 @@
       ],
       "priority": 36,
       "passes": false,
-      "notes": "TXL is simpler than LTRA. CPL extends TXL to coupled lines. Can share infrastructure with LTRA from US-035."
+      "notes": "TXL is simpler than LTRA. CPL extends TXL to coupled lines. Can share infrastructure with LTRA from US-035.",
+      "tags": [
+        "implementation"
+      ]
     },
     {
       "id": "US-037",
@@ -700,7 +809,10 @@
       ],
       "priority": 37,
       "passes": false,
-      "notes": "These test the netlist parser, function evaluation, and .lib/.include processing. May require parser enhancements in ferrospice-netlist."
+      "notes": "These test the netlist parser, function evaluation, and .lib/.include processing. May require parser enhancements in ferrospice-netlist.",
+      "tags": [
+        "testing"
+      ]
     },
     {
       "id": "US-038",
@@ -718,7 +830,10 @@
       ],
       "priority": 38,
       "passes": false,
-      "notes": "Temperature tests may require .TEMP and .PARAM TEMPER support in the parser. Misc tests cover edge cases across all analyses."
+      "notes": "Temperature tests may require .TEMP and .PARAM TEMPER support in the parser. Misc tests cover edge cases across all analyses.",
+      "tags": [
+        "testing"
+      ]
     },
     {
       "id": "US-039",
@@ -735,7 +850,10 @@
       ],
       "priority": 39,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "testing"
+      ]
     },
     {
       "id": "US-040",
@@ -750,7 +868,10 @@
       ],
       "priority": 40,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tags": [
+        "cli"
+      ]
     },
     {
       "id": "US-041",
@@ -766,7 +887,10 @@
       ],
       "priority": 41,
       "passes": false,
-      "notes": "Currently missing: license field on subcrates, repository/homepage/keywords/categories on all crates, version constraints on path deps. ferrospice root uses edition 2024 (Rust 1.85+)."
+      "notes": "Currently missing: license field on subcrates, repository/homepage/keywords/categories on all crates, version constraints on path deps. ferrospice root uses edition 2024 (Rust 1.85+).",
+      "tags": [
+        "crate"
+      ]
     },
     {
       "id": "US-042",
@@ -783,7 +907,10 @@
       ],
       "priority": 42,
       "passes": false,
-      "notes": "No LICENSE file or README currently exists. The netlist crate has good module-level rustdoc already."
+      "notes": "No LICENSE file or README currently exists. The netlist crate has good module-level rustdoc already.",
+      "tags": [
+        "crate"
+      ]
     },
     {
       "id": "US-043",
@@ -801,7 +928,10 @@
       ],
       "priority": 43,
       "passes": false,
-      "notes": "ferrospice-netlist has excellent docs already. ferrospice-core has module-level docs on device models but no crate-level doc comment. Need to audit pub visibility — some internal helpers may be needlessly public."
+      "notes": "ferrospice-netlist has excellent docs already. ferrospice-core has module-level docs on device models but no crate-level doc comment. Need to audit pub visibility — some internal helpers may be needlessly public.",
+      "tags": [
+        "crate"
+      ]
     },
     {
       "id": "US-044",
@@ -819,7 +949,10 @@
       ],
       "priority": 44,
       "passes": false,
-      "notes": "Currently the root crate is just a Hello World main.rs. Need to design what ferrospice as a library actually exports. Consider: should users depend on ferrospice (umbrella) or ferrospice-core directly?"
+      "notes": "Currently the root crate is just a Hello World main.rs. Need to design what ferrospice as a library actually exports. Consider: should users depend on ferrospice (umbrella) or ferrospice-core directly?",
+      "tags": [
+        "crate"
+      ]
     },
     {
       "id": "US-045",
@@ -838,7 +971,10 @@
       ],
       "priority": 45,
       "passes": false,
-      "notes": "No examples/ directory exists. Examples serve as both documentation and API integration tests."
+      "notes": "No examples/ directory exists. Examples serve as both documentation and API integration tests.",
+      "tags": [
+        "crate"
+      ]
     },
     {
       "id": "US-046",
@@ -855,7 +991,10 @@
       ],
       "priority": 46,
       "passes": false,
-      "notes": "No CI exists yet. The project uses nix develop for reproducible dev environments — CI should leverage this."
+      "notes": "No CI exists yet. The project uses nix develop for reproducible dev environments — CI should leverage this.",
+      "tags": [
+        "crate"
+      ]
     },
     {
       "id": "US-047",
@@ -871,7 +1010,10 @@
       ],
       "priority": 47,
       "passes": false,
-      "notes": "Publishing order matters: ferrospice-netlist first (no internal deps), then ferrospice-core, then ferrospice."
+      "notes": "Publishing order matters: ferrospice-netlist first (no internal deps), then ferrospice-core, then ferrospice.",
+      "tags": [
+        "crate"
+      ]
     },
     {
       "id": "US-048",
@@ -889,7 +1031,10 @@
       ],
       "priority": 48,
       "passes": false,
-      "notes": "ngspice-upstream/ is ~100MB+ of C source — must be excluded. The scripts/ralph/ directory with prd.json should also be excluded."
+      "notes": "ngspice-upstream/ is ~100MB+ of C source — must be excluded. The scripts/ralph/ directory with prd.json should also be excluded.",
+      "tags": [
+        "crate"
+      ]
     }
   ]
 }
