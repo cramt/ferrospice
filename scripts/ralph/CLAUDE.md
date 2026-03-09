@@ -94,6 +94,7 @@ If there are still stories with `passes: false`, end your response normally (ano
 
 - Do ONE pass per iteration
 - Commit frequently
+- **Always push after committing** (`git push`)
 - Keep CI green
 - Read the Codebase Patterns section in progress.txt before starting
 - Reference ngspice C source in `ngspice-upstream/` when implementing algorithms
