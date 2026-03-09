@@ -365,6 +365,11 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
             .sum::<usize>()
         + mna
+            .bsim3soi_fds
+            .iter()
+            .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
+            .sum::<usize>()
+        + mna
             .bsim4s
             .iter()
             .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
@@ -754,6 +759,15 @@ fn solve_timestep(
             .collect::<Vec<(f64, f64, f64, f64)>>(),
     );
 
+    // Track previous BSIM3SOI-FD voltages (vgs, vds, vbs, ves) for limiting.
+    let bsim3soi_fds = &mna.bsim3soi_fds;
+    let prev_bsim3soi_fd_voltages = std::cell::RefCell::new(
+        bsim3soi_fds
+            .iter()
+            .map(|b| b.terminal_voltages(prev_solution))
+            .collect::<Vec<(f64, f64, f64, f64)>>(),
+    );
+
     // Track previous BSIM4 voltages (vgs, vds, vbs) for limiting.
     let bsim4s = &mna.bsim4s;
     let prev_bsim4_voltages = std::cell::RefCell::new(
@@ -940,6 +954,40 @@ fn solve_timestep(
                     &bsim.model,
                 );
                 crate::bsim3soi_pd::stamp_bsim3soi_pd(
+                    &mut system.matrix,
+                    &mut system.rhs,
+                    bsim,
+                    &comp,
+                );
+            }
+
+            // 9b. Stamp BSIM3SOI-FD companion models.
+            let mut prev_soi_fd = prev_bsim3soi_fd_voltages.borrow_mut();
+            for (bi, bsim) in bsim3soi_fds.iter().enumerate() {
+                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
+
+                let (vgs, vds, vbs, ves) = crate::bsim3soi_fd::bsim3soi_fd_limit(
+                    raw_vgs,
+                    raw_vds,
+                    raw_vbs,
+                    raw_ves,
+                    prev_soi_fd[bi].0,
+                    prev_soi_fd[bi].1,
+                    prev_soi_fd[bi].2,
+                    prev_soi_fd[bi].3,
+                    bsim.vth0_inst,
+                );
+                prev_soi_fd[bi] = (vgs, vds, vbs, ves);
+
+                let comp = crate::bsim3soi_fd::bsim3soi_fd_companion(
+                    vgs,
+                    vds,
+                    vbs,
+                    ves,
+                    &bsim.size_params,
+                    &bsim.model,
+                );
+                crate::bsim3soi_fd::stamp_bsim3soi_fd(
                     &mut system.matrix,
                     &mut system.rhs,
                     bsim,

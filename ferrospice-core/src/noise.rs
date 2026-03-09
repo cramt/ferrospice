@@ -486,6 +486,28 @@ fn compute_total_noise(
         total += channel_noise * adjoint_transfer_sq(adjoint, dp, sp_idx);
     }
 
+    // BSIM3SOI-FD noise sources.
+    for bsim in &mna.bsim3soi_fds {
+        let (vgs, vds, vbs, ves) = bsim.terminal_voltages(op_solution);
+        let comp = crate::bsim3soi_fd::bsim3soi_fd_companion(
+            vgs,
+            vds,
+            vbs,
+            ves,
+            &bsim.size_params,
+            &bsim.model,
+        );
+        let m = bsim.m;
+
+        let dp = bsim.drain_eff_idx();
+        let sp_idx = bsim.source_eff_idx();
+
+        // Channel thermal noise: (2/3) * 4kT * |gm|.
+        let gm = comp.gm.abs() * m;
+        let channel_noise = (8.0 / 3.0) * K_BOLTZ * T_NOM * gm;
+        total += channel_noise * adjoint_transfer_sq(adjoint, dp, sp_idx);
+    }
+
     // BSIM4 noise sources.
     for bsim in &mna.bsim4s {
         let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);
