@@ -112,6 +112,10 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Device noise params: KF (flicker coeff), AF (flicker exponent) on DiodeModel, BjtModel, MosfetModel, JfetModel
 - Noise result: two plots — noise1 (spectrum: frequency + onoise/inoise_spectrum) + noise2 (integrated: onoise/inoise_total)
 - `generate_ac_sweep()` and `stamp_imag_conductance()` are public in ac.rs — reusable by noise
+- AC device stamping shared via `stamp_ac_devices()`, `build_ac_system()`, `apply_ac_excitation()` in ac.rs — noise.rs imports these instead of duplicating
+- `BsimAcStamp` struct + `stamp_bsim_ac()` in ac.rs — unified BSIM3/BSIM4 AC small-signal stamping
+- `expr_val()` and `expr_val_or()` live in lib.rs as `pub(crate)` — shared across simulate.rs, transient.rs, ac.rs, noise.rs
+- BSIM3/BSIM4 instances have `ac_stamp(&self, companion) -> BsimAcStamp` method for data-oriented AC extraction
 - PZ analysis: `simulate_pz(&Netlist) -> Result<SimResult>` in ferrospice-core::pz
 - PZ uses eigenvalue decomposition: poles from det(G+sC)=0, zeros from cofactor determinant
 - PZ eigenvalues: G^{-1}*C eigenvalues → poles = -1/λ for non-zero λ; fallback to GEV when G singular
@@ -248,6 +252,19 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Always validate against ngspice C source line by line for complex formulas — VADITS was silently wrong
   - Bisection testing (progressively adding parameters) is effective for isolating param-dependent bugs
   - Self-heating (shmod) is NOT a BSIM4 feature in ngspice — only parametric temperature (tempMod)
+---
+
+## Iteration 5: Architecture pass — consolidate AC device stamping
+- **Pass type:** architecture
+- **What was refactored:**
+  - Extracted `stamp_ac_devices()`, `build_ac_system()`, `apply_ac_excitation()` from ac.rs as public functions
+  - noise.rs now imports these instead of duplicating ~400 lines of AC device stamping code
+  - Created `BsimAcStamp` struct + `stamp_bsim_ac()` for shared BSIM3/BSIM4 AC stamping
+  - Added `ac_stamp()` method to `Bsim3Instance` and `Bsim4Instance`
+  - Moved `expr_val()` and `expr_val_or()` from 4 separate modules to `lib.rs` as `pub(crate)`
+  - Moved `extract_op_solution()` to ac.rs as shared function (was duplicated in ac.rs and noise.rs)
+- **Net result:** ~530 lines removed (7 files changed, 302 insertions, 840 deletions)
+- **Tests:** 311 tests pass, 0 regressions, clippy clean, fmt clean
 ---
 
 ## Iteration 4: US-026 — BSIM4 AC, charge model, noise, and test suite
