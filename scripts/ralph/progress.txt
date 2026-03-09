@@ -362,3 +362,16 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - AC stamp for VBIC needs stamp_vccs helper since conductances come from transconductances, not simple two-terminal conductances
 - **Tests:** 14 VBIC unit tests pass (parameter defaults, parsing, temperature, companion forward/reverse/cutoff/PNP, internal nodes, depletion charge, stamp)
 ---
+
+## 2026-03-09 - US-045 (implementation)
+- Created examples/ directory with 4 runnable examples using only the public API
+- Added ferrospice-core as root crate dependency
+- Files created: examples/dc_operating_point.rs, examples/dc_sweep.rs, examples/ac_analysis.rs, examples/transient.rs
+- Files modified: Cargo.toml (added ferrospice-core dep)
+- **Examples:**
+  - dc_operating_point: resistive voltage divider, prints V(mid) ≈ 0.667V
+  - dc_sweep: diode I-V curve from -0.5V to 0.8V
+  - ac_analysis: RC low-pass filter frequency response (f_c ≈ 159 Hz)
+  - transient: RC pulse response with τ = 10ms
+- **Tests:** All existing tests pass, clippy clean, fmt clean
+---

@@ -65,6 +65,13 @@
       "summary": "Implemented VBIC (LEVEL=4) BJT model: VbicModel struct with 104 parameters, from_model_def() parser, temperature_adjust(), DC companion model with transport currents/parasitic paths/avalanche/quasi-saturation, stamp_vbic_with_voltages(), depletion_charge(), voltage limiting. Integrated into mna.rs, simulate.rs, ac.rs, transient.rs, noise.rs. 14 unit tests.",
       "date": "2026-03-09",
       "storyId": "US-030"
+    },
+    {
+      "iteration": 10,
+      "passType": "implementation",
+      "summary": "Created examples/ directory with 4 runnable examples (dc_operating_point, dc_sweep, ac_analysis, transient) using only the public API. Added ferrospice-core as root crate dependency.",
+      "date": "2026-03-09",
+      "storyId": "US-045"
     }
   ],
   "userStories": [
@@ -977,7 +984,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 45,
-      "passes": false,
+      "passes": true,
       "notes": "No examples/ directory exists. Examples serve as both documentation and API integration tests.",
       "tags": [
         "crate"
