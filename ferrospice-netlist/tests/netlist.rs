@@ -450,6 +450,7 @@ fn mosfet_with_params() {
         g,
         s,
         bulk,
+        body: _,
         model,
         params,
     } = &n.elements().next().unwrap().kind

@@ -549,17 +549,36 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             }
         }
         'M' => {
+            // M d g s bulk [body] model [params]
+            // Detect 4 vs 5 terminal: count positional (non-kv) tokens after d,g,s.
             let d = need!(0, "drain").to_string();
             let g = need!(1, "gate").to_string();
             let s = need!(2, "source").to_string();
-            let bulk = need!(3, "bulk").to_string();
-            let model = need!(4, "model").to_string();
-            let params: Vec<_> = rest[5..].iter().filter_map(|t| parse_kv(t)).collect();
+            let positional: Vec<&str> = rest[3..]
+                .iter()
+                .filter(|t| !t.contains('='))
+                .map(|s| s.as_str())
+                .collect();
+            let params: Vec<_> = rest[3..].iter().filter_map(|t| parse_kv(t)).collect();
+            let (bulk, body, model) = if positional.len() >= 3 {
+                // 5-terminal: bulk body model
+                (
+                    positional[0].to_string(),
+                    Some(positional[1].to_string()),
+                    positional[2].to_string(),
+                )
+            } else if positional.len() >= 2 {
+                // 4-terminal: bulk model
+                (positional[0].to_string(), None, positional[1].to_string())
+            } else {
+                return Err(syntax(lineno, "M: missing bulk/model"));
+            };
             ElementKind::Mosfet {
                 d,
                 g,
                 s,
                 bulk,
+                body,
                 model,
                 params,
             }

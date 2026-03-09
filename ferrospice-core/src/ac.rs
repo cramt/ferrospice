@@ -415,7 +415,21 @@ pub fn stamp_ac_devices(
         stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }
 
-    // 5e. Stamp BSIM4 small-signal model at DC operating point.
+    // 5e. Stamp BSIM3SOI-PD small-signal model at DC operating point.
+    for bsim in &mna.bsim3soi_pds {
+        let (vgs, vds, vbs, ves) = bsim.terminal_voltages(op_solution);
+        let comp = crate::bsim3soi_pd::bsim3soi_pd_companion(
+            vgs,
+            vds,
+            vbs,
+            ves,
+            &bsim.size_params,
+            &bsim.model,
+        );
+        stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
+    }
+
+    // 5f. Stamp BSIM4 small-signal model at DC operating point.
     for bsim in &mna.bsim4s {
         let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);
         let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);

@@ -404,12 +404,17 @@ pub enum ElementKind {
         model: String,
         params: Vec<Param>,
     },
-    /// `Mname d g s bulk model [params]`
+    /// `Mname d g s bulk [body] model [params]`
+    ///
+    /// Standard 4-terminal MOSFET: d g s bulk model
+    /// SOI 5-terminal MOSFET: d g s e body model (body contact)
     Mosfet {
         d: String,
         g: String,
         s: String,
         bulk: String,
+        /// Optional 5th terminal (SOI body contact).
+        body: Option<String>,
         model: String,
         params: Vec<Param>,
     },
@@ -546,10 +551,15 @@ impl fmt::Display for Element {
                 g,
                 s,
                 bulk,
+                body,
                 model,
                 params,
             } => {
-                write!(f, "{} {d} {g} {s} {bulk} {model}", self.name)?;
+                write!(f, "{} {d} {g} {s} {bulk}", self.name)?;
+                if let Some(b) = body {
+                    write!(f, " {b}")?;
+                }
+                write!(f, " {model}")?;
                 write_params(f, params)
             }
             ElementKind::Jfet {

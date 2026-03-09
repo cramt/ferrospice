@@ -341,6 +341,7 @@ fn remap_element(
             g,
             s,
             bulk,
+            body,
             model,
             params,
         } => ElementKind::Mosfet {
@@ -348,6 +349,7 @@ fn remap_element(
             g: remap(g),
             s: remap(s),
             bulk: remap(bulk),
+            body: body.as_ref().map(|b| remap(b)),
             model: model.clone(),
             params: resolve_params(params, param_map),
         },

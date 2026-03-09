@@ -3,6 +3,7 @@ use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimV
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::bsim3::{bsim3_companion, bsim3_limit, stamp_bsim3};
+use crate::bsim3soi_pd::{bsim3soi_pd_companion, bsim3soi_pd_limit, stamp_bsim3soi_pd};
 use crate::bsim4::{bsim4_companion, bsim4_limit, stamp_bsim4};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::expr_val;
@@ -118,6 +119,7 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
     let mosfets = &mna.mosfets;
     let jfets = &mna.jfets;
     let bsim3s = &mna.bsim3s;
+    let bsim3soi_pds = &mna.bsim3soi_pds;
     let bsim4s = &mna.bsim4s;
 
     // Precompute vcrit for each diode for voltage limiting.
@@ -141,6 +143,9 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
         .collect();
     // Track previous BSIM3 voltages (vgs, vds, vbs) for limiting.
     let prev_bsim3_voltages = std::cell::RefCell::new(vec![(0.0, 0.0, 0.0); bsim3s.len()]);
+    // Track previous BSIM3SOI-PD voltages (vgs, vds, vbs, ves) for limiting.
+    let prev_bsim3soi_pd_voltages =
+        std::cell::RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); bsim3soi_pds.len()]);
     // Track previous BSIM4 voltages (vgs, vds, vbs) for limiting.
     let prev_bsim4_voltages = std::cell::RefCell::new(vec![(0.0, 0.0, 0.0); bsim4s.len()]);
 
@@ -261,7 +266,32 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
             }
         }
 
-        // 7. Stamp BSIM4 companion models.
+        // 7. Stamp BSIM3SOI-PD companion models.
+        {
+            let mut prev = prev_bsim3soi_pd_voltages.borrow_mut();
+            for (bi, bsim) in bsim3soi_pds.iter().enumerate() {
+                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
+
+                let (vgs, vds, vbs, ves) = bsim3soi_pd_limit(
+                    raw_vgs,
+                    raw_vds,
+                    raw_vbs,
+                    raw_ves,
+                    prev[bi].0,
+                    prev[bi].1,
+                    prev[bi].2,
+                    prev[bi].3,
+                    bsim.vth0_inst,
+                );
+                prev[bi] = (vgs, vds, vbs, ves);
+
+                let comp =
+                    bsim3soi_pd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model);
+                stamp_bsim3soi_pd(&mut system.matrix, &mut system.rhs, bsim, &comp);
+            }
+        }
+
+        // 8. Stamp BSIM4 companion models.
         {
             let mut prev = prev_bsim4_voltages.borrow_mut();
             for (bi, bsim) in bsim4s.iter().enumerate() {

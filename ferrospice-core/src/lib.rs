@@ -25,6 +25,7 @@ pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
 pub mod ac;
 pub mod bjt;
 pub mod bsim3;
+pub mod bsim3soi_pd;
 pub mod bsim4;
 pub mod diode;
 pub mod jfet;
@@ -44,6 +45,9 @@ pub mod waveform;
 pub use ac::simulate_ac;
 pub use bjt::{BjtInstance, BjtModel, BjtType, stamp_bjt};
 pub use bsim3::{Bsim3Companion, Bsim3Instance, Bsim3Model, stamp_bsim3};
+pub use bsim3soi_pd::{
+    Bsim3SoiPdCompanion, Bsim3SoiPdInstance, Bsim3SoiPdModel, stamp_bsim3soi_pd,
+};
 pub use bsim4::{Bsim4Companion, Bsim4Instance, Bsim4Model, stamp_bsim4};
 pub use diode::DiodeModel;
 pub use jfet::{JfetInstance, JfetModel, JfetType, stamp_jfet};

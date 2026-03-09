@@ -243,6 +243,8 @@ pub struct MnaSystem {
     pub jfets: Vec<JfetInstance>,
     /// Resolved BSIM3 MOSFET instances for NR iteration.
     pub bsim3s: Vec<Bsim3Instance>,
+    /// Resolved BSIM3SOI-PD MOSFET instances for NR iteration.
+    pub bsim3soi_pds: Vec<crate::bsim3soi_pd::Bsim3SoiPdInstance>,
     /// Resolved BSIM4 MOSFET instances for NR iteration.
     pub bsim4s: Vec<Bsim4Instance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
@@ -280,6 +282,7 @@ impl MnaSystem {
             || !self.mosfets.is_empty()
             || !self.jfets.is_empty()
             || !self.bsim3s.is_empty()
+            || !self.bsim3soi_pds.is_empty()
             || !self.bsim4s.is_empty()
     }
 
@@ -326,6 +329,21 @@ impl MnaSystem {
                 .bsim4s
                 .iter()
                 .filter(|b| b.source_prime_idx.is_some() && b.source_prime_idx != b.source_idx)
+                .count()
+            + self
+                .bsim3soi_pds
+                .iter()
+                .filter(|b| b.drain_prime_idx.is_some() && b.drain_prime_idx != b.drain_idx)
+                .count()
+            + self
+                .bsim3soi_pds
+                .iter()
+                .filter(|b| b.source_prime_idx.is_some() && b.source_prime_idx != b.source_idx)
+                .count()
+            + self
+                .bsim3soi_pds
+                .iter()
+                .filter(|b| b.body_int_idx.is_some())
                 .count()
     }
 }
@@ -516,6 +534,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 g,
                 s,
                 bulk,
+                body,
                 model,
                 params,
             } => {
@@ -523,6 +542,9 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 node_map.index(g);
                 node_map.index(s);
                 node_map.index(bulk);
+                if let Some(b) = body {
+                    node_map.index(b);
+                }
                 let level = get_mosfet_level(models.get(&model.to_uppercase()), params);
                 if level == 8 || level == 49 {
                     // BSIM3
@@ -539,6 +561,15 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         Bsim4Model::from_model_def(mdef)
                     } else {
                         Bsim4Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    let (nrd, nrs) = get_nrd_nrs(params);
+                    internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 57 {
+                    // BSIM3SOI-PD
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        crate::bsim3soi_pd::Bsim3SoiPdModel::from_model_def(mdef)
+                    } else {
+                        crate::bsim3soi_pd::Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
                     let (nrd, nrs) = get_nrd_nrs(params);
                     internal_node_count += bm.internal_node_count(nrd, nrs);
@@ -626,6 +657,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut mosfets = Vec::new();
     let mut jfets = Vec::new();
     let mut bsim3s = Vec::new();
+    let mut bsim3soi_pds = Vec::new();
     let mut bsim4s = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
@@ -747,6 +779,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 g,
                 s,
                 bulk,
+                body,
                 model,
                 params,
             } => {
@@ -754,6 +787,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 let gate_idx = node_map.get(g);
                 let source_idx = node_map.get(s);
                 let bulk_idx = node_map.get(bulk);
+                let body_idx = body.as_ref().and_then(|b| node_map.get(b));
 
                 // Extract instance params
                 let mut w = 1e-4;
@@ -894,6 +928,69 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         sb,
                         model: bm,
                         size_params,
+                    });
+                } else if level == 57 {
+                    // BSIM3SOI-PD
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        crate::bsim3soi_pd::Bsim3SoiPdModel::from_model_def(mdef)
+                    } else {
+                        crate::bsim3soi_pd::Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos)
+                    };
+
+                    let drain_prime_idx = if bm.rdsw > 0.0 || nrd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if bm.rdsw > 0.0 || nrs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+                    // Internal body node (always created for SOI)
+                    let body_int_idx = {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    };
+
+                    // For SOI: bulk node is the back-gate (E), body_idx is external body contact
+                    let e_idx = bulk_idx; // In SOI, the 4th terminal is the substrate/back-gate (E)
+
+                    let mut nbc = 0.0;
+                    for p in params {
+                        if let Expr::Num(v) = &p.value
+                            && p.name.eq_ignore_ascii_case("NBC")
+                        {
+                            nbc = *v;
+                        }
+                    }
+
+                    let size_params = bm.size_dep_param(w, l, 300.15);
+                    let vth0_inst = size_params.vth0;
+                    bsim3soi_pds.push(crate::bsim3soi_pd::Bsim3SoiPdInstance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        e_idx,
+                        body_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        body_int_idx,
+                        w,
+                        l,
+                        m: m_mult,
+                        nrd,
+                        nrs,
+                        model: bm,
+                        size_params,
+                        vth0_inst,
+                        nbc,
                     });
                 } else {
                     let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
@@ -1213,6 +1310,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         cccs_sources,
         ccvs_sources,
         bsim3s,
+        bsim3soi_pds,
         bsim4s,
     })
 }

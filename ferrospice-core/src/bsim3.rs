@@ -3148,7 +3148,7 @@ pub fn bsim3_limit(
     (vgs, vds, vbs)
 }
 
-fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
+pub fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
     let vtsthi = (2.0 * vold.abs()).max(1.0);
     let vtstlo = vtsthi / 2.0 + 0.1;
     let vtox = vto + 3.5;
