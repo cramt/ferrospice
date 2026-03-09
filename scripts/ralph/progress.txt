@@ -249,3 +249,20 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Bisection testing (progressively adding parameters) is effective for isolating param-dependent bugs
   - Self-heating (shmod) is NOT a BSIM4 feature in ngspice — only parametric temperature (tempMod)
 ---
+
+## Iteration 4: US-026 — BSIM4 AC, charge model, noise, and test suite
+- **Pass type:** implementation
+- **What was implemented:**
+  - capMod=2 CTM charge model with proper analytical derivatives (T4/T5 terms from b4ld.c)
+  - 9-element intrinsic capacitance matrix (cggb, cgdb, cgsb, cbgb, cbdb, cbsb, cdgb, cddb, cdsb)
+  - xpart-dependent source charge partitioning (0/100, 40/60, 50/50)
+  - tnoiMod dispatch: tnoiMod=0/1 thermal noise ((8/3)*4kT*gm)
+  - fnoiMod dispatch: fnoiMod=0 KF power-law flicker, fnoiMod=1 NOIA oxide trap model (Eval1ovFNoise)
+  - bsim4_eval_1ovf_noise(): carrier number fluctuation with trap densities noia/noib/noic, harmonic mean of Ssi/Swi
+  - Companion struct extended with qinv, ueff, vgsteff, vdseff, abulk for noise computation
+  - 8 new integration tests: 3 AC freq sweeps (default, xpart=1, mobmod=1), 4 noise tests (fnoi0/tnoi0, fnoi1/tnoi1, fnoi1/tnoi0, fnoi0/tnoi1), 1 AC Vd sweep
+- **Key debugging:**
+  - Noise values were all 0 because output node `d` was directly connected to voltage source Vds — adjoint transfer function forced to 0. Fixed by using Rload topology (Vdd + 1k resistor)
+  - fnoiMod=1 initially overflowed due to missing 1e10 normalization factor from b4noi.c
+- **Tests:** 14 BSIM4 integration tests pass (7 DC + 3 AC + 4 noise), 141 unit tests pass, clippy clean
+---

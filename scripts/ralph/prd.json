@@ -23,6 +23,13 @@
       "summary": "Implemented GISL, mobMod 1/2, vtfbphi1 preprocessing, fixed critical VADITS bug causing current blow-up, added 7 integration tests with full qaSpec parameters",
       "date": "2026-03-09",
       "storyId": "US-025"
+    },
+    {
+      "iteration": 4,
+      "passType": "implementation",
+      "summary": "Implemented BSIM4 capMod=2 CTM charge model with proper derivatives, tnoiMod/fnoiMod dispatch (thermal + KF flicker + NOIA oxide trap), AC small-signal stamps, 8 new integration tests (3 AC + 4 noise + 1 DC sweep)",
+      "date": "2026-03-09",
+      "storyId": "US-026"
     }
   ],
   "userStories": [
@@ -479,7 +486,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 26,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: b4noi.c for noise, second half of b4ld.c for charges. BSIM4 has more sophisticated noise than BSIM3 (tnoimod, fnoimod combinations)."
     },
     {

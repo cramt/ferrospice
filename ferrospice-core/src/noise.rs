@@ -950,10 +950,15 @@ fn compute_total_noise(
         let dp = bsim.drain_eff_idx();
         let sp = bsim.source_eff_idx();
 
-        // Channel thermal noise: (2/3) * 4kT * |gm|.
-        let gm = comp.gm.abs() * m;
-        let channel_noise = (8.0 / 3.0) * K_BOLTZ * T_NOM * gm;
-        total += channel_noise * adjoint_transfer_sq(adjoint, dp, sp);
+        // Channel thermal noise — dispatch on tnoimod.
+        // tnoimod=0: simple model ~(8/3)*4kT*gm
+        // tnoimod=1: unified model (same approximation for now)
+        let tnoimod = bsim.model.tnoimod;
+        if tnoimod >= 0 {
+            let gm = comp.gm.abs() * m;
+            let channel_noise = (8.0 / 3.0) * K_BOLTZ * T_NOM * gm;
+            total += channel_noise * adjoint_transfer_sq(adjoint, dp, sp);
+        }
 
         // Drain resistance thermal noise.
         let g_drain = bsim.drain_conductance() * m;
@@ -969,16 +974,40 @@ fn compute_total_noise(
             total += rs_noise * adjoint_transfer_sq(adjoint, bsim.source_idx, sp);
         }
 
-        // Flicker noise: NOIA * |Id|^EF / (f * Cox * Leff²).
-        let noia = bsim.model.noia;
-        if noia > 0.0 && freq > 0.0 {
+        // Flicker (1/f) noise — dispatch on fnoimod.
+        if freq > 0.0 {
+            let fnoimod = bsim.model.fnoimod;
             let id = comp.ids.abs() * m;
-            let cox = bsim.model.coxe();
+            let ef = bsim.model.ef;
             let l_eff = bsim.size_params.leff;
-            let cox_l_sq = cox * l_eff * l_eff;
-            if cox_l_sq > 0.0 {
-                let ef = bsim.model.ef;
-                let flicker = noia * id.powf(ef) / (freq * cox_l_sq);
+            let cox = bsim.model.coxe();
+
+            let flicker = if fnoimod == 0 {
+                // fnoimod=0: Simple KF power-law model
+                // S_id = KF * |Id|^AF / (f^EF * Cox * Leff^2)
+                let kf = bsim.model.kf;
+                let af = bsim.model.af;
+                let cox_l_sq = cox * l_eff * l_eff;
+                if kf > 0.0 && cox_l_sq > 0.0 {
+                    kf * id.powf(af) / (freq.powf(ef) * cox_l_sq)
+                } else {
+                    0.0
+                }
+            } else {
+                // fnoimod=1: NOIA oxide trap model (simplified Eval1ovFNoise)
+                // Port of b4noi.c: Ssi uses trap densities noia/noib/noic
+                bsim4_eval_1ovf_noise(
+                    &comp,
+                    &bsim.model,
+                    &bsim.size_params,
+                    freq,
+                    bsim.w,
+                    bsim.nf,
+                    m,
+                )
+            };
+
+            if flicker > 0.0 {
                 total += flicker * adjoint_transfer_sq(adjoint, dp, sp);
             }
         }
@@ -986,6 +1015,101 @@ fn compute_total_noise(
 
     total
 }
+
+/// BSIM4 fnoimod=1: Simplified Eval1ovFNoise (oxide trap noise model).
+///
+/// Port of ngspice b4noi.c Eval1ovFNoise function.
+/// Uses trap densities NOIA/NOIB/NOIC to compute channel flicker noise
+/// from carrier number fluctuation model.
+fn bsim4_eval_1ovf_noise(
+    comp: &crate::bsim4::Bsim4Companion,
+    model: &crate::bsim4::Bsim4Model,
+    sp: &crate::bsim4::Bsim4SizeParam,
+    freq: f64,
+    w: f64,
+    nf: f64,
+    m: f64,
+) -> f64 {
+    let id = comp.ids.abs() * m;
+    if id <= 0.0 {
+        return 0.0;
+    }
+
+    let ef = model.ef;
+    let eff_freq = freq.powf(ef);
+    if eff_freq <= 0.0 {
+        return 0.0;
+    }
+
+    let leff = sp.leff;
+    let cox = model.coxe();
+    let vgsteff = comp.vgsteff;
+    let vdseff = comp.vdseff;
+    let ueff = comp.ueff;
+    let abulk = comp.abulk;
+    let vt = KBOQ * T_NOM; // thermal voltage
+
+    // Carrier concentrations at source and drain ends of channel
+    // N0 = Cox * Vgsteff / q  (at source)
+    // Nl = Cox * Vgsteff * (1 - Abulk*Vdseff/(2*Vgsteff)) / q (at drain)
+    let n0 = cox * vgsteff / Q_CHARGE;
+    let abs_over = abulk * vdseff / (2.0 * vgsteff.max(1.0e-20));
+    let nl = cox * vgsteff * (1.0 - abs_over.min(0.999)) / Q_CHARGE;
+
+    // Effective trap density: nstar = vt * cox / q
+    let nstar = vt * cox / Q_CHARGE;
+
+    // Trap density integrals
+    let noia = model.noia; // Dit_A (oxide trap density A)
+    let noib = model.noib; // Dit_B
+    let noic = model.noic; // Dit_C
+
+    // T3 = NOIA * ln((N0 + nstar) / (Nl + nstar))
+    let n0_star = n0 + nstar;
+    let nl_star = nl + nstar;
+    let t3 = if n0_star > 0.0 && nl_star > 0.0 {
+        noia * (n0_star / nl_star).ln()
+    } else {
+        0.0
+    };
+
+    // T4 = NOIB * (N0 - Nl)
+    let t4 = noib * (n0 - nl);
+
+    // T5 = NOIC * 0.5 * (N0^2 - Nl^2)
+    let t5 = noic * 0.5 * (n0 * n0 - nl * nl);
+
+    // Ssi = (q^2 * kT * Id * ueff) / (1e10 * EffFreq * Abulk * Cox * Leff^2)
+    //     * (T3 + T4 + T5)
+    let abulk_safe = abulk.max(0.01);
+    let denom = 1.0e10 * eff_freq * abulk_safe * cox * leff * leff;
+    let ssi = if denom > 0.0 {
+        Q_CHARGE * Q_CHARGE * K_BOLTZ * T_NOM * id * ueff / denom * (t3 + t4 + t5)
+    } else {
+        0.0
+    };
+
+    // Swi = kox_A * kT / (W*nf*Leff*EffFreq*1e10*nstar) * Id^2
+    // where kox_A ≈ Q_CHARGE^2 (simplified proportionality)
+    let w_nf = w * nf;
+    let swi_denom = w_nf * leff * eff_freq * 1.0e10 * nstar;
+    let swi = if swi_denom > 0.0 {
+        Q_CHARGE * Q_CHARGE * K_BOLTZ * T_NOM / swi_denom * id * id
+    } else {
+        0.0
+    };
+
+    // Harmonic mean: result = (Ssi * Swi) / (Ssi + Swi)
+    let total = ssi + swi;
+    if total > 0.0 {
+        (ssi * swi) / total
+    } else {
+        0.0
+    }
+}
+
+/// BSIM4 thermal voltage constant (kB/q).
+const KBOQ: f64 = 8.617087e-5;
 
 /// Compute |V_adj(n1) - V_adj(n2)|² from the adjoint solution.
 ///

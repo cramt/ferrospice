@@ -554,6 +554,11 @@ pub struct Bsim4Companion {
     pub capbd: f64,
     pub capbs: f64,
     pub qinv: f64,
+    // Intermediate values needed for noise computation (fnoimod=1)
+    pub ueff: f64,
+    pub vgsteff: f64,
+    pub vdseff: f64,
+    pub abulk: f64,
 }
 
 /// Resolved BSIM4 instance with node indices.
@@ -2343,8 +2348,9 @@ pub fn bsim4_companion(
 
     let ceq_sub = isub;
 
-    // Capacitances (simplified capMod=2 CTM)
+    // Capacitances — capMod=2 CTM charge model with proper derivatives (port of b4ld.c)
     let vfbzb = sp.vfbzb_factor + type_sign * sp.vth0;
+    let cox_wl = sp.coxe * weff_local * sp.leff;
 
     // Gate charge model
     let vfbeff = {
@@ -2353,43 +2359,120 @@ pub fn bsim4_companion(
         vfbzb + 0.5 * (t0 + t1)
     };
 
-    let qac0 = sp.coxe * weff_local * sp.leff * (vfbeff - vfbzb);
-
-    let _vgst_cv = vgs_mode - vth;
+    let qac0 = cox_wl * (vfbeff - vfbzb);
 
     // Inversion charge
-    let abulk_cv = 1.0 + sp.abulk_cv_factor * sp.k1ox / (2.0 * sqrt_phis);
-    let abulk_cv = abulk_cv.max(0.1);
+    let abulk_cv = (1.0 + sp.abulk_cv_factor * sp.k1ox / (2.0 * sqrt_phis)).max(0.1);
     let vdsat_cv = vgsteff / abulk_cv;
 
     let t1_cv = vdsat_cv - vds_mode - sp.delta;
     let t2_cv = (t1_cv * t1_cv + 4.0 * sp.delta * vdsat_cv).sqrt();
-    let vdseff_cv = vdsat_cv - 0.5 * (t1_cv + t2_cv);
-    let vdseff_cv = vdseff_cv.max(1.0e-18);
+    let vdseff_cv = (vdsat_cv - 0.5 * (t1_cv + t2_cv)).max(1.0e-18);
+
+    // dVdseffCV/dVds — derivative of VdseffCV smoothing w.r.t. Vds
+    let dvdseff_dvd = if t2_cv > 1.0e-30 {
+        0.5 * (1.0 + t1_cv / t2_cv)
+    } else {
+        0.5
+    };
 
     let t0_q = abulk_cv * vdseff_cv;
     let t2_q = 12.0 * (vgsteff - 0.5 * t0_q + 1.0e-20);
     let t3_q = t0_q / t2_q;
-    let qgate = sp.coxe * weff_local * sp.leff * (vgsteff - t0_q * (0.5 - t3_q));
-    let qbulk = sp.coxe
-        * weff_local
-        * sp.leff
-        * (1.0 - abulk_cv)
-        * (0.5 * vdseff_cv - t0_q * vdseff_cv / t2_q);
 
-    // Partition
-    let cgg = sp.coxe * weff_local * sp.leff;
-    let cggb = cgg;
-    let cgsb = -cgg * 0.5;
-    let cgdb = -cgg * 0.5;
+    // Gate inversion charge
+    let qgate_inv = cox_wl * (vgsteff - t0_q * (0.5 - t3_q));
 
-    let cbgb = -cgg * 0.1;
-    let cbdb = cgg * 0.05;
-    let cbsb = cgg * 0.05;
+    // Bulk charge
+    let qbulk_val = cox_wl * (1.0 - abulk_cv) * (0.5 * vdseff_cv - t0_q * vdseff_cv / t2_q);
 
-    let cdgb = -cgg * 0.4;
-    let cddb = cgg * 0.2;
-    let cdsb = cgg * 0.2;
+    // Gate charge derivatives (matching b4ld.c T4/T5 terms)
+    let t4 = 1.0 - 12.0 * t3_q * t3_q; // dQg/dVg (normalized by CoxWL)
+    let t5 = abulk_cv * (6.0 * t0_q * (4.0 * vgsteff - t0_q) / (t2_q * t2_q) - 0.5);
+
+    let cgg1 = cox_wl * t4;
+    let cgd1 = cox_wl * t5 * dvdseff_dvd;
+
+    // Bulk charge derivatives
+    let t7 = 1.0 - abulk_cv;
+    let t8 = t2_q * t2_q;
+    let t9 = if t8.abs() > 1.0e-40 && abulk_cv.abs() > 1.0e-20 {
+        12.0 * t7 * t0_q * t0_q / (t8 * abulk_cv)
+    } else {
+        0.0
+    };
+    let t11 = if abulk_cv.abs() > 1.0e-20 {
+        -t7 * t5 / abulk_cv
+    } else {
+        0.0
+    };
+
+    let cbg1 = cox_wl * t9;
+    let cbd1 = cox_wl * t11 * dvdseff_dvd;
+
+    // Source charge and derivatives — xpart-dependent partitioning
+    let xpart = model.xpart;
+    let (csg, csd) = if xpart > 0.5 {
+        // 0/100 partition: all inversion charge to source
+        let t2x = 2.0 * t2_q;
+        let t3x = t2x * t2x;
+        let t7x = if t3x.abs() > 1.0e-40 {
+            -(0.25 - 12.0 * t0_q * (4.0 * vgsteff - t0_q) / t3x)
+        } else {
+            -0.25
+        };
+        let t4x = if t3x.abs() > 1.0e-40 {
+            -(0.5 + 24.0 * t0_q * t0_q / t3x)
+        } else {
+            -0.5
+        };
+        let t5x = t7x * abulk_cv;
+        (cox_wl * t4x, cox_wl * t5x * dvdseff_dvd)
+    } else if xpart < 0.5 {
+        // 40/60 partition
+        let t2x = t2_q / 12.0;
+        let t3x = if t2x.abs() > 1.0e-30 {
+            0.5 * cox_wl / (t2x * t2x)
+        } else {
+            0.0
+        };
+        let vg = vgsteff;
+        let v = t0_q; // = Abulk * VdseffCV
+        let t4x = vg * (2.0 * v * v / 3.0 + vg * (vg - 4.0 * v / 3.0)) - 2.0 * v * v * v / 15.0;
+        let t8x = 4.0 / 3.0 * vg * (vg - v) + 0.4 * v * v;
+        let t5x =
+            -2.0 * (-t3x * t4x) / t2x - t3x * (vg * (3.0 * vg - 8.0 * v / 3.0) + 2.0 * v * v / 3.0);
+        let t6x = abulk_cv * ((-t3x * t4x) / t2x + t3x * t8x);
+        (t5x, t6x * dvdseff_dvd)
+    } else {
+        // 50/50 partition
+        (-0.5 * cgg1, -0.5 * cgd1)
+    };
+
+    // Final capacitance matrix following ngspice convention (b4ld.c lines 3890-3909)
+    // qgate += Qac0 + Qsub0 - qbulk (we simplify Qsub0 ≈ 0)
+    let qgate = qgate_inv + qac0 - qbulk_val;
+    let qbulk = qbulk_val - qac0;
+
+    // Gate capacitances: Cgg includes bulk charge correction
+    let c_bg = cbg1; // dQbulk/dVg
+    let c_bd = cbd1;
+    let c_gg = cgg1 - c_bg;
+    let c_gd = cgd1 - c_bd;
+    let c_gb = 0.0_f64; // simplified: body bias derivative small
+
+    let cggb = c_gg;
+    let cgdb = c_gd;
+    let cgsb = -(c_gg + c_gd + c_gb);
+
+    let cbgb = c_bg;
+    let cbdb = c_bd;
+    let cbsb = -(c_bg + c_bd);
+
+    // Drain cap = -(gate + bulk + source)
+    let cdgb = -(cggb + cbgb + csg);
+    let cddb = -(cgdb + cbdb + csd);
+    let cdsb = -(cgsb + cbsb + (-(csg + csd)));
 
     // Junction capacitances (simplified)
     let capbd = sp.coxe * sp.weff * 0.5e-4;
@@ -2429,6 +2512,10 @@ pub fn bsim4_companion(
         capbd,
         capbs,
         qinv,
+        ueff,
+        vgsteff,
+        vdseff,
+        abulk,
     }
 }
 

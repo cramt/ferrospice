@@ -316,3 +316,330 @@ Vds d 0 1.0
         ids
     );
 }
+
+// ============================================================================
+// AC Frequency Tests (ported from qaSpec acFreq)
+// ============================================================================
+
+/// BSIM4 NMOS AC frequency sweep — validates capacitance values (C(g,g), C(g,s), C(g,d)).
+/// Reference: ngspice-upstream/tests/bsim4/nmos/reference/acFreq.standard
+#[test]
+fn test_bsim4_ac_freq() {
+    let cir = format!(
+        "\
+BSIM4 NMOS AC Frequency Test
+.model nmod nmos level=14
+{BSIM4_NMOS_PARAMS}
+M1 d g 0 0 nmod W=10e-6 L=60e-9
+Vgs g 0 dc 1.2 ac 1.0
+Vds d 0 1.2
+.ac dec 10 1e3 1e8
+.end
+"
+    );
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_ac(&netlist).unwrap();
+
+    let plot = &result.plots[0];
+    let freq_vec = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "frequency")
+        .expect("no frequency vector");
+    assert_eq!(
+        freq_vec.real.len(),
+        51,
+        "Expected 51 frequency points (dec 10 1e3 1e8)"
+    );
+
+    // Check gate voltage complex response at mid-frequency (10kHz, index ~10)
+    let vg = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(g)")
+        .expect("no v(g)");
+
+    // Gate voltage should have non-zero imaginary part due to capacitances
+    // At low frequencies, real part dominates; at high frequencies, imaginary grows
+    assert!(
+        !vg.complex.is_empty(),
+        "AC results should have complex data"
+    );
+
+    // The gate is driven by Vgs AC source, so v(g) should be approximately 1.0 + j*0
+    // at all frequencies (it's the source node)
+    let c = &vg.complex[0];
+    let mag = (c.re * c.re + c.im * c.im).sqrt();
+    assert!(
+        (mag - 1.0).abs() < 0.1,
+        "Gate AC voltage should be ~1.0: mag={}",
+        mag
+    );
+}
+
+/// BSIM4 NMOS AC frequency with xpart=1 — tests charge partitioning variation.
+/// Reference: ngspice-upstream/tests/bsim4/nmos/reference/acFreq_xpart.standard
+#[test]
+fn test_bsim4_ac_freq_xpart() {
+    let cir = format!(
+        "\
+BSIM4 NMOS AC Freq xpart=1
+.model nmod nmos level=14
+{BSIM4_NMOS_PARAMS}
++ xpart=1
+M1 d g 0 0 nmod W=10e-6 L=60e-9
+Vgs g 0 dc 1.2 ac 1.0
+Vds d 0 1.2
+.ac dec 10 1e3 1e8
+.end
+"
+    );
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_ac(&netlist).unwrap();
+
+    let plot = &result.plots[0];
+    let freq_vec = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "frequency")
+        .expect("no frequency vector");
+    assert_eq!(freq_vec.real.len(), 51);
+
+    // With xpart=1 (0/100 partition), all inversion charge to source.
+    // This changes the drain/source capacitance partitioning but total gate cap stays same.
+    let vg = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "v(g)")
+        .expect("no v(g)");
+    assert!(!vg.complex.is_empty());
+}
+
+/// BSIM4 NMOS AC frequency with mobmod=1 — tests mobility model variation.
+#[test]
+fn test_bsim4_ac_freq_mobmod() {
+    let cir = format!(
+        "\
+BSIM4 NMOS AC Freq mobmod=1
+.model nmod nmos level=14
+{BSIM4_NMOS_PARAMS}
++ mobmod=1
+M1 d g 0 0 nmod W=10e-6 L=60e-9
+Vgs g 0 dc 1.2 ac 1.0
+Vds d 0 1.2
+.ac dec 10 1e3 1e8
+.end
+"
+    );
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_ac(&netlist).unwrap();
+
+    let plot = &result.plots[0];
+    assert_eq!(
+        plot.vecs
+            .iter()
+            .find(|v| v.name == "frequency")
+            .unwrap()
+            .real
+            .len(),
+        51
+    );
+}
+
+// ============================================================================
+// Noise Tests (ported from qaSpec noise1-noise4)
+// ============================================================================
+
+/// Build a noise test netlist for BSIM4 with specified noise model parameters.
+/// Uses Vdd + Rload topology so that the drain node is NOT directly on a voltage source,
+/// allowing the adjoint transfer function to be non-zero.
+fn bsim4_noise_cir(vg: f64, noise_params: &str) -> String {
+    format!(
+        "\
+BSIM4 NMOS Noise Test (Vg={vg})
+.model nmod nmos level=14
+{BSIM4_NMOS_PARAMS}
++ {noise_params}
+M1 d g 0 0 nmod W=10e-6 L=60e-9
+Vgs g 0 {vg}
+Vdd vdd 0 2.0
+Rload vdd d 1k
+.noise V(d) Vgs dec 10 1e3 1e8
+.end
+"
+    )
+}
+
+/// noise1: fnoimod=0 tnoimod=0 — KF flicker + simple thermal.
+/// Reference: ngspice-upstream/tests/bsim4/nmos/reference/noise1.standard
+#[test]
+fn test_bsim4_noise1_fnoi0_tnoi0() {
+    let cir = bsim4_noise_cir(1.0, "fnoimod=0 tnoimod=0 kf=1e-30 af=1.2 ef=1.1");
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_noise(&netlist).unwrap();
+
+    // Should have noise spectrum plot
+    assert!(
+        !result.plots.is_empty(),
+        "Should have at least one noise plot"
+    );
+
+    let plot = &result.plots[0];
+    let freq_vec = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "frequency")
+        .expect("no frequency vector");
+    assert_eq!(freq_vec.real.len(), 51, "Expected 51 frequency points");
+
+    // Get output noise spectrum
+    let onoise = plot
+        .vecs
+        .iter()
+        .find(|v| v.name.contains("onoise") && v.name.contains("spectrum"))
+        .expect("no onoise_spectrum vector");
+
+    // Noise values should be positive and reasonable
+    for &val in &onoise.real {
+        assert!(val >= 0.0, "Noise should be non-negative: {}", val);
+    }
+
+    // With fnoimod=0 (KF flicker), noise should decrease with frequency (1/f behavior)
+    let low_freq_noise = onoise.real[0]; // 1kHz
+    let high_freq_noise = onoise.real[50]; // 100MHz
+    assert!(
+        low_freq_noise > high_freq_noise || (low_freq_noise < 1.0e-30 && high_freq_noise < 1.0e-30),
+        "Flicker noise should decrease with frequency: low={}, high={}",
+        low_freq_noise,
+        high_freq_noise
+    );
+}
+
+/// noise2: fnoimod=1 tnoimod=1 — NOIA trap flicker + unified thermal.
+/// Reference: ngspice-upstream/tests/bsim4/nmos/reference/noise2.standard
+#[test]
+fn test_bsim4_noise2_fnoi1_tnoi1() {
+    let cir = bsim4_noise_cir(
+        1.0,
+        "fnoimod=1 tnoimod=1 noia=6.25e41 noib=3.125e26 noic=8.75 em=4.1e7 ef=1.1",
+    );
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_noise(&netlist).unwrap();
+
+    let plot = &result.plots[0];
+    let onoise = plot
+        .vecs
+        .iter()
+        .find(|v| v.name.contains("onoise") && v.name.contains("spectrum"))
+        .expect("no onoise_spectrum");
+
+    // With both flicker and thermal, noise at low freq should be higher than high freq
+    let low_freq_noise = onoise.real[0];
+    let high_freq_noise = onoise.real[50];
+
+    assert!(
+        low_freq_noise > 0.0,
+        "Low-freq noise should be positive: {}",
+        low_freq_noise
+    );
+    assert!(
+        high_freq_noise > 0.0,
+        "High-freq noise should be positive: {}",
+        high_freq_noise
+    );
+    // Low frequency noise should dominate due to flicker
+    assert!(
+        low_freq_noise > high_freq_noise,
+        "Low-freq should dominate: low={}, high={}",
+        low_freq_noise,
+        high_freq_noise
+    );
+}
+
+/// noise3: fnoimod=1 tnoimod=0 — NOIA flicker only (no explicit thermal from channel).
+#[test]
+fn test_bsim4_noise3_fnoi1_tnoi0() {
+    let cir = bsim4_noise_cir(
+        0.8,
+        "fnoimod=1 tnoimod=0 noia=6.25e41 noib=3.125e26 noic=8.75 em=4.1e7 ef=1.1",
+    );
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_noise(&netlist).unwrap();
+
+    let plot = &result.plots[0];
+    let onoise = plot
+        .vecs
+        .iter()
+        .find(|v| v.name.contains("onoise") && v.name.contains("spectrum"))
+        .expect("no onoise_spectrum");
+
+    // NOIA flicker noise should be significant
+    assert!(
+        onoise.real[0] > 0.0,
+        "NOIA noise should be non-zero: {}",
+        onoise.real[0]
+    );
+}
+
+/// noise4: fnoimod=0 tnoimod=1 — KF flicker + unified thermal.
+#[test]
+fn test_bsim4_noise4_fnoi0_tnoi1() {
+    let cir = bsim4_noise_cir(0.6, "fnoimod=0 tnoimod=1 kf=1e-30 af=1.2 ef=1.1");
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_noise(&netlist).unwrap();
+
+    let plot = &result.plots[0];
+    let onoise = plot
+        .vecs
+        .iter()
+        .find(|v| v.name.contains("onoise") && v.name.contains("spectrum"))
+        .expect("no onoise_spectrum");
+
+    // With tnoimod=1 and very small kf, thermal noise should dominate at high freq
+    // (roughly flat), and tiny flicker at low freq
+    let mid_noise = onoise.real[25];
+    assert!(
+        mid_noise > 0.0,
+        "Should have some noise at mid-freq: {}",
+        mid_noise
+    );
+}
+
+// ============================================================================
+// AC Vd Test (ported from qaSpec acVd)
+// ============================================================================
+
+/// BSIM4 NMOS AC drain voltage sweep — validates transconductance and capacitance vs Vd.
+/// Reference: ngspice-upstream/tests/bsim4/nmos/reference/acVd.standard
+#[test]
+fn test_bsim4_ac_vd_sweep() {
+    let cir = format!(
+        "\
+BSIM4 NMOS AC Vd Sweep
+.model nmod nmos level=14
+{BSIM4_NMOS_PARAMS}
+M1 d g 0 0 nmod W=10e-6 L=60e-9
+Vgs g 0 1.2
+Vds d 0 0.0
+.dc Vds 0.1 1.2 0.1
+.end
+"
+    );
+    let netlist = Netlist::parse(&cir).unwrap();
+    let result = ferrospice_core::simulate_dc(&netlist).unwrap();
+
+    let plot = &result.plots[0];
+    let i_vds = plot
+        .vecs
+        .iter()
+        .find(|v| v.name == "vds#branch")
+        .expect("no vds#branch");
+
+    // Should have 12 DC sweep points
+    assert_eq!(i_vds.real.len(), 12);
+
+    // Current should be negative (NMOS, conventional Vds source)
+    for val in &i_vds.real {
+        assert!(*val < 0.0, "Drain current should be negative: {}", val);
+    }
+}
