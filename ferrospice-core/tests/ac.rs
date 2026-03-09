@@ -15,12 +15,8 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 /// Sweep: .ac DEC 10 1k 1Meg → 31 frequency points.
 #[test]
 fn test_lowpass_filter() {
-    let cir_path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../ngspice-upstream/tests/filters/lowpass.cir"
-    );
-    let cir_content = std::fs::read_to_string(cir_path).expect("failed to read lowpass.cir");
-    let netlist = Netlist::parse(&cir_content).expect("failed to parse lowpass.cir");
+    let cir_content = include_str!("../../ngspice-upstream/tests/filters/lowpass.cir");
+    let netlist = Netlist::parse(cir_content).expect("failed to parse lowpass.cir");
 
     let result = simulate_ac(&netlist).expect("AC simulation failed");
     assert_eq!(result.plots.len(), 1);

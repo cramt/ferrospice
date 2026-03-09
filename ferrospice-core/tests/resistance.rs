@@ -11,17 +11,16 @@ use ferrospice_netlist::{Netlist, SimResult};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
-/// Path to the ngspice resistance test directory.
-const RESISTANCE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../ngspice-upstream/tests/resistance"
-);
+const RES_SIMPLE_CIR: &str = include_str!("../../ngspice-upstream/tests/resistance/res_simple.cir");
+const RES_SIMPLE_OUT: &str = include_str!("../../ngspice-upstream/tests/resistance/res_simple.out");
+const RES_PARTITION_CIR: &str =
+    include_str!("../../ngspice-upstream/tests/resistance/res_partition.cir");
+const RES_PARTITION_OUT: &str =
+    include_str!("../../ngspice-upstream/tests/resistance/res_partition.out");
+const RES_ARRAY_CIR: &str = include_str!("../../ngspice-upstream/tests/resistance/res_array.cir");
 
-/// Load and parse a .cir file from the resistance test directory.
-fn load_cir(name: &str) -> Netlist {
-    let path = format!("{RESISTANCE_DIR}/{name}");
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
-    Netlist::parse(&src).unwrap_or_else(|e| panic!("cannot parse {path}: {e}"))
+fn parse_cir(src: &str, name: &str) -> Netlist {
+    Netlist::parse(src).unwrap_or_else(|e| panic!("cannot parse {name}: {e}"))
 }
 
 /// Extract a node voltage from a DC operating point result.
@@ -142,7 +141,7 @@ fn extract_data_rows(text: &str) -> Vec<(usize, Vec<f64>)> {
 
 #[test]
 fn res_simple_parses() {
-    let netlist = load_cir("res_simple.cir");
+    let netlist = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
     assert_eq!(netlist.title, "A simple resistor with a voltage source");
     assert!(netlist.elements().count() >= 2); // R1 and V1
 }
@@ -152,7 +151,7 @@ fn res_simple_dc_op() {
     // Even though .cir uses .TRAN, we can compute the DC operating point.
     // For a purely resistive DC circuit, this matches the "Initial Transient Solution"
     // shown in the ngspice .out file.
-    let netlist = load_cir("res_simple.cir");
+    let netlist = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
     let result = simulate_op(&netlist).unwrap();
 
     // From .out: Node 1 = 1V, v1#branch = -0.0001
@@ -164,9 +163,7 @@ fn res_simple_dc_op() {
 fn res_simple_transient_data_constant() {
     // Verify that the expected .out data has constant I(V1) = -0.0001
     // at all timesteps (since it's a purely resistive DC circuit).
-    let out_path = format!("{RESISTANCE_DIR}/res_simple.out");
-    let out_text = std::fs::read_to_string(&out_path).unwrap();
-    let rows = extract_data_rows(&out_text);
+    let rows = extract_data_rows(RES_SIMPLE_OUT);
 
     assert!(!rows.is_empty(), "should have data rows in .out");
     for (idx, values) in &rows {
@@ -184,7 +181,7 @@ fn res_simple_transient_data_constant() {
 fn res_simple_full_output_comparison() {
     // Full transient output comparison against .out reference.
     // Requires .tran simulation to produce time-series data.
-    let _netlist = load_cir("res_simple.cir");
+    let _netlist = parse_cir(RES_SIMPLE_CIR, "res_simple.cir");
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +193,7 @@ fn res_simple_full_output_comparison() {
 
 #[test]
 fn res_partition_parses() {
-    let netlist = load_cir("res_partition.cir");
+    let netlist = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
     assert_eq!(
         netlist.title,
         "* Resistive partition with different ratios for AC/DC (Print V(2))"
@@ -205,7 +202,7 @@ fn res_partition_parses() {
 
 #[test]
 fn res_partition_dc_op() {
-    let netlist = load_cir("res_partition.cir");
+    let netlist = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
     let result = simulate_op(&netlist).unwrap();
 
     // From .out: V(1)=1.0, V(2)=0.5, vin#branch=-0.0001
@@ -218,9 +215,7 @@ fn res_partition_dc_op() {
 fn res_partition_ac_expected_values() {
     // Verify the .out AC data: V(2) = 0.75 at all frequencies
     // (AC uses r2=15k: V(2) = 15k/(5k+15k) = 0.75)
-    let out_path = format!("{RESISTANCE_DIR}/res_partition.out");
-    let out_text = std::fs::read_to_string(&out_path).unwrap();
-    let rows = extract_data_rows(&out_text);
+    let rows = extract_data_rows(RES_PARTITION_OUT);
 
     // AC data rows should have complex frequency and complex V(2)
     assert!(!rows.is_empty(), "should have AC data rows");
@@ -236,7 +231,7 @@ fn res_partition_ac_expected_values() {
 #[test]
 fn res_partition_full_output_comparison() {
     // Full AC output comparison against .out reference.
-    let _netlist = load_cir("res_partition.cir");
+    let _netlist = parse_cir(RES_PARTITION_CIR, "res_partition.cir");
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +247,7 @@ fn res_partition_full_output_comparison() {
 
 #[test]
 fn res_array_parses() {
-    let netlist = load_cir("res_array.cir");
+    let netlist = parse_cir(RES_ARRAY_CIR, "res_array.cir");
     assert_eq!(netlist.title, "A paralled resistor array");
     // Should have Vin + 5 VR sources + 5 resistors + model = 11 elements
     assert!(netlist.elements().count() >= 11);
@@ -263,7 +258,7 @@ fn res_array_parses() {
 fn res_array_dc_op() {
     // Model-based resistor R3 uses rmodel1 with RSH=1000, which requires
     // model evaluation to compute effective resistance. Not yet supported.
-    let netlist = load_cir("res_array.cir");
+    let netlist = parse_cir(RES_ARRAY_CIR, "res_array.cir");
     let result = simulate_op(&netlist).unwrap();
 
     // Expected from .out:
@@ -282,7 +277,7 @@ fn res_array_dc_op() {
 #[ignore = "TODO: requires transient analysis (.tran) - US-009, AC analysis (.ac) - US-012, and resistor model support"]
 #[test]
 fn res_array_full_output_comparison() {
-    let _netlist = load_cir("res_array.cir");
+    let _netlist = parse_cir(RES_ARRAY_CIR, "res_array.cir");
 }
 
 // ---------------------------------------------------------------------------
