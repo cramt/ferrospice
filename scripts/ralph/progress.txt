@@ -122,6 +122,9 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - SOI internal body node: always created, body potential from junction KCL (Ibs+Ibd+Iii+Igidl=0)
 - SOI junction model: 4 components — diffusion (Ibs1/Ibd1), recombination (Ibs2/Ibd2), BJT (Ibs3/Ibd3), tunneling (Ibs4/Ibd4)
 - BSIM3SOI-PD level=57 routing in mna.rs, uses `internal_node_count(nrd, nrs)` method
+- BSIM3SOI-FD model: `Bsim3SoiFdModel`, `Bsim3SoiFdInstance`, `Bsim3SoiFdCompanion` in ferrospice-core::bsim3soi_fd
+- BSIM3SOI-FD level=55: FD body is self-consistent (computed, not free) — needs body feedback conductance in stamp
+- FD body feedback: 1S conductance + current source drives body node to FD-computed Vbs (prevents floating node divergence)
 - PZ analysis: `simulate_pz(&Netlist) -> Result<SimResult>` in ferrospice-core::pz
 - PZ uses eigenvalue decomposition: poles from det(G+sC)=0, zeros from cofactor determinant
 - PZ eigenvalues: G^{-1}*C eigenvalues → poles = -1/λ for non-zero λ; fallback to GEV when G singular
@@ -308,4 +311,23 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 - **Files modified:** ferrospice-netlist/src/parse.rs, ferrospice-netlist/src/lib.rs, ferrospice-netlist/tests/netlist.rs, ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/ac.rs, ferrospice-core/src/transient.rs, ferrospice-core/src/noise.rs, ferrospice-core/src/subckt.rs, ferrospice-core/src/bsim3.rs (made fetlim pub)
 - **Known limitations:** Inverter and DC sweep tests don't converge — likely needs source-stepping improvements for multi-device SOI circuits with floating body
 - **Tests:** 4 BSIM3SOI-PD tests pass, 3 ignored, all existing tests still pass, clippy/fmt clean
+---
+
+## 2026-03-09 - US-028 (implementation)
+- Implemented BSIM3SOI-FD (Fully Depleted) MOSFET model (level 55)
+- FD-specific physics: self-consistent surface potential chain (Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0eff→Vbsmos→Vbseff)
+- FD has NO junction currents (Ibs=Ibd=0), NO GIDL, NO parasitic BJT
+- Impact ionization with AII/BII/CII/DII parameters instead of VDSATII0/ESATII
+- Body node feedback mechanism (1S conductance + current source) to drive floating body to FD-computed Vbs
+- FD-specific voltage limiting: ±0.2V body steps, SmartVbs clamps Vbs≥0
+- FD-specific precomputed params: cbox (EPSOX/tbox), csi (EPSSI/tsi), qsi (Q*npeak*tsi), csieff, qsieff, vfbb
+- Full integration: mna.rs, simulate.rs, ac.rs, transient.rs, noise.rs
+- **Files created:** ferrospice-core/src/bsim3soi_fd.rs (~1900 lines), ferrospice-core/tests/bsim3soi_fd.rs
+- **Files modified:** ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/ac.rs, ferrospice-core/src/transient.rs, ferrospice-core/src/noise.rs
+- **Learnings for future iterations:**
+  - FD SOI body node is fundamentally different from PD: body voltage is computed, not free
+  - Need body feedback conductance to prevent floating node in NR (gmin alone insufficient)
+  - FD model shared ~70% code with PD; main differences in surface potential chain and body handling
+  - `sign as f64` unnecessary cast when sign is already f64 — clippy catches this
+- **Tests:** 4 BSIM3SOI-FD tests pass (NMOS OP, bias points, PMOS OP, 5-terminal), 2 ignored (inverter, DC sweep)
 ---

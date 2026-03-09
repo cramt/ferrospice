@@ -44,6 +44,13 @@
       "summary": "Implemented BSIM3SOI-PD model (level 57): ~2000-line model with SOI-specific physics (floating body, 4-component junction, GIDL, impact ionization), 5-terminal parser support, full MNA/simulate/AC/transient/noise integration, 7 tests (4 passing, 3 ignored pending convergence improvements)",
       "date": "2026-03-09",
       "storyId": "US-027"
+    },
+    {
+      "iteration": 7,
+      "passType": "implementation",
+      "summary": "Implemented BSIM3SOI-FD model (level 55): ~1900-line model with FD-specific surface potential chain (Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0eff→Vbsmos→Vbseff), body node feedback mechanism, no junction currents, impact ionization with AII/BII/CII/DII, full MNA/simulate/AC/transient/noise integration, 6 tests (4 passing, 2 ignored pending convergence improvements)",
+      "date": "2026-03-09",
+      "storyId": "US-028"
     }
   ],
   "userStories": [
@@ -534,7 +541,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 28,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: ngspice bsim3soifd/ — 13,884 lines. Should share significant infrastructure with BSIM3SOI-PD."
     },
     {
