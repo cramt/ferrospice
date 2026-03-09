@@ -31,78 +31,68 @@ If a command fails because a tool is missing, add it to the `devShell` in `flake
 - **Never include Co-Authored-By lines in git commits.**
 - **Library-first.** All simulation logic lives in library crates. CLI is a thin wrapper.
 
-## Your Task
+## Your Task — Choose a Pass Type
 
-1. Read the PRD at `prd.json` (in the same directory as this file)
+Each iteration, you choose ONE of three pass types based on what's most valuable right now.
+
+### Pass Types
+
+| Pass | When to choose it |
+|------|-------------------|
+| **implementation** | Default. There are stories to implement and the codebase is in good shape to receive new work. |
+| **project-management** | The PRD needs attention: stories are too large, priorities are wrong, acceptance criteria are stale, or there are gaps in the plan. |
+| **architecture** | Tech debt is accumulating, code is duplicated across device models, modules are too large, or upcoming stories would benefit from refactoring first. |
+
+### How to Choose
+
+1. Read the PRD at `prd.json`
 2. Read the progress log at `progress.txt` (check Codebase Patterns section first)
 3. Read `../../CLAUDE.md` for project conventions
-4. Check you're on the correct branch from PRD `branchName`. If not, check it out or create from main.
-5. Pick the **highest priority** user story where `passes: false`
-6. Implement that single user story
-7. Run quality checks: `nix develop --command cargo clippy --workspace -- -D warnings && nix develop --command cargo test --workspace`
-8. Update CLAUDE.md files if you discover reusable patterns (see below)
-9. If checks pass, commit ALL changes with message: `feat: [Story ID] - [Story Title]`
-10. Update the PRD to set `passes: true` for the completed story
-11. Append your progress to `progress.txt`
+4. Review the **pass history** below (injected by ralph.sh)
+5. Consider:
+   - **If the last 4+ passes were all implementation** → strongly consider a PM or architecture pass
+   - **If you notice the next story is unclear, too large, or has stale criteria** → do a PM pass
+   - **If you notice duplicated patterns, overgrown files, or tech debt** → do an architecture pass
+   - **If the codebase is clean and the next story is clear** → do an implementation pass
+   - **Never do the same non-implementation pass type twice in a row**
 
-## Progress Report Format
+6. Once you've decided, read the detailed instructions for your chosen pass type from the `passes/` directory:
+   - `passes/implementation.md`
+   - `passes/project-management.md`
+   - `passes/architecture.md`
 
-APPEND to progress.txt (never replace, always append):
+7. Follow those instructions completely.
+
+### Pass History
+
+<!-- PASS_HISTORY_PLACEHOLDER -->
+
+## Logging Your Pass
+
+After completing your work, you MUST update the `passLog` array in `prd.json` by appending an entry:
+
+```json
+{
+  "iteration": <next number>,
+  "passType": "implementation" | "project-management" | "architecture",
+  "summary": "Brief description of what was done",
+  "date": "YYYY-MM-DD",
+  "storyId": "US-XXX or null if not an implementation pass"
+}
 ```
-## [Date/Time] - [Story ID]
-- What was implemented
-- Files changed
-- **Learnings for future iterations:**
-  - Patterns discovered (e.g., "this codebase uses X for Y")
-  - Gotchas encountered (e.g., "don't forget to update Z when changing W")
-  - Useful context (e.g., "the evaluation panel is in component X")
----
-```
-
-The learnings section is critical - it helps future iterations avoid repeating mistakes and understand the codebase better.
-
-## Consolidate Patterns
-
-If you discover a **reusable pattern** that future iterations should know, add it to the `## Codebase Patterns` section at the TOP of progress.txt (create it if it doesn't exist). This section should consolidate the most important learnings:
-
-```
-## Codebase Patterns
-- Example: Use `faer` for sparse matrix operations
-- Example: Device trait has dc_stamp(), ac_stamp(), tran_stamp() methods
-- Example: Node "0" is ground and excluded from the MNA matrix
-```
-
-Only add patterns that are **general and reusable**, not story-specific details.
-
-## Update CLAUDE.md Files
-
-Before committing, check if any edited files have learnings worth preserving in nearby CLAUDE.md files:
-
-1. **Identify directories with edited files** - Look at which directories you modified
-2. **Check for existing CLAUDE.md** - Look for CLAUDE.md in those directories or parent directories
-3. **Add valuable learnings** - If you discovered something future developers/agents should know:
-   - API patterns or conventions specific to that module
-   - Gotchas or non-obvious requirements
-   - Dependencies between files
-   - Testing approaches for that area
-
-**Do NOT add:**
-- Story-specific implementation details
-- Temporary debugging notes
-- Information already in progress.txt
 
 ## Stop Condition
 
-After completing a user story, check if ALL stories have `passes: true`.
+After completing a pass, check if ALL stories have `passes: true`.
 
 If ALL stories are complete and passing, reply with:
 <promise>COMPLETE</promise>
 
-If there are still stories with `passes: false`, end your response normally (another iteration will pick up the next story).
+If there are still stories with `passes: false`, end your response normally (another iteration will pick up the next task).
 
 ## Important
 
-- Work on ONE story per iteration
+- Do ONE pass per iteration
 - Commit frequently
 - Keep CI green
 - Read the Codebase Patterns section in progress.txt before starting

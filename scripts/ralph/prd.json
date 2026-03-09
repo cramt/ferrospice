@@ -2,6 +2,7 @@
   "project": "Ferrospice",
   "branchName": "ralph/simulation-engine",
   "description": "Ferrospice Simulation Engine - SPICE circuit simulator library in Rust, rewriting ngspice. Done when all 113 ngspice base test suite .cir files pass.",
+  "passLog": [],
   "userStories": [
     {
       "id": "US-001",
