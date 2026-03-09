@@ -11,6 +11,7 @@ use crate::diode::DiodeModel;
 use crate::jfet::{JfetInstance, JfetModel};
 use crate::mosfet::{MosfetInstance, MosfetModel};
 use crate::subckt::flatten_netlist;
+use crate::vbic::{VbicInstance, VbicModel};
 
 /// Ground node name — the reference node excluded from the MNA matrix.
 const GROUND: &str = "0";
@@ -251,6 +252,8 @@ pub struct MnaSystem {
     pub bsim3soi_pds: Vec<crate::bsim3soi_pd::Bsim3SoiPdInstance>,
     /// Resolved BSIM4 MOSFET instances for NR iteration.
     pub bsim4s: Vec<Bsim4Instance>,
+    /// Resolved VBIC BJT instances (LEVEL=4) for NR iteration.
+    pub vbics: Vec<VbicInstance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -290,6 +293,7 @@ impl MnaSystem {
             || !self.bsim3soi_fds.is_empty()
             || !self.bsim3soi_pds.is_empty()
             || !self.bsim4s.is_empty()
+            || !self.vbics.is_empty()
     }
 
     /// Total number of nodes including internal nodes created by nonlinear
@@ -381,6 +385,11 @@ impl MnaSystem {
                 .iter()
                 .filter(|b| b.body_int_idx.is_some())
                 .count()
+            + self
+                .vbics
+                .iter()
+                .map(|v| v.model.internal_node_count())
+                .sum::<usize>()
     }
 }
 
@@ -420,6 +429,31 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
             element: element_name.to_string(),
         }),
     }
+}
+
+/// Extract the BJT LEVEL parameter from model definition and instance params.
+/// Default is 1 (Gummel-Poon). LEVEL=4 is VBIC.
+fn get_bjt_level(
+    model_def: Option<&&ferrospice_netlist::ModelDef>,
+    instance_params: &[ferrospice_netlist::Param],
+) -> i32 {
+    for p in instance_params {
+        if p.name.eq_ignore_ascii_case("LEVEL")
+            && let Expr::Num(v) = &p.value
+        {
+            return *v as i32;
+        }
+    }
+    if let Some(mdef) = model_def {
+        for p in &mdef.params {
+            if p.name.eq_ignore_ascii_case("LEVEL")
+                && let Expr::Num(v) = &p.value
+            {
+                return *v as i32;
+            }
+        }
+    }
+    1
 }
 
 /// Extract the MOSFET LEVEL parameter from model definition and instance params.
@@ -557,13 +591,23 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 if let Some(s) = substrate {
                     node_map.index(s);
                 }
-                let _ = params; // instance params handled in second pass
-                let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    BjtModel::from_model_def(mdef)
+                let level = get_bjt_level(models.get(&model.to_uppercase()), params);
+                if level == 4 {
+                    // VBIC model
+                    let vm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        VbicModel::from_model_def(mdef)
+                    } else {
+                        VbicModel::new(crate::vbic::VbicType::Npn)
+                    };
+                    internal_node_count += vm.internal_node_count();
                 } else {
-                    BjtModel::new(crate::bjt::BjtType::Npn)
-                };
-                internal_node_count += bm.internal_node_count();
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        BjtModel::from_model_def(mdef)
+                    } else {
+                        BjtModel::new(crate::bjt::BjtType::Npn)
+                    };
+                    internal_node_count += bm.internal_node_count();
+                }
             }
             ElementKind::Mosfet {
                 d,
@@ -708,6 +752,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut resistors = Vec::new();
     let mut diodes = Vec::new();
     let mut bjts = Vec::new();
+    let mut vbics = Vec::new();
     let mut mosfets = Vec::new();
     let mut jfets = Vec::new();
     let mut bsim3s = Vec::new();
@@ -765,43 +810,11 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 c,
                 b,
                 e,
+                substrate,
                 model,
                 params,
-                ..
             } => {
-                let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    BjtModel::from_model_def(mdef)
-                } else {
-                    BjtModel::new(crate::bjt::BjtType::Npn)
-                };
-                let bm = bm.with_instance_params(params);
-
-                let col_idx = node_map.get(c);
-                let base_idx = node_map.get(b);
-                let emit_idx = node_map.get(e);
-
-                // Create internal nodes for series resistances
-                let base_prime_idx = if bm.rb > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    base_idx
-                };
-                let col_prime_idx = if bm.rc > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    col_idx
-                };
-                let emit_prime_idx = if bm.re > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    emit_idx
-                };
+                let level = get_bjt_level(models.get(&model.to_uppercase()), params);
 
                 // Extract area and M from instance params
                 let mut area = 1.0;
@@ -816,19 +829,132 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     }
                 }
 
-                bjts.push(BjtInstance {
-                    name: element.name.clone(),
-                    col_idx,
-                    base_idx,
-                    emit_idx,
-                    base_prime_idx,
-                    col_prime_idx,
-                    emit_prime_idx,
-                    model: bm,
-                    area,
-                    m: m_mult,
-                });
-                // BJT stamps are applied during NR iteration, not here.
+                if level == 4 {
+                    // VBIC model
+                    let mut vm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        VbicModel::from_model_def(mdef)
+                    } else {
+                        VbicModel::new(crate::vbic::VbicType::Npn)
+                    };
+                    vm.temperature_adjust(27.0); // TODO: use simulation TEMP option
+
+                    let coll_idx = node_map.get(c);
+                    let base_idx = node_map.get(b);
+                    let emit_idx = node_map.get(e);
+                    let subs_idx = substrate.as_ref().and_then(|s| node_map.get(s));
+
+                    // Always-internal nodes
+                    let coll_ci_idx = {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    };
+                    let base_bi_idx = {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    };
+                    let base_bp_idx = {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    };
+
+                    // Conditional internal nodes
+                    let coll_cx_idx = if vm.rcx > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        coll_idx
+                    };
+                    let base_bx_idx = if vm.rbx > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        base_idx
+                    };
+                    let emit_ei_idx = if vm.re > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        emit_idx
+                    };
+                    let subs_si_idx = if vm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        subs_idx
+                    };
+
+                    vbics.push(VbicInstance {
+                        name: element.name.clone(),
+                        coll_idx,
+                        base_idx,
+                        emit_idx,
+                        subs_idx,
+                        coll_ci_idx,
+                        base_bi_idx,
+                        base_bp_idx,
+                        coll_cx_idx,
+                        base_bx_idx,
+                        emit_ei_idx,
+                        subs_si_idx,
+                        model: vm,
+                        area,
+                        m: m_mult,
+                    });
+                } else {
+                    let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        BjtModel::from_model_def(mdef)
+                    } else {
+                        BjtModel::new(crate::bjt::BjtType::Npn)
+                    };
+                    let bm = bm.with_instance_params(params);
+
+                    let col_idx = node_map.get(c);
+                    let base_idx = node_map.get(b);
+                    let emit_idx = node_map.get(e);
+
+                    let base_prime_idx = if bm.rb > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        base_idx
+                    };
+                    let col_prime_idx = if bm.rc > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        col_idx
+                    };
+                    let emit_prime_idx = if bm.re > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        emit_idx
+                    };
+
+                    bjts.push(BjtInstance {
+                        name: element.name.clone(),
+                        col_idx,
+                        base_idx,
+                        emit_idx,
+                        base_prime_idx,
+                        col_prime_idx,
+                        emit_prime_idx,
+                        model: bm,
+                        area,
+                        m: m_mult,
+                    });
+                }
+                // BJT/VBIC stamps are applied during NR iteration, not here.
             }
             ElementKind::Mosfet {
                 d,
@@ -1492,6 +1618,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         bsim3soi_pds,
         bsim3soi_fds,
         bsim4s,
+        vbics,
     })
 }
 

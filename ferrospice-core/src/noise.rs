@@ -530,6 +530,87 @@ fn compute_total_noise(
         total += channel_noise * adjoint_transfer_sq(adjoint, dp, sp_idx);
     }
 
+    // VBIC noise sources.
+    for vbic in &mna.vbics {
+        let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+            vbic.junction_voltages(op_solution);
+        let comp = vbic
+            .model
+            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
+        let s = vbic.m * vbic.area;
+
+        let bi = vbic.base_bi_idx;
+        let bx = vbic.base_bx_idx;
+        let bp = vbic.base_bp_idx;
+        let ci = vbic.coll_ci_idx;
+        let cx = vbic.coll_cx_idx;
+        let ei = vbic.emit_ei_idx;
+        let si = vbic.subs_si_idx;
+
+        // Collector shot noise: 2q|Ic|
+        let ic = comp.iciei.abs() * s;
+        let ic_shot = 2.0 * Q_CHARGE * ic;
+        total += ic_shot * adjoint_transfer_sq(adjoint, ci, ei);
+
+        // Base-emitter shot noise: 2q|Ibe|
+        let ibe = comp.ibe.abs() * s;
+        let ibe_shot = 2.0 * Q_CHARGE * ibe;
+        total += ibe_shot * adjoint_transfer_sq(adjoint, bi, ei);
+
+        // Parasitic base-emitter shot noise: 2q|Ibep|
+        let ibep = comp.ibep.abs() * s;
+        let ibep_shot = 2.0 * Q_CHARGE * ibep;
+        total += ibep_shot * adjoint_transfer_sq(adjoint, bp, ei);
+
+        // Parasitic transport shot noise: 2q|Iccp|
+        let iccp = comp.iccp.abs() * s;
+        let iccp_shot = 2.0 * Q_CHARGE * iccp;
+        total += iccp_shot * adjoint_transfer_sq(adjoint, bp, si);
+
+        // Thermal noise from resistances
+        if vbic.model.rcx > 0.0 && vbic.model.rcx_t > 0.0 {
+            let g = s / vbic.model.rcx_t;
+            total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.coll_idx, cx);
+        }
+        if vbic.model.rci > 0.0 {
+            // Internal collector resistance thermal noise
+            let g_rci = comp.dirci_dvrci.abs() * s;
+            if g_rci > 0.0 {
+                total += 4.0 * K_BOLTZ * T_NOM * g_rci * adjoint_transfer_sq(adjoint, cx, ci);
+            }
+        }
+        if vbic.model.rbx > 0.0 && vbic.model.rbx_t > 0.0 {
+            let g = s / vbic.model.rbx_t;
+            total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.base_idx, bx);
+        }
+        if vbic.model.rbi > 0.0 {
+            let g_rbi = comp.dirbi_dvrbi.abs() * s;
+            if g_rbi > 0.0 {
+                total += 4.0 * K_BOLTZ * T_NOM * g_rbi * adjoint_transfer_sq(adjoint, bx, bi);
+            }
+        }
+        if vbic.model.re > 0.0 && vbic.model.re_t > 0.0 {
+            let g = s / vbic.model.re_t;
+            total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.emit_idx, ei);
+        }
+        if vbic.model.rbp > 0.0 {
+            let g_rbp = comp.dirbp_dvrbp.abs() * s;
+            if g_rbp > 0.0 {
+                total += 4.0 * K_BOLTZ * T_NOM * g_rbp * adjoint_transfer_sq(adjoint, bp, cx);
+            }
+        }
+        if vbic.model.rs > 0.0 && vbic.model.rs_t > 0.0 {
+            let g = s / vbic.model.rs_t;
+            total += 4.0 * K_BOLTZ * T_NOM * g * adjoint_transfer_sq(adjoint, vbic.subs_idx, si);
+        }
+
+        // Flicker noise: KFN * |Ibe|^AFN / f^BFN
+        if vbic.model.kfn > 0.0 && freq > 0.0 {
+            let flicker = vbic.model.kfn * ibe.powf(vbic.model.afn) / freq.powf(vbic.model.bfn);
+            total += flicker * adjoint_transfer_sq(adjoint, bi, ei);
+        }
+    }
+
     // BSIM4 noise sources.
     for bsim in &mna.bsim4s {
         let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);

@@ -463,6 +463,98 @@ pub fn stamp_ac_devices(
         let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
         stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }
+
+    // 5g. Stamp VBIC small-signal model at DC operating point.
+    for vbic in &mna.vbics {
+        let (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+            vbic.junction_voltages(op_solution);
+        let comp = vbic
+            .model
+            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
+        let s = vbic.m * vbic.area;
+
+        let bi = vbic.base_bi_idx;
+        let bx = vbic.base_bx_idx;
+        let bp = vbic.base_bp_idx;
+        let ci = vbic.coll_ci_idx;
+        let cx = vbic.coll_cx_idx;
+        let ei = vbic.emit_ei_idx;
+        let si = vbic.subs_si_idx;
+
+        // Stamp all conductances into real part using stamp_conductance
+        // Ibe: BI->EI
+        crate::stamp_conductance(&mut sys.real, bi, ei, s * comp.dibe_dvbei);
+        // Ibex: BX->EI
+        crate::stamp_conductance(&mut sys.real, bx, ei, s * comp.dibex_dvbex);
+        // Ibc: BI->CI
+        crate::stamp_conductance(&mut sys.real, bi, ci, s * comp.dibc_dvbci);
+        // Ibep: BP->EI
+        crate::stamp_conductance(&mut sys.real, bp, ei, s * comp.dibep_dvbep);
+        // Ibcp: BP->SI
+        crate::stamp_conductance(&mut sys.real, bp, si, s * comp.dibcp_dvbcp);
+        // Irci: CX->CI
+        crate::stamp_conductance(&mut sys.real, cx, ci, s * comp.dirci_dvrci);
+        // Irbi: BX->BI
+        crate::stamp_conductance(&mut sys.real, bx, bi, s * comp.dirbi_dvrbi);
+        // Irbp: BP->CX
+        crate::stamp_conductance(&mut sys.real, bp, cx, s * comp.dirbp_dvrbp);
+
+        // VCCS terms (transconductances)
+        // Iciei controlled by Vbei (bi-ei) -> current ci->ei
+        stamp_vccs(&mut sys.real, ci, ei, bi, ei, s * comp.diciei_dvbei);
+        // Iciei controlled by Vbci (bi-ci) -> current ci->ei
+        stamp_vccs(&mut sys.real, ci, ei, bi, ci, s * comp.diciei_dvbci);
+        // Ibc avalanche cross-term: controlled by Vbei -> current bi->ci
+        if comp.dibc_dvbei.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, bi, ci, bi, ei, s * comp.dibc_dvbei);
+        }
+        // Iccp controlled by Vbep -> current bp->si
+        stamp_vccs(&mut sys.real, bp, si, bp, ei, s * comp.diccp_dvbep);
+        // Iccp controlled by Vbcp -> current bp->si
+        stamp_vccs(&mut sys.real, bp, si, bp, si, s * comp.diccp_dvbcp);
+        // Irci cross-terms
+        if comp.dirci_dvbci.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, cx, ci, bi, ci, s * comp.dirci_dvbci);
+        }
+        if comp.dirci_dvbcx.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, cx, ci, bx, ci, s * comp.dirci_dvbcx);
+        }
+        // Irbi cross-terms
+        if comp.dirbi_dvbei.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, bx, bi, bi, ei, s * comp.dirbi_dvbei);
+        }
+        if comp.dirbi_dvbci.abs() > 0.0 {
+            stamp_vccs(&mut sys.real, bx, bi, bi, ci, s * comp.dirbi_dvbci);
+        }
+
+        // External resistances
+        if vbic.model.rcx > 0.0 && vbic.model.rcx_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.coll_idx, cx, s / vbic.model.rcx_t);
+        }
+        if vbic.model.rbx > 0.0 && vbic.model.rbx_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.base_idx, bx, s / vbic.model.rbx_t);
+        }
+        if vbic.model.re > 0.0 && vbic.model.re_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.emit_idx, ei, s / vbic.model.re_t);
+        }
+        if vbic.model.rs > 0.0 && vbic.model.rs_t > 0.0 {
+            crate::stamp_conductance(&mut sys.real, vbic.subs_idx, si, s / vbic.model.rs_t);
+        }
+
+        // Depletion capacitances (imaginary part)
+        if comp.cqbe > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bi, ei, omega * s * comp.cqbe);
+        }
+        if comp.cqbc > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bi, ci, omega * s * comp.cqbc);
+        }
+        if comp.cqbep > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bp, ei, omega * s * comp.cqbep);
+        }
+        if comp.cqbcp > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bp, si, omega * s * comp.cqbcp);
+        }
+    }
 }
 
 /// Apply AC source excitation to the complex RHS.
@@ -668,6 +760,33 @@ pub fn stamp_bsim_ac(stamp: &BsimAcStamp, omega: f64, sys: &mut ComplexLinearSys
     }
     if capbs > 0.0 {
         stamp_imag_conductance(&mut sys.imag, b, sp, omega * m * capbs);
+    }
+}
+
+/// Stamp a VCCS (gm * V(ctrl+ - ctrl-) injected at out+ - out-) into a sparse matrix.
+fn stamp_vccs(
+    matrix: &mut crate::SparseMatrix,
+    out_pos: Option<usize>,
+    out_neg: Option<usize>,
+    ctrl_pos: Option<usize>,
+    ctrl_neg: Option<usize>,
+    gm: f64,
+) {
+    if let Some(i) = out_pos {
+        if let Some(cp) = ctrl_pos {
+            matrix.add(i, cp, gm);
+        }
+        if let Some(cm) = ctrl_neg {
+            matrix.add(i, cm, -gm);
+        }
+    }
+    if let Some(j) = out_neg {
+        if let Some(cp) = ctrl_pos {
+            matrix.add(j, cp, -gm);
+        }
+        if let Some(cm) = ctrl_neg {
+            matrix.add(j, cm, gm);
+        }
     }
 }
 

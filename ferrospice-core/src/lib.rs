@@ -42,6 +42,7 @@ pub mod sparse;
 pub mod subckt;
 pub mod tf;
 pub mod transient;
+pub mod vbic;
 pub mod waveform;
 
 pub use ac::simulate_ac;
@@ -73,3 +74,6 @@ pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixEr
 pub use subckt::{SubcktError, flatten_netlist};
 pub use tf::simulate_tf;
 pub use transient::simulate_tran;
+pub use vbic::{
+    VbicCompanion, VbicInstance, VbicModel, VbicType, stamp_vbic, stamp_vbic_with_voltages,
+};

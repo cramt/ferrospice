@@ -127,6 +127,10 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - FD body feedback: 1S conductance + current source drives body node to FD-computed Vbs (prevents floating node divergence)
 - BSIM3SOI-DD model: `Bsim3SoiDdModel`, `Bsim3SoiDdInstance`, `Bsim3SoiDdCompanion` in ferrospice-core::bsim3soi_dd
 - BSIM3SOI-DD level=56: hybrid of FD (body bias chain) + PD (4-component junction currents)
+- VBIC model (LEVEL=4 BJT): `VbicModel`, `VbicInstance`, `VbicCompanion` in ferrospice-core::vbic
+- VBIC routing: get_bjt_level() in mna.rs checks LEVEL param; LEVEL=4 → VbicModel, default → BjtModel
+- VBIC has 7 internal nodes (3 always: collCI, baseBI, baseBP; 4 conditional: collCX, baseBX, emitEI, subsSI)
+- VBIC stamp uses stamp_vbic_with_voltages() with full Norton companion (multi-control branches need separate VCCS stamps)
 - DD body bias: FD-style Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0eff→Vbsmos→Vbseff chain with Nfb feedback
 - DD junction currents: PD-style 4-component (diffusion, recombination, BJT, tunneling) + GIDL
 - DD impact ionization: FD-style AII/BII/CII/DII + ALPHA0/ALPHA1/BETA0 (not PD's VDSATII0/ESATII)
@@ -336,4 +340,25 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - FD model shared ~70% code with PD; main differences in surface potential chain and body handling
   - `sign as f64` unnecessary cast when sign is already f64 — clippy catches this
 - **Tests:** 4 BSIM3SOI-FD tests pass (NMOS OP, bias points, PMOS OP, 5-terminal), 2 ignored (inverter, DC sweep)
+---
+
+## 2026-03-09 - US-030 (implementation)
+- Implemented VBIC (Vertical Bipolar Inter-Company) BJT model (LEVEL=4)
+- VbicModel struct with 104+ parameters, VbicType enum (NPN/PNP), VbicInstance, VbicCompanion
+- from_model_def() parser handles all VBIC model parameters
+- temperature_adjust() implements vbic_4T_et_cf_t from vbictemp.c (resistance/current/junction scaling)
+- companion() computes full DC load: forward/reverse transport currents (Ifi/Iri), base charge (qb), Early effect, high-injection, avalanche (AVC1/AVC2), parasitic substrate transistor (ISP/IKP), quasi-saturation epitaxial resistance (GAMM/VO/HRCF), current-dependent internal base resistance (RBI/qb)
+- stamp_vbic_with_voltages() handles full Norton companion MNA stamping with multi-control branches
+- depletion_charge() helper for junction capacitance model
+- Voltage limiting via pnjlim on Vbei and Vbci junctions
+- Self-heating and excess phase (NQS) intentionally skipped for this pass
+- **Files created:** ferrospice-core/src/vbic.rs (~1700 lines)
+- **Files modified:** ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/ac.rs, ferrospice-core/src/transient.rs, ferrospice-core/src/noise.rs
+- **Learnings for future iterations:**
+  - VBIC has 7 internal nodes (3 always, 4 conditional on resistance values) vs BJT's 3
+  - The vbic_4T_et_cf_fj equation kernel is auto-generated C code at the bottom of vbicload.c, not a separate file
+  - VBIC companion has multi-control branches (Iciei depends on both Vbei and Vbci), requiring separate VCCS stamps per controlling variable
+  - get_bjt_level() function added (mirroring get_mosfet_level()) to route Q elements to VBIC when LEVEL=4
+  - AC stamp for VBIC needs stamp_vccs helper since conductances come from transconductances, not simple two-terminal conductances
+- **Tests:** 14 VBIC unit tests pass (parameter defaults, parsing, temperature, companion forward/reverse/cutoff/PNP, internal nodes, depletion charge, stamp)
 ---

@@ -19,6 +19,7 @@ use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::{NrOptions, newton_raphson_solve};
 use crate::simulate::simulate_op;
+use crate::vbic::stamp_vbic_with_voltages;
 use crate::waveform::{self, TranParams};
 
 /// Integration method for transient analysis.
@@ -790,6 +791,8 @@ fn solve_timestep(
             .map(|b| b.terminal_voltages(prev_solution))
             .collect::<Vec<(f64, f64, f64)>>(),
     );
+    let vbics = &mna.vbics;
+    let prev_vbic_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); vbics.len()]);
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
@@ -1062,6 +1065,36 @@ fn solve_timestep(
                 let comp =
                     crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
                 crate::bsim4::stamp_bsim4(&mut system.matrix, &mut system.rhs, bsim, &comp);
+            }
+
+            // 11. Stamp VBIC companion models.
+            let mut prev_vb = prev_vbic_voltages.borrow_mut();
+            for (vi, vbic) in vbics.iter().enumerate() {
+                let (raw_vbei, vbex, raw_vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+                    vbic.junction_voltages(solution);
+
+                let vbei = vbic.model.limit_vbei(raw_vbei, prev_vb[vi].0);
+                let vbci = vbic.model.limit_vbci(raw_vbci, prev_vb[vi].1);
+                prev_vb[vi] = (vbei, vbci);
+
+                let comp = vbic
+                    .model
+                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
+                stamp_vbic_with_voltages(
+                    &mut system.matrix,
+                    &mut system.rhs,
+                    vbic,
+                    &comp,
+                    vbei,
+                    vbex,
+                    vbci,
+                    vbcx,
+                    vbep,
+                    vrci,
+                    vrbi,
+                    vrbp,
+                    vbcp,
+                );
             }
         }
     };

@@ -13,6 +13,7 @@ use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::{NrOptions, newton_raphson_solve};
+use crate::vbic::stamp_vbic_with_voltages;
 
 /// Stamp a current source into the RHS vector.
 /// Current flows from ni (pos) to nj (neg) externally:
@@ -125,6 +126,7 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
     let bsim3soi_fds = &mna.bsim3soi_fds;
     let bsim3soi_dds = &mna.bsim3soi_dds;
     let bsim4s = &mna.bsim4s;
+    let vbics = &mna.vbics;
 
     // Precompute vcrit for each diode for voltage limiting.
     let vcrits: Vec<f64> = diodes
@@ -158,6 +160,8 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
         std::cell::RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); bsim3soi_dds.len()]);
     // Track previous BSIM4 voltages (vgs, vds, vbs) for limiting.
     let prev_bsim4_voltages = std::cell::RefCell::new(vec![(0.0, 0.0, 0.0); bsim4s.len()]);
+    // Track previous VBIC junction voltages (vbei, vbci) for limiting.
+    let prev_vbic_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); vbics.len()]);
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps.
@@ -370,6 +374,42 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
 
                 let comp = bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
                 stamp_bsim4(&mut system.matrix, &mut system.rhs, bsim, &comp);
+            }
+        }
+
+        // 9. Stamp VBIC companion models.
+        {
+            let mut prev = prev_vbic_voltages.borrow_mut();
+            for (vi, vbic) in vbics.iter().enumerate() {
+                let (raw_vbei, _vbex, raw_vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
+                    vbic.junction_voltages(solution);
+
+                // Apply voltage limiting on the two main junctions
+                let vbei = vbic.model.limit_vbei(raw_vbei, prev[vi].0);
+                let vbci = vbic.model.limit_vbci(raw_vbci, prev[vi].1);
+                prev[vi] = (vbei, vbci);
+
+                // Recompute vbex from limited vbei (same sign convention)
+                let vbex = raw_vbei; // vbex uses external base, no limiting needed
+
+                let comp = vbic
+                    .model
+                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
+                stamp_vbic_with_voltages(
+                    &mut system.matrix,
+                    &mut system.rhs,
+                    vbic,
+                    &comp,
+                    vbei,
+                    vbex,
+                    vbci,
+                    vbcx,
+                    vbep,
+                    vrci,
+                    vrbi,
+                    vrbp,
+                    vbcp,
+                );
             }
         }
     };
