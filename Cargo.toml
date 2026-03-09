@@ -21,6 +21,7 @@ license = "BSD-3-Clause"
 
 [dependencies]
 ferrospice-netlist = { path = "ferrospice-netlist" }
+ferrospice-core = { path = "ferrospice-core" }
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true
