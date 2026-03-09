@@ -9,7 +9,7 @@ use crate::bjt::stamp_bjt;
 use crate::jfet::stamp_jfet;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
 use crate::mosfet::stamp_mosfet;
-use crate::simulate::{solve_op_raw, total_num_nodes};
+use crate::simulate::solve_op_raw;
 use crate::tf::build_jacobian;
 
 /// Solve a transposed system Y^T * x = rhs.
@@ -125,7 +125,7 @@ fn parse_sens_output(
         Ok((pos, neg, true))
     } else if lower.starts_with("i(") && lower.ends_with(')') {
         let src_name = &lower[2..lower.len() - 1];
-        let num_nodes = total_num_nodes(mna);
+        let num_nodes = mna.total_num_nodes();
         if let Some(pos) = mna
             .vsource_names
             .iter()
@@ -179,7 +179,7 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
     let solution = solve_op_raw(&mna)?;
     let dim = mna.system.dim();
-    let num_nodes = total_num_nodes(&mna);
+    let num_nodes = mna.total_num_nodes();
 
     // Build Jacobian
     let jacobian = build_jacobian(&mna, &solution);

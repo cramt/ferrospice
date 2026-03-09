@@ -6,7 +6,7 @@ use ferrospice_netlist::{
 };
 
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::simulate::{solve_op_raw, total_num_nodes};
+use crate::simulate::solve_op_raw;
 use crate::tf::build_jacobian;
 
 /// Perform pole-zero analysis (.pz).
@@ -429,7 +429,7 @@ fn find_zeros(
     node_k: &str,
     input_type: PzInputType,
 ) -> Result<Vec<(f64, f64)>, MnaError> {
-    let num_nodes = total_num_nodes(mna);
+    let num_nodes = mna.total_num_nodes();
 
     // Determine which row to remove (input side).
     let remove_row = match input_type {

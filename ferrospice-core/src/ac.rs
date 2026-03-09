@@ -92,37 +92,7 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
         }
 
         // Collect branch currents (complex).
-        let num_nodes = mna.node_map.len()
-            + mna
-                .diodes
-                .iter()
-                .filter(|d| d.internal_idx.is_some())
-                .count()
-            + mna
-                .bjts
-                .iter()
-                .map(|b| b.model.internal_node_count())
-                .sum::<usize>()
-            + mna
-                .mosfets
-                .iter()
-                .map(|m| m.model.internal_node_count())
-                .sum::<usize>()
-            + mna
-                .jfets
-                .iter()
-                .map(|j| j.model.internal_node_count())
-                .sum::<usize>()
-            + mna
-                .bsim3s
-                .iter()
-                .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
-                .sum::<usize>()
-            + mna
-                .bsim4s
-                .iter()
-                .map(|b| b.model.internal_node_count(b.nrd, b.nrs))
-                .sum::<usize>();
+        let num_nodes = mna.total_num_nodes();
         for (i, _vsrc) in mna.vsource_names.iter().enumerate() {
             let idx = num_nodes + i;
             let (re, im) = solution[idx];

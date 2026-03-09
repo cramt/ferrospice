@@ -349,12 +349,16 @@
     },
     {
       "id": "US-021",
-      "title": "BSIM3 MOSFET model",
-      "description": "As a developer, I need the BSIM3 model for accurate short-channel MOSFET simulation.",
+      "title": "BSIM3 MOSFET model — parameter parsing and temperature preprocessing",
+      "description": "As a developer, I need BSIM3v3 parameter definitions and temperature-dependent preprocessing so that the model infrastructure is ready for the DC equations.",
       "acceptanceCriteria": [
-        "BSIM3v3 model implementation (or port from ngspice C code)",
-        "NMOS and PMOS",
-        "Port ngspice-upstream/tests/bsim3/ tests",
+        "Bsim3Model struct with all ~116 BSIM3v3 parameters (port from ngspice b3mpar.c / bsim3def.h)",
+        "from_model_def() parser that reads .model NMOS/PMOS LEVEL=8 (or LEVEL=49) parameters",
+        "Default values matching ngspice for every parameter",
+        "Temperature preprocessing: effective mobility, threshold voltage adjustments (port b3temp.c)",
+        "Bsim3Instance struct with per-instance geometry (W, L, NF, etc.) and resolved effective params",
+        "NMOS and PMOS type handling with correct sign conventions",
+        "Unit tests: parse a BSIM3 .model card, verify all defaults, verify temperature scaling",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
@@ -364,11 +368,17 @@
     },
     {
       "id": "US-022",
-      "title": "BSIM4 MOSFET model",
-      "description": "As a developer, I need the BSIM4 model.",
+      "title": "BSIM3 MOSFET model — DC equations and NR stamps",
+      "description": "As a developer, I need the BSIM3v3 DC load function so that BSIM3 transistors can be solved at operating point.",
       "acceptanceCriteria": [
-        "BSIM4 model implementation",
-        "Port ngspice-upstream/tests/bsim4/ tests",
+        "DC load function porting the core of b3ld.c: threshold voltage (Vth), drain current (Ids), output conductance (gds), transconductance (gm, gmbs)",
+        "Short-channel effects: DIBL, channel-length modulation, velocity saturation, CLM",
+        "Body effect and substrate current (Isub)",
+        "Companion model (linearized conductance + current source) for Newton-Raphson iteration",
+        "stamp_bsim3() function following the same pattern as stamp_mosfet()",
+        "Integration into simulate_op, simulate_dc (add to has_nonlinear check, NR load closure)",
+        "Test: NMOS DC sweep (Vgs sweep at fixed Vds) — Ids curve shape matches ngspice within 1%",
+        "Test: PMOS operating point matches ngspice within 1e-6",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
@@ -378,84 +388,282 @@
     },
     {
       "id": "US-023",
-      "title": "BSIM-SOI models",
-      "description": "As a developer, I need BSIM3-SOI device models (PD, FD, DD variants).",
+      "title": "BSIM3 MOSFET model — AC, charge model, and test suite",
+      "description": "As a developer, I need the BSIM3 charge/capacitance model and AC stamps so that AC and transient analysis work with BSIM3.",
       "acceptanceCriteria": [
-        "BSIM3-SOI Partially Depleted, Fully Depleted, and Double Diffused models",
-        "Port ngspice-upstream/tests/bsim3soipd/, bsim3soifd/, bsim3soidd/ tests (18 tests total)",
+        "Charge model: Qg, Qd, Qs, Qb gate charge partitioning (capmod 0/1/2/3)",
+        "Parasitic capacitances: overlap caps, junction caps with bias dependence",
+        "AC small-signal stamp: gm, gds, gmbs conductances + capacitance matrix",
+        "Transient companion model for charge storage elements",
+        "Port ngspice-upstream/tests/bsim3/ qaSpec tests as integration tests",
+        "All BSIM3 tests pass (DC sweep, AC frequency response, noise if applicable)",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 23,
       "passes": false,
-      "notes": ""
+      "notes": "Reference: second half of b3ld.c (charge equations), b3acld.c. The qaSpec tests use a parametric format — may need a simple qaSpec parser or manual conversion to .cir files."
     },
     {
       "id": "US-024",
-      "title": "VBIC bipolar model",
-      "description": "As a developer, I need the VBIC bipolar model.",
+      "title": "BSIM4 MOSFET model — parameter parsing and temperature preprocessing",
+      "description": "As a developer, I need BSIM4 parameter definitions and temperature preprocessing, building on BSIM3 infrastructure.",
       "acceptanceCriteria": [
-        "VBIC model implementation",
-        "Port ngspice-upstream/tests/vbic/ tests (6 tests)",
+        "Bsim4Model struct with all ~212 BSIM4 parameters (port from ngspice b4mpar.c / bsim4def.h)",
+        "from_model_def() parser that reads .model NMOS/PMOS LEVEL=14 (or LEVEL=54) parameters",
+        "Default values matching ngspice for every parameter",
+        "Temperature preprocessing (port b4temp.c — 2408 lines)",
+        "Bsim4Instance struct with per-instance geometry and effective parameters",
+        "New BSIM4-specific features: well-proximity effect (wpemod), geometry-dependent parasitics (geomod)",
+        "Unit tests: parse a BSIM4 .model card, verify defaults, verify temperature scaling",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 24,
       "passes": false,
-      "notes": ""
+      "notes": "Reference: ngspice-upstream/src/spicelib/devices/bsim4/ — b4mpar.c (3685 lines), b4temp.c (2408 lines), bsim4def.h (3931 lines). BSIM4 has ~83% more parameters than BSIM3. Focus on data structures only."
     },
     {
       "id": "US-025",
-      "title": "MESA, HFET, MOS6 and remaining device models",
-      "description": "As a developer, I need the remaining device models to complete test suite coverage.",
+      "title": "BSIM4 MOSFET model — DC equations and NR stamps",
+      "description": "As a developer, I need the BSIM4 DC load function so that BSIM4 transistors can be solved.",
       "acceptanceCriteria": [
-        "MESA FET model — port ngspice-upstream/tests/mesa/ (11 tests)",
-        "HFET model — port ngspice-upstream/tests/hfet/ (2 tests)",
-        "MOS6 model — port ngspice-upstream/tests/mos6/ (2 tests)",
-        "MESFET model — port ngspice-upstream/tests/mes/ (1 test)",
+        "DC load function porting b4ld.c: threshold voltage, drain current, conductances",
+        "BSIM4-specific effects: GIDL/GISL (gate-induced drain/source leakage), new mobility models",
+        "Self-heating network (if enabled via shmod)",
+        "Companion model and stamp_bsim4() for NR iteration",
+        "Integration into simulate_op, simulate_dc",
+        "Test: NMOS DC sweep matches ngspice within 1%",
+        "Test: PMOS operating point matches ngspice within 1e-6",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 25,
       "passes": false,
-      "notes": ""
+      "notes": "Reference: b4ld.c (5623 lines). The DC core is ~2500 lines, rest is charge model. Can reuse patterns from BSIM3 DC implementation."
     },
     {
       "id": "US-026",
-      "title": "Transmission line models",
-      "description": "As a developer, I need transmission line models (LTRA, TXL, CPL).",
+      "title": "BSIM4 MOSFET model — AC, charge model, noise, and test suite",
+      "description": "As a developer, I need the BSIM4 charge, noise, and AC models and all tests passing.",
       "acceptanceCriteria": [
-        "Lossy transmission line (LTRA) model",
-        "Coupled multiconductor line (TXL/CPL) models",
-        "Port ngspice-upstream/tests/transmission/ tests (6 tests)",
+        "Charge model: Qg, Qd, Qs, Qb with BSIM4 charge partitioning (capmod options)",
+        "Noise model: thermal noise (tnoiMod 0/1/2), flicker noise (fnoiMod 0/1), induced gate noise",
+        "AC small-signal stamps and transient companion model",
+        "Port ngspice-upstream/tests/bsim4/ qaSpec tests as integration tests",
+        "All BSIM4 tests pass",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 26,
       "passes": false,
-      "notes": ""
+      "notes": "Reference: b4noi.c for noise, second half of b4ld.c for charges. BSIM4 has more sophisticated noise than BSIM3 (tnoimod, fnoimod combinations)."
     },
     {
       "id": "US-027",
-      "title": "Port full regression test suite",
-      "description": "As a developer, I need all regression tests passing to ensure parser, control flow, and edge cases work.",
+      "title": "BSIM3-SOI Partially Depleted model",
+      "description": "As a developer, I need the BSIM3SOI-PD model for silicon-on-insulator circuits.",
       "acceptanceCriteria": [
-        "Port ngspice-upstream/tests/regression/misc/ (13 tests)",
-        "Port ngspice-upstream/tests/regression/lib-processing/ (7 tests)",
-        "Port ngspice-upstream/tests/regression/parser/ (5 tests)",
-        "Port ngspice-upstream/tests/regression/temper/ (4 tests)",
-        "Port ngspice-upstream/tests/regression/model/ (3 tests)",
-        "Port ngspice-upstream/tests/regression/func/ (1 test)",
-        "All 41 regression tests pass",
+        "BSIM3SOI-PD model implementation (port from ngspice b3soipdld.c and related files)",
+        "SOI-specific physics: floating body, parasitic bipolar, self-heating",
+        "Parameter parsing and temperature preprocessing",
+        "DC load, AC stamps, and transient companion",
+        "Port ngspice-upstream/tests/bsim3soipd/ tests (6 tests)",
+        "All 6 BSIM3SOI-PD tests pass",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 27,
       "passes": false,
-      "notes": ""
+      "notes": "Reference: ngspice bsim3soipd/ — 15,789 lines total. Can leverage BSIM3 core equations + SOI extensions. Largest SOI variant."
     },
     {
       "id": "US-028",
+      "title": "BSIM3-SOI Fully Depleted model",
+      "description": "As a developer, I need the BSIM3SOI-FD model.",
+      "acceptanceCriteria": [
+        "BSIM3SOI-FD model implementation",
+        "Front-channel dominant physics, simpler body model than PD",
+        "Port ngspice-upstream/tests/bsim3soifd/ tests (6 tests)",
+        "All 6 BSIM3SOI-FD tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": "Reference: ngspice bsim3soifd/ — 13,884 lines. Should share significant infrastructure with BSIM3SOI-PD."
+    },
+    {
+      "id": "US-029",
+      "title": "BSIM3-SOI Double Diffused model",
+      "description": "As a developer, I need the BSIM3SOI-DD model.",
+      "acceptanceCriteria": [
+        "BSIM3SOI-DD model implementation",
+        "Dual-channel SOI physics",
+        "Port ngspice-upstream/tests/bsim3soidd/ tests (6 tests)",
+        "All 6 BSIM3SOI-DD tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": "Reference: ngspice bsim3soidd/ — 14,860 lines. Third SOI variant, should reuse most of PD/FD infrastructure."
+    },
+    {
+      "id": "US-030",
+      "title": "VBIC bipolar model — parameters and DC equations",
+      "description": "As a developer, I need the VBIC (Vertical Bipolar Inter-Company) advanced BJT model for DC analysis.",
+      "acceptanceCriteria": [
+        "VbicModel struct with all parameters (port from ngspice vbicmpar.c / vbicdefs.h)",
+        "from_model_def() parser for .model NPN/PNP LEVEL=4",
+        "DC load function: forward/reverse transport currents, parasitic base current paths, avalanche multiplication",
+        "Self-heating thermal network (Vrth, RTH, CTH)",
+        "NR companion model and stamp_vbic()",
+        "Integration into simulate_op, simulate_dc",
+        "Test: VBIC CE amplifier DC bias matches ngspice within 1e-6",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": "Reference: ngspice vbic/ — 9,742 lines total. vbicload.c (4118 lines) has the core equations. 108-element parameter array per instance."
+    },
+    {
+      "id": "US-031",
+      "title": "VBIC bipolar model — AC, charge model, and test suite",
+      "description": "As a developer, I need the VBIC AC/charge model and all 6 tests passing.",
+      "acceptanceCriteria": [
+        "Junction charge models for all VBIC capacitances",
+        "AC small-signal stamps",
+        "Transient companion model",
+        "Port ngspice-upstream/tests/vbic/ tests (6 tests: CEamp, CBamp, CCamp, and variants)",
+        "All 6 VBIC tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": "Builds on US-030 DC implementation. The charge model adds junction capacitances and transit time effects."
+    },
+    {
+      "id": "US-032",
+      "title": "MESA FET model",
+      "description": "As a developer, I need the MESA (Metal Semiconductor) FET model.",
+      "acceptanceCriteria": [
+        "MESA FET model implementation (port from ngspice mesa/ — 3,570 lines)",
+        "Parameter parsing and DC/AC/transient stamps",
+        "Port ngspice-upstream/tests/mesa/ tests (11 tests)",
+        "All 11 MESA tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": "MESA is a MESFET variant. Reference: ngspice mesa/ — 3,570 lines total, moderate complexity."
+    },
+    {
+      "id": "US-033",
+      "title": "MOS6 MOSFET model",
+      "description": "As a developer, I need the MOS level 6 model.",
+      "acceptanceCriteria": [
+        "MOS6 model implementation (port from ngspice mos6/ — 3,594 lines)",
+        "Extended MOSFET model beyond Shichman-Hodges",
+        "Port ngspice-upstream/tests/mos6/ tests (2 tests)",
+        "All 2 MOS6 tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": "Reference: ngspice mos6/ — 3,594 lines. Can build on existing MOSFET level 1 infrastructure."
+    },
+    {
+      "id": "US-034",
+      "title": "HFET and MESFET models",
+      "description": "As a developer, I need the HFET (heterojunction FET) and basic MESFET models.",
+      "acceptanceCriteria": [
+        "HFET model implementation (port from ngspice hfet/ — 3,304 lines)",
+        "MESFET model implementation (port from ngspice mes/ — 3,757 lines)",
+        "Port ngspice-upstream/tests/hfet/ tests (2 tests)",
+        "Port ngspice-upstream/tests/mes/ tests (1 test)",
+        "All 3 tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": "Two small related FET models. HFET and MES are both ~3,500 lines each, moderate complexity, related to JFET/MESA family."
+    },
+    {
+      "id": "US-035",
+      "title": "Lossy transmission line model (LTRA)",
+      "description": "As a developer, I need the lossy transmission line model for transient simulation.",
+      "acceptanceCriteria": [
+        "LTRA model implementation (port from ngspice ltra/ — 4,660 lines)",
+        "R, L, G, C per-unit-length parameters and length",
+        "History storage and convolution for transient analysis",
+        "Lossy line differential equation solving",
+        "Port LTRA tests from ngspice-upstream/tests/transmission/",
+        "LTRA tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": "Reference: ngspice ltra/ — 4,660 lines. Key challenge is ltramisc.c (1727 lines) with history/convolution. Most complex transmission line model."
+    },
+    {
+      "id": "US-036",
+      "title": "TXL and CPL transmission line models",
+      "description": "As a developer, I need the TXL (single) and CPL (coupled multiconductor) transmission line models.",
+      "acceptanceCriteria": [
+        "TXL model implementation (port from ngspice txl/ — 2,567 lines)",
+        "CPL model implementation (port from ngspice cpl/ — 4,010 lines)",
+        "Port remaining transmission line tests from ngspice-upstream/tests/transmission/",
+        "All transmission line tests pass (6 total across LTRA + TXL + CPL)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": "TXL is simpler than LTRA. CPL extends TXL to coupled lines. Can share infrastructure with LTRA from US-035."
+    },
+    {
+      "id": "US-037",
+      "title": "Regression tests — parser and control flow",
+      "description": "As a developer, I need the parser and control flow regression tests passing.",
+      "acceptanceCriteria": [
+        "Port ngspice-upstream/tests/regression/parser/ (5 tests)",
+        "Port ngspice-upstream/tests/regression/func/ (1 test)",
+        "Port ngspice-upstream/tests/regression/lib-processing/ (7 tests)",
+        "All 13 tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": "These test the netlist parser, function evaluation, and .lib/.include processing. May require parser enhancements in ferrospice-netlist."
+    },
+    {
+      "id": "US-038",
+      "title": "Regression tests — models, temperature, and misc",
+      "description": "As a developer, I need the remaining regression tests passing.",
+      "acceptanceCriteria": [
+        "Port ngspice-upstream/tests/regression/model/ (3 tests)",
+        "Port ngspice-upstream/tests/regression/temper/ (4 tests)",
+        "Port ngspice-upstream/tests/regression/misc/ (13 tests)",
+        "Port ngspice-upstream/tests/regression/subckt-processing/ tests (if not already ported)",
+        "Port ngspice-upstream/tests/regression/sens/ and regression/pz/ tests (if not already ported)",
+        "All remaining regression tests pass",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": "Temperature tests may require .TEMP and .PARAM TEMPER support in the parser. Misc tests cover edge cases across all analyses."
+    },
+    {
+      "id": "US-039",
       "title": "Test harness matching ngspice check.sh",
       "description": "As a developer, I need an automated test harness that runs all 113 .cir files and compares output to .out references.",
       "acceptanceCriteria": [
@@ -467,12 +675,12 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 28,
+      "priority": 39,
       "passes": false,
       "notes": ""
     },
     {
-      "id": "US-029",
+      "id": "US-040",
       "title": "Minimal CLI for running netlists",
       "description": "As a user, I want a CLI to run SPICE netlists so I can use ferrospice from the command line.",
       "acceptanceCriteria": [
@@ -482,7 +690,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 29,
+      "priority": 40,
       "passes": false,
       "notes": ""
     }
