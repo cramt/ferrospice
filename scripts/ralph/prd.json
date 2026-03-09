@@ -16,6 +16,13 @@
       "summary": "Verified US-024 acceptance criteria already met from US-022 BSIM4 implementation: Bsim4Model with 237 parse arms, size_dep_param temperature preprocessing, 8 unit tests passing",
       "date": "2026-03-09",
       "storyId": "US-024"
+    },
+    {
+      "iteration": 3,
+      "passType": "implementation",
+      "summary": "Implemented GISL, mobMod 1/2, vtfbphi1 preprocessing, fixed critical VADITS bug causing current blow-up, added 7 integration tests with full qaSpec parameters",
+      "date": "2026-03-09",
+      "storyId": "US-025"
     }
   ],
   "userStories": [
@@ -455,8 +462,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 25,
-      "passes": false,
-      "notes": "Reference: b4ld.c (5623 lines). The DC core is ~2500 lines, rest is charge model. Can reuse patterns from BSIM3 DC implementation."
+      "passes": true,
+      "notes": "GISL implemented, mobMod 0/1/2 supported, vtfbphi1 preprocessing added, critical VADITS bug fixed. 7 integration tests with full qaSpec CMC parameters (NMOS DC sweep at 3 biases + saturation plateau + PMOS OP/cutoff + NMOS OP)."
     },
     {
       "id": "US-026",

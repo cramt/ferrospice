@@ -231,3 +231,21 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - US-025 (DC equations) likely also done — bsim4_companion() and stamp_bsim4() exist
   - US-026 (AC/charge/noise) needs qaSpec test porting but AC/noise integration exists
 ---
+
+## 2026-03-09 - US-025 (implementation)
+- Completed BSIM4 DC equations: GISL, mobMod 1/2, vtfbphi1, VADITS fix
+- Files changed:
+  - ferrospice-core/src/bsim4.rs (GISL params/parsing/binning/computation, mobMod 1/2 dispatch, vtfbphi1 preprocessing, VADITS bug fix, ceq_d sign fix)
+  - ferrospice-core/tests/bsim4.rs (new: 7 integration tests with full qaSpec CMC parameters)
+- **Critical bug fixed:** VADITS formula was completely wrong — used a fabricated formula instead of ngspice b4ld.c lines 2003-2024. Caused drain currents of -27178A with full qaSpec params. Fixed to: `VADITS = (1 + (1+pditsl*Leff)*exp(pditsd*Vds)) / pdits * FP`
+- **What was implemented:**
+  - GISL (gate-induced source leakage): agisl/bgisl/cgisl/egisl params, parsing, binning, computation mirroring GIDL
+  - mobMod 1: multiplicative mobility degradation with UC body-bias effect
+  - mobMod 2: power-law (universal mobility) using vtfbphi1 and EU exponent
+  - vtfbphi1: temperature preprocessing for mobMod 2/4/5/6
+  - Integration tests: NMOS DC sweep (Vg=1.0, 0.6), saturation plateau, PMOS OP/cutoff, NMOS OP — all using full CMC qaSpec parameters
+- **Learnings for future iterations:**
+  - Always validate against ngspice C source line by line for complex formulas — VADITS was silently wrong
+  - Bisection testing (progressively adding parameters) is effective for isolating param-dependent bugs
+  - Self-heating (shmod) is NOT a BSIM4 feature in ngspice — only parametric temperature (tempMod)
+---
