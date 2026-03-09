@@ -25,6 +25,11 @@ Vds d 0 1.8
 
     let plot = &result.plots[0];
 
+    // Debug: print all vectors
+    for v in &plot.vecs {
+        eprintln!("  {} = {:?}", v.name, &v.real);
+    }
+
     // Get drain current from Vds branch
     let i_vds = plot
         .vecs

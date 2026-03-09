@@ -279,6 +279,8 @@ impl MnaSystem {
             || !self.bjts.is_empty()
             || !self.mosfets.is_empty()
             || !self.jfets.is_empty()
+            || !self.bsim3s.is_empty()
+            || !self.bsim4s.is_empty()
     }
 
     /// Total number of nodes including internal nodes created by nonlinear
@@ -305,6 +307,26 @@ impl MnaSystem {
                 .iter()
                 .map(|j| j.model.internal_node_count())
                 .sum::<usize>()
+            + self
+                .bsim3s
+                .iter()
+                .filter(|b| b.drain_prime_idx.is_some() && b.drain_prime_idx != b.drain_idx)
+                .count()
+            + self
+                .bsim3s
+                .iter()
+                .filter(|b| b.source_prime_idx.is_some() && b.source_prime_idx != b.source_idx)
+                .count()
+            + self
+                .bsim4s
+                .iter()
+                .filter(|b| b.drain_prime_idx.is_some() && b.drain_prime_idx != b.drain_idx)
+                .count()
+            + self
+                .bsim4s
+                .iter()
+                .filter(|b| b.source_prime_idx.is_some() && b.source_prime_idx != b.source_idx)
+                .count()
     }
 }
 

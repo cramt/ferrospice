@@ -572,10 +572,20 @@ pub struct Bsim4Instance {
 }
 
 impl Bsim4Instance {
+    /// Effective drain node: drain_prime if series resistance exists, else drain.
+    pub fn drain_eff_idx(&self) -> Option<usize> {
+        self.drain_prime_idx.or(self.drain_idx)
+    }
+
+    /// Effective source node: source_prime if series resistance exists, else source.
+    pub fn source_eff_idx(&self) -> Option<usize> {
+        self.source_prime_idx.or(self.source_idx)
+    }
+
     pub fn terminal_voltages(&self, solution: &[f64]) -> (f64, f64, f64) {
-        let v_dp = self.drain_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+        let v_dp = self.drain_eff_idx().map(|i| solution[i]).unwrap_or(0.0);
         let v_g = self.gate_idx.map(|i| solution[i]).unwrap_or(0.0);
-        let v_sp = self.source_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+        let v_sp = self.source_eff_idx().map(|i| solution[i]).unwrap_or(0.0);
         let v_b = self.bulk_idx.map(|i| solution[i]).unwrap_or(0.0);
 
         let sign = self.model.mos_type.sign();
@@ -2379,9 +2389,9 @@ pub fn stamp_bsim4(
     inst: &Bsim4Instance,
     comp: &Bsim4Companion,
 ) {
-    let dp = inst.drain_prime_idx;
+    let dp = inst.drain_eff_idx();
     let g = inst.gate_idx;
-    let sp = inst.source_prime_idx;
+    let sp = inst.source_eff_idx();
     let b = inst.bulk_idx;
 
     let sign = inst.model.mos_type.sign();

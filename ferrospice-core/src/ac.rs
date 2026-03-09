@@ -435,9 +435,9 @@ fn solve_ac_point(
         let comp = crate::bsim3::bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
         let m = bsim.m;
 
-        let dp = bsim.drain_prime_idx;
+        let dp = bsim.drain_eff_idx();
         let g = bsim.gate_idx;
-        let sp = bsim.source_prime_idx;
+        let sp = bsim.source_eff_idx();
         let b = bsim.bulk_idx;
 
         // gds conductance d'-s' (real)
@@ -528,9 +528,9 @@ fn solve_ac_point(
         let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
         let m = bsim.m;
 
-        let dp = bsim.drain_prime_idx;
+        let dp = bsim.drain_eff_idx();
         let g = bsim.gate_idx;
-        let sp = bsim.source_prime_idx;
+        let sp = bsim.source_eff_idx();
         let b = bsim.bulk_idx;
 
         // gds conductance d'-s' (real)

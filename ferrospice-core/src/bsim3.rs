@@ -1673,10 +1673,20 @@ impl Bsim3Model {
 
 impl Bsim3Instance {
     /// Get terminal voltages from solution vector with type sign.
+    /// Effective drain node: drain_prime if series resistance exists, else drain.
+    pub fn drain_eff_idx(&self) -> Option<usize> {
+        self.drain_prime_idx.or(self.drain_idx)
+    }
+
+    /// Effective source node: source_prime if series resistance exists, else source.
+    pub fn source_eff_idx(&self) -> Option<usize> {
+        self.source_prime_idx.or(self.source_idx)
+    }
+
     pub fn terminal_voltages(&self, solution: &[f64]) -> (f64, f64, f64) {
-        let v_dp = self.drain_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+        let v_dp = self.drain_eff_idx().map(|i| solution[i]).unwrap_or(0.0);
         let v_g = self.gate_idx.map(|i| solution[i]).unwrap_or(0.0);
-        let v_sp = self.source_prime_idx.map(|i| solution[i]).unwrap_or(0.0);
+        let v_sp = self.source_eff_idx().map(|i| solution[i]).unwrap_or(0.0);
         let v_b = self.bulk_idx.map(|i| solution[i]).unwrap_or(0.0);
 
         let sign = self.model.mos_type.sign();
@@ -2178,18 +2188,43 @@ pub fn bsim3_companion(
     let ceq_bd = cbd_current - gbd * vbd;
     let ceq_sub = isub - gbg * vgs_i - gbd_sub * vds_i - gbb * vbs_i;
 
-    // Capacitances — simplified capMod 0 (charge-based model)
-    // For DC-only tests, capacitances don't matter. Add them for AC.
+    // Capacitances — compute via numerical differentiation of capMod=3 charges
     let qinv = -cox_w_ov_l * vgsteff * (1.0 - 0.5 * abulk * vdseff / vgst2vtm);
-    let cggb = cox_w_ov_l * (1.0 - 0.5 * abulk * vdseff / vgst2vtm);
-    let cgdb = -0.5 * cox_w_ov_l * abulk / vgst2vtm;
-    let cgsb = -(cggb + cgdb);
-    let cdgb = 0.4 * cggb; // xpart=0 → 40/60
-    let cddb = 0.4 * cgdb;
-    let cdsb = -(cdgb + cddb);
-    let cbgb = -cggb - cdgb;
-    let cbdb = -cgdb - cddb;
-    let cbsb = -(cbgb + cbdb);
+    let dv = 1e-5;
+    let (qg0, qb0, qs0) = bsim3_total_charges(vgs, vds, vbs, sp, model);
+    let (qg_gp, qb_gp, qs_gp) = bsim3_total_charges(vgs + dv, vds, vbs, sp, model);
+    let (qg_gm, qb_gm, qs_gm) = bsim3_total_charges(vgs - dv, vds, vbs, sp, model);
+    let (qg_dp, qb_dp, qs_dp) = bsim3_total_charges(vgs, vds + dv, vbs, sp, model);
+    let (qg_dm, qb_dm, qs_dm) = bsim3_total_charges(vgs, vds - dv, vbs, sp, model);
+    let (qg_bp, qb_bp, qs_bp) = bsim3_total_charges(vgs, vds, vbs + dv, sp, model);
+    let (qg_bm, qb_bm, qs_bm) = bsim3_total_charges(vgs, vds, vbs - dv, sp, model);
+    let _ = (qg0, qb0, qs0);
+
+    // Gate charge derivatives (w.r.t. Vgs, Vds, Vbs)
+    let c_gg = (qg_gp - qg_gm) / (2.0 * dv);
+    let c_gd = (qg_dp - qg_dm) / (2.0 * dv);
+    let c_gb = (qg_bp - qg_bm) / (2.0 * dv);
+
+    // Bulk charge derivatives
+    let c_bg = (qb_gp - qb_gm) / (2.0 * dv);
+    let c_bd = (qb_dp - qb_dm) / (2.0 * dv);
+    let c_bb = (qb_bp - qb_bm) / (2.0 * dv);
+
+    // Source charge derivatives
+    let c_sg = (qs_gp - qs_gm) / (2.0 * dv);
+    let c_sd = (qs_dp - qs_dm) / (2.0 * dv);
+
+    // Stored capacitances (BSIM3 convention)
+    let cggb = c_gg;
+    let cgdb = c_gd;
+    let cgsb = -(c_gg + c_gd + c_gb);
+    let cbgb = c_bg;
+    let cbdb = c_bd;
+    let cbsb = -(c_bg + c_bd + c_bb);
+    // Drain caps from conservation: Qd = -(Qg + Qb + Qs)
+    let cdgb = -(c_gg + c_bg + c_sg);
+    let cddb = -(c_gd + c_bd + c_sd);
+    let cdsb = c_gg + c_gd + c_gb + c_bg + c_bd + c_bb + c_sg + c_sd + (qs_bp - qs_bm) / (2.0 * dv);
 
     Bsim3Companion {
         ids,
@@ -2245,6 +2280,578 @@ fn junction_current(v: f64, i_sat: f64, nvtm: f64, gmin: f64, ijth: f64) -> (f64
     }
 }
 
+const DELTA_3: f64 = 0.02;
+const DELTA_4: f64 = 0.02;
+const DELTA_1: f64 = 0.02;
+
+/// Compute overlap charges for BSIM3 capMod=3 (uses capMod=2 model).
+/// Returns (qgdo, qgso, qgb).
+fn bsim3_overlap_charges(
+    vgs: f64,
+    vgd: f64,
+    vgb: f64,
+    sp: &Bsim3SizeParam,
+    _model: &Bsim3Model,
+) -> (f64, f64, f64) {
+    // Drain overlap (capMod=2 smooth model)
+    let t0 = vgd + DELTA_1;
+    let t1 = (t0 * t0 + 4.0 * DELTA_1).sqrt();
+    let t2 = 0.5 * (t0 - t1); // smooth negative clamp
+    let t3 = sp.weff_cv * sp.cgdl;
+    let qgdo = if t3 > 0.0 {
+        let t4 = (1.0 - 4.0 * t2 / sp.ckappa).sqrt();
+        (sp.cgdo_eff + t3) * vgd - t3 * (t2 + 0.5 * sp.ckappa * (t4 - 1.0))
+    } else {
+        sp.cgdo_eff * vgd
+    };
+
+    // Source overlap (capMod=2 smooth model)
+    let t0 = vgs + DELTA_1;
+    let t1 = (t0 * t0 + 4.0 * DELTA_1).sqrt();
+    let t2 = 0.5 * (t0 - t1);
+    let t3 = sp.weff_cv * sp.cgsl;
+    let qgso = if t3 > 0.0 {
+        let t4 = (1.0 - 4.0 * t2 / sp.ckappa).sqrt();
+        (sp.cgso_eff + t3) * vgs - t3 * (t2 + 0.5 * sp.ckappa * (t4 - 1.0))
+    } else {
+        sp.cgso_eff * vgs
+    };
+
+    // Gate-bulk overlap
+    let qgb = sp.cgbo_eff * vgb;
+
+    (qgdo, qgso, qgb)
+}
+
+/// Compute total charges (gate, bulk, source) for BSIM3 capMod=3.
+/// Includes intrinsic charges + overlap charges.
+/// Returns (Qg_total, Qb_total, Qs_total).
+#[expect(clippy::too_many_lines)]
+fn bsim3_total_charges(
+    vgs: f64,
+    vds: f64,
+    vbs: f64,
+    sp: &Bsim3SizeParam,
+    model: &Bsim3Model,
+) -> (f64, f64, f64) {
+    let sign = model.mos_type.sign();
+    let cox = model.cox();
+    let vtm = KBOQ * TEMP_DEFAULT;
+
+    // Mode detection
+    let (vgs_i, vds_i, vbs_i, _mode) = if vds >= 0.0 {
+        (vgs, vds, vbs, 1)
+    } else {
+        (vgs - vds, -vds, vbs - vds, -1)
+    };
+
+    // === DC core computation (duplicated from companion for charge model) ===
+
+    // VbseffCV (same as vbseff for now)
+    let t0 = vbs_i - sp.vbsc - 0.001;
+    let t1 = (t0 * t0 - 0.004 * sp.vbsc).sqrt();
+    let mut vbseff = sp.vbsc + 0.5 * (t0 + t1);
+    if vbseff < vbs_i {
+        vbseff = vbs_i;
+    }
+    let vbs_eff_cv = vbseff; // For capMod=3, use same vbseff as DC
+
+    // Surface potential
+    let sqrt_phis = if vbseff > 0.0 {
+        sp.phis3 / (sp.phi + 0.5 * vbseff)
+    } else {
+        (sp.phi - vbseff).sqrt()
+    };
+
+    let xdep = sp.xdep0 * sqrt_phis / sp.sqrt_phi;
+
+    // Vth
+    let v0 = sp.vbi - sp.phi;
+    let factor1 = (EPSSI / EPSOX * model.tox).sqrt();
+    let t3 = xdep.sqrt();
+
+    let t0_dvt2 = sp.dvt2 * vbseff;
+    let t1_dvt2 = if t0_dvt2 >= -0.5 {
+        1.0 + t0_dvt2
+    } else {
+        let t4 = 1.0 / (3.0 + 8.0 * t0_dvt2);
+        (1.0 + 3.0 * t0_dvt2) * t4
+    };
+    let lt1 = factor1 * t3 * t1_dvt2;
+
+    let t0_dvt2w = sp.dvt2w * vbseff;
+    let t1_dvt2w = if t0_dvt2w >= -0.5 {
+        1.0 + t0_dvt2w
+    } else {
+        let t4 = 1.0 / (3.0 + 8.0 * t0_dvt2w);
+        (1.0 + 3.0 * t0_dvt2w) * t4
+    };
+    let ltw = factor1 * t3 * t1_dvt2w;
+
+    let t0_theta = -0.5 * sp.dvt1 * sp.leff / lt1;
+    let theta0 = if t0_theta > -EXP_THRESHOLD {
+        let t1 = t0_theta.exp();
+        t1 * (1.0 + 2.0 * t1)
+    } else {
+        MIN_EXP * (1.0 + 2.0 * MIN_EXP)
+    };
+    let delt_vth = sp.dvt0 * theta0 * v0;
+
+    let t0_nw = -0.5 * sp.dvt1w * sp.weff * sp.leff / ltw;
+    let t2_nw = if t0_nw > -EXP_THRESHOLD {
+        let t1 = t0_nw.exp();
+        sp.dvt0w * t1 * (1.0 + 2.0 * t1) * v0
+    } else {
+        sp.dvt0w * MIN_EXP * (1.0 + 2.0 * MIN_EXP) * v0
+    };
+
+    let tmp2 = model.tox * sp.phi / (sp.weff + sp.w0);
+
+    let mut t3_eta = sp.eta0 + sp.etab * vbseff;
+    if t3_eta < 1.0e-4 {
+        let t9 = 1.0 / (3.0 - 2.0e4 * t3_eta);
+        t3_eta = (2.0e-4 - t3_eta) * t9;
+    }
+    let dibl_sft = t3_eta * sp.theta0vb0 * vds_i;
+
+    let temp_ratio = TEMP_DEFAULT / (model.tnom + 273.15) - 1.0;
+    let t0_nlx = (1.0 + sp.nlx / sp.leff).sqrt();
+    let t1_vth = sp.k1ox * (t0_nlx - 1.0) * sp.sqrt_phi
+        + (sp.kt1 + sp.kt1l / sp.leff + sp.kt2 * vbseff) * temp_ratio;
+
+    let vth = sign * sp.vth0 - sp.k1 * sp.sqrt_phi + sp.k1ox * sqrt_phis
+        - sp.k2ox * vbseff
+        - delt_vth
+        - t2_nw
+        + (sp.k3 + sp.k3b * vbseff) * tmp2
+        + t1_vth
+        - dibl_sft;
+
+    // Subthreshold slope n
+    let tmp2_n = sp.nfactor * EPSSI / xdep;
+    let tmp3_n = sp.cdsc + sp.cdscb * vbseff + sp.cdscd * vds_i;
+    let tmp4_n = (tmp2_n + tmp3_n * theta0 + sp.cit) / cox;
+    let n = if tmp4_n >= -0.5 {
+        1.0 + tmp4_n
+    } else {
+        let t0 = 1.0 / (3.0 + 8.0 * tmp4_n);
+        (1.0 + 3.0 * tmp4_n) * t0
+    };
+    let n = n.max(0.5);
+
+    // Poly gate depletion
+    let vfb_plus_phi = sp.vfbzb + sp.phi + sp.k1 * sp.sqrt_phi;
+    let vgs_eff = if sp.ngate > 1e18 && sp.ngate < 1e25 && vgs_i > vfb_plus_phi {
+        let t1 = 1e6 * CHARGE_Q * EPSSI * sp.ngate / (cox * cox);
+        let t4 = (1.0 + 2.0 * (vgs_i - vfb_plus_phi) / t1).sqrt();
+        let t2 = t1 * (t4 - 1.0);
+        let t3 = 0.5 * t2 * t2 / t1;
+        let t7 = 1.12 - t3 - 0.05;
+        let t6 = (t7 * t7 + 0.224).sqrt();
+        let t5 = 1.12 - 0.5 * (t7 + t6);
+        vgs_i - t5
+    } else {
+        vgs_i
+    };
+
+    let vgst = vgs_eff - vth;
+
+    // Vgsteff
+    let t10 = 2.0 * n * vtm;
+    let vgst_nvt = vgst / t10;
+    let exp_arg = (2.0 * sp.voff - vgst) / t10;
+
+    let vgsteff;
+    if vgst_nvt > EXP_THRESHOLD {
+        vgsteff = vgst;
+    } else if exp_arg > EXP_THRESHOLD {
+        let t0 = (vgst - sp.voff) / (n * vtm);
+        let exp_vgst = t0.exp();
+        vgsteff = vtm * sp.cdep0 / cox * exp_vgst;
+    } else {
+        let exp_vgst = safe_exp(vgst_nvt);
+        let t1 = t10 * (1.0 + exp_vgst).ln();
+        let d_t2_d_vg = -cox / (vtm * sp.cdep0) * safe_exp(exp_arg);
+        let t2 = 1.0 - t10 * d_t2_d_vg;
+        vgsteff = t1 / t2;
+    }
+    let vgsteff = vgsteff.max(1e-20);
+
+    // Effective channel width
+    let t9_w = sqrt_phis - sp.sqrt_phi;
+    let weff_calc = (sp.weff - 2.0 * (sp.dwg * vgsteff + sp.dwb * t9_w)).max(2e-8);
+
+    // Rds
+    let t0_rds = sp.prwg * vgsteff + sp.prwb * t9_w;
+    let rds = if t0_rds >= -0.9 {
+        sp.rds0 * (1.0 + t0_rds)
+    } else {
+        let t1 = 1.0 / (17.0 + 20.0 * t0_rds);
+        sp.rds0 * (0.8 + t0_rds) * t1
+    };
+
+    // Abulk
+    let t1_ab = 0.5 * sp.k1ox / sqrt_phis;
+    let t9_ab = (sp.xj * xdep).sqrt();
+    let tmp1_ab = sp.leff + 2.0 * t9_ab;
+    let t5_ab = sp.leff / tmp1_ab;
+    let tmp2_ab = sp.a0 * t5_ab;
+    let tmp3_ab = sp.weff + sp.b1;
+    let tmp4_ab = sp.b0 / tmp3_ab;
+    let t2_ab = tmp2_ab + tmp4_ab;
+
+    let abulk0 = 1.0 + t1_ab * t2_ab;
+    let t8_ab = sp.ags * sp.a0 * t5_ab * t5_ab * t5_ab;
+    let mut abulk = abulk0 + (-t1_ab * t8_ab) * vgsteff;
+    if abulk < 0.1 {
+        let t9 = 1.0 / (3.0 - 20.0 * abulk);
+        abulk = (0.2 - abulk) * t9;
+    }
+    let t2_keta = sp.keta * vbseff;
+    let keta_factor = if t2_keta >= -0.9 {
+        1.0 / (1.0 + t2_keta)
+    } else {
+        let t1 = 1.0 / (0.8 + t2_keta);
+        (17.0 + 20.0 * t2_keta) * t1
+    };
+    abulk *= keta_factor;
+
+    // Mobility
+    let t5_mob = match model.mob_mod {
+        1 => {
+            let t0 = vgsteff + vth + vth;
+            let t2 = sp.ua + sp.uc * vbseff;
+            let t3 = t0 / model.tox;
+            t3 * (t2 + sp.ub * t3)
+        }
+        2 => vgsteff / model.tox * (sp.ua + sp.uc * vbseff + sp.ub * vgsteff / model.tox),
+        _ => {
+            let t0 = vgsteff + vth + vth;
+            let t2 = 1.0 + sp.uc * vbseff;
+            let t3 = t0 / model.tox;
+            t3 * (sp.ua + sp.ub * t3) * t2
+        }
+    };
+    let denomi = if t5_mob >= -0.8 {
+        1.0 + t5_mob
+    } else {
+        let t9 = 1.0 / (7.0 + 10.0 * t5_mob);
+        (0.6 + t5_mob) * t9
+    };
+    let ueff = sp.u0temp / denomi;
+
+    // Vdsat
+    let wv_cox = weff_calc * sp.vsattemp * cox;
+    let wv_cox_rds = wv_cox * rds;
+    let esat = 2.0 * sp.vsattemp / ueff;
+    let esat_l = esat * sp.leff;
+
+    let vgst2vtm = vgsteff + 2.0 * vtm;
+    let lambda = if sp.a1 == 0.0 {
+        sp.a2
+    } else if sp.a1 > 0.0 {
+        let t0 = 1.0 - sp.a2;
+        let t1 = t0 - sp.a1 * vgsteff - 0.0001;
+        let t2 = (t1 * t1 + 0.0004 * t0).sqrt();
+        sp.a2 + t0 - 0.5 * (t1 + t2)
+    } else {
+        let t1 = sp.a2 + sp.a1 * vgsteff - 0.0001;
+        let t2 = (t1 * t1 + 0.0004 * sp.a2).sqrt();
+        0.5 * (t1 + t2)
+    };
+
+    let vdsat = if rds == 0.0 && lambda == 1.0 {
+        let t0 = 1.0 / (abulk * esat_l + vgst2vtm);
+        esat_l * vgst2vtm * t0
+    } else {
+        let t9 = abulk * wv_cox_rds;
+        let t7 = vgst2vtm * t9;
+        let t0 = 2.0 * abulk * (t9 - 1.0 + 1.0 / lambda);
+        let t1 = vgst2vtm * (2.0 / lambda - 1.0) + abulk * esat_l + 3.0 * t7;
+        let t2 = vgst2vtm * (esat_l + 2.0 * vgst2vtm * wv_cox_rds);
+        let t3 = (t1 * t1 - 2.0 * t0 * t2).max(0.0).sqrt();
+        if t0.abs() > 1e-30 {
+            (t1 - t3) / t0
+        } else {
+            esat_l * vgst2vtm / (abulk * esat_l + vgst2vtm)
+        }
+    };
+    let vdsat = vdsat.max(1e-18);
+
+    // Effective Vds
+    let t1 = vdsat - vds_i - sp.delta;
+    let t2 = (t1 * t1 + 4.0 * sp.delta * vdsat).sqrt();
+    let _vdseff = if vds_i == 0.0 {
+        0.0
+    } else {
+        let v = vdsat - 0.5 * (t1 + t2);
+        v.min(vds_i)
+    };
+
+    // === CapMod=3 Charge Model (from b3v32ld.c) ===
+
+    let cox_wl = cox * sp.weff_cv * sp.leff_cv;
+    let tox_ang = 1.0e8 * model.tox; // tox in Angstroms
+
+    // Vfbeff (effective flat-band voltage)
+    let v3 = sp.vfbzb - vgs_eff + vbs_eff_cv - DELTA_3;
+    let (vfbeff, _d_vfbeff_d_vg);
+    if sp.vfbzb <= 0.0 {
+        let t0 = (v3 * v3 - 4.0 * DELTA_3 * sp.vfbzb).sqrt();
+        let t1 = 0.5 * (1.0 + v3 / t0);
+        vfbeff = sp.vfbzb - 0.5 * (v3 + t0);
+        _d_vfbeff_d_vg = t1;
+    } else {
+        let t0 = (v3 * v3 + 4.0 * DELTA_3 * sp.vfbzb).sqrt();
+        let t1 = 0.5 * (1.0 + v3 / t0);
+        vfbeff = sp.vfbzb - 0.5 * (v3 + t0);
+        _d_vfbeff_d_vg = t1;
+    }
+
+    // Centroid thickness (first pass — depletion)
+    let t0 = (vgs_eff - vbs_eff_cv - sp.vfbzb) / tox_ang;
+    let tmp = t0 * sp.acde;
+    let tcen = if tmp > -EXP_THRESHOLD && tmp < EXP_THRESHOLD {
+        sp.ldeb * tmp.exp()
+    } else if tmp <= -EXP_THRESHOLD {
+        sp.ldeb * MIN_EXP
+    } else {
+        sp.ldeb * MAX_EXP
+    };
+
+    // Smooth doping transition
+    let link = 1.0e-3 * model.tox;
+    let v3l = sp.ldeb - tcen - link;
+    let v4l = (v3l * v3l + 4.0 * link * sp.ldeb).sqrt();
+    let tcen = sp.ldeb - 0.5 * (v3l + v4l);
+
+    // Centroid capacitance
+    let ccen = EPSSI / tcen;
+    let t2 = cox / (cox + ccen);
+    let coxeff = t2 * ccen;
+    let cox_wl_cen = cox_wl * coxeff / cox;
+
+    // Qac0 (accumulation charge)
+    let qac0 = cox_wl_cen * (vfbeff - sp.vfbzb);
+
+    // Qsub0 (substrate charge)
+    let t0_k = 0.5 * sp.k1ox;
+    let t3_sub = vgs_eff - vfbeff - vbs_eff_cv - vgsteff;
+    let (t1_sub, t2_sub);
+    if sp.k1ox == 0.0 {
+        t1_sub = 0.0;
+        t2_sub = 0.0;
+    } else if t3_sub < 0.0 {
+        t1_sub = t0_k + t3_sub / sp.k1ox;
+        t2_sub = cox_wl_cen;
+    } else {
+        t1_sub = (t0_k * t0_k + t3_sub).sqrt();
+        t2_sub = cox_wl_cen * t0_k / t1_sub;
+    }
+    let _ = t2_sub;
+    let qsub0 = cox_wl_cen * sp.k1ox * (t1_sub - t0_k);
+
+    // DeltaPhi
+    let denomi_dp = if sp.k1ox <= 0.0 {
+        0.25 * sp.moin * vtm
+    } else {
+        sp.moin * vtm * sp.k1ox * sp.k1ox
+    };
+    let t0_dp = if sp.k1ox <= 0.0 {
+        0.5 * sp.sqrt_phi
+    } else {
+        sp.k1ox * sp.sqrt_phi
+    };
+    let t1_dp = 2.0 * t0_dp + vgsteff;
+    let delta_phi = vtm * (1.0 + t1_dp * vgsteff / denomi_dp).ln();
+
+    // Second centroid calculation (inversion layer)
+    let t3_inv = 4.0 * (vth - sp.vfbzb - sp.phi);
+    let tox_2 = tox_ang * 2.0;
+    let t0_inv = if t3_inv >= 0.0 {
+        (vgsteff + t3_inv) / tox_2
+    } else {
+        (vgsteff + 1.0e-20) / tox_2
+    };
+    let tmp_inv = t0_inv.powf(0.7);
+    let t1_inv = 1.0 + tmp_inv;
+    let tcen2 = 1.9e-9 / t1_inv;
+
+    let ccen2 = EPSSI / tcen2;
+    let t0_c2 = cox / (cox + ccen2);
+    let coxeff2 = t0_c2 * ccen2;
+    let cox_wl_cen2 = cox_wl * coxeff2 / cox;
+
+    // AbulkCV
+    let abulk_cv = abulk0 * sp.abulk_cv_factor;
+
+    // VdsatCV
+    let vdsat_cv = (vgsteff - delta_phi) / abulk_cv;
+
+    // VdseffCV (smooth clamping to VdsatCV)
+    let v4_cv = vdsat_cv - vds_i - DELTA_4;
+    let t0_cv = (v4_cv * v4_cv + 4.0 * DELTA_4 * vdsat_cv).sqrt();
+    let vdseff_cv = if vds_i == 0.0 {
+        0.0
+    } else {
+        let v = vdsat_cv - 0.5 * (v4_cv + t0_cv);
+        v.min(vds_i).max(0.0)
+    };
+
+    // Gate charge (qgate) and bulk charge (qbulk)
+    let t0_q = abulk_cv * vdseff_cv;
+    let t1_q = vgsteff - delta_phi;
+    let t2_q = 12.0 * (t1_q - 0.5 * t0_q + 1.0e-20);
+    let t3_q = t0_q / t2_q;
+
+    let qgate = cox_wl_cen2 * (t1_q - t0_q * (0.5 - t3_q));
+
+    let t7_q = 1.0 - abulk_cv;
+    let qbulk = cox_wl_cen2 * t7_q * (0.5 * vdseff_cv - t0_q * vdseff_cv / t2_q);
+
+    // Source charge (xpart-dependent)
+    let qsrc;
+    if model.xpart > 0.5 {
+        // 0/100 partition (all charge to source)
+        qsrc = -cox_wl_cen2 * (t1_q / 2.0 + t0_q / 4.0 - 0.5 * t0_q * t0_q / t2_q);
+    } else if model.xpart < 0.5 {
+        // 40/60 partition (default)
+        let t2_s = t2_q / 12.0;
+        let t3_s = 0.5 * cox_wl_cen2 / (t2_s * t2_s);
+        let t4_s = t1_q * (2.0 * t0_q * t0_q / 3.0 + t1_q * (t1_q - 4.0 * t0_q / 3.0))
+            - 2.0 * t0_q * t0_q * t0_q / 15.0;
+        qsrc = -t3_s * t4_s;
+    } else {
+        // 50/50 partition
+        qsrc = -0.5 * qgate;
+    }
+
+    // Combine with Qac0 and Qsub0
+    let qgate_total_intr = qgate + qac0 + qsub0 - qbulk;
+    let qbulk_total_intr = qbulk - (qac0 + qsub0);
+
+    // Overlap charges
+    let vgd = vgs - vds;
+    let vgb = vgs - vbs;
+    let (qgdo, qgso, qgb_charge) = bsim3_overlap_charges(vgs, vgd, vgb, sp, model);
+
+    let qg_total = qgate_total_intr + qgdo + qgso + qgb_charge;
+    let qb_total = qbulk_total_intr - qgb_charge;
+    let qs_total = qsrc - qgso;
+
+    (qg_total, qb_total, qs_total)
+}
+
+/// Compute junction capacitances for BSIM3.
+/// Returns (capbs, capbd).
+pub fn bsim3_junction_caps(
+    vbs: f64,
+    vbd: f64,
+    model: &Bsim3Model,
+    ad: f64,
+    as_: f64,
+    pd: f64,
+    ps: f64,
+) -> (f64, f64) {
+    let temp_ratio = TEMP_DEFAULT / (model.tnom + 273.15) - 1.0;
+
+    // Temperature-adjusted junction parameters
+    let pb_eff = model.pb - model.tpb * temp_ratio;
+    let cj_eff = model.cj * (1.0 + model.tcj * temp_ratio);
+    let pbsw_eff = model.pbsw - model.tpbsw * temp_ratio;
+    let cjsw_eff = model.cjsw * (1.0 + model.tcjsw * temp_ratio);
+    let pbswg_eff = model.pbswg - model.tpbswg * temp_ratio;
+    let cjswg_eff = model.cjswg * (1.0 + model.tcjswg * temp_ratio);
+
+    // Zero-bias capacitances
+    let czbs = cj_eff * as_;
+    let czbssw = cjsw_eff * ps;
+    let czbsswg = cjswg_eff * ps;
+
+    let czbd = cj_eff * ad;
+    let czbdsw = cjsw_eff * pd;
+    let czbdswg = cjswg_eff * pd;
+
+    // Source junction cap
+    let capbs = junction_cap_bias(
+        vbs,
+        czbs,
+        czbssw,
+        czbsswg,
+        pb_eff,
+        pbsw_eff,
+        pbswg_eff,
+        model.mj,
+        model.mjsw,
+        model.mjswg,
+    );
+
+    // Drain junction cap
+    let capbd = junction_cap_bias(
+        vbd,
+        czbd,
+        czbdsw,
+        czbdswg,
+        pb_eff,
+        pbsw_eff,
+        pbswg_eff,
+        model.mj,
+        model.mjsw,
+        model.mjswg,
+    );
+
+    (capbs, capbd)
+}
+
+/// Compute bias-dependent junction capacitance.
+#[allow(clippy::too_many_arguments)]
+fn junction_cap_bias(
+    v: f64,
+    cz: f64,
+    czsw: f64,
+    czswg: f64,
+    pb: f64,
+    pbsw: f64,
+    pbswg: f64,
+    mj: f64,
+    mjsw: f64,
+    mjswg: f64,
+) -> f64 {
+    if cz + czsw + czswg <= 0.0 {
+        return 0.0;
+    }
+
+    if v == 0.0 {
+        return cz + czsw + czswg;
+    }
+
+    if v < 0.0 {
+        // Reverse bias: depletion capacitance
+        let mut cap = 0.0;
+        if cz > 0.0 && pb > 0.0 {
+            cap += cz * (1.0 - v / pb).powf(-mj);
+        }
+        if czsw > 0.0 && pbsw > 0.0 {
+            cap += czsw * (1.0 - v / pbsw).powf(-mjsw);
+        }
+        if czswg > 0.0 && pbswg > 0.0 {
+            cap += czswg * (1.0 - v / pbswg).powf(-mjswg);
+        }
+        cap
+    } else {
+        // Forward bias: linear approximation
+        let t0 = cz + czsw + czswg;
+        let t1 = if pb > 0.0 { cz * mj / pb } else { 0.0 }
+            + if pbsw > 0.0 { czsw * mjsw / pbsw } else { 0.0 }
+            + if pbswg > 0.0 {
+                czswg * mjswg / pbswg
+            } else {
+                0.0
+            };
+        t0 + t1 * v
+    }
+}
+
 /// Stamp BSIM3 companion model into the MNA matrix and RHS.
 pub fn stamp_bsim3(
     matrix: &mut crate::SparseMatrix,
@@ -2252,9 +2859,9 @@ pub fn stamp_bsim3(
     inst: &Bsim3Instance,
     comp: &Bsim3Companion,
 ) {
-    let dp = inst.drain_prime_idx;
+    let dp = inst.drain_eff_idx();
     let g = inst.gate_idx;
-    let sp = inst.source_prime_idx;
+    let sp = inst.source_eff_idx();
     let b = inst.bulk_idx;
 
     let sign = inst.model.mos_type.sign();
@@ -2532,5 +3139,49 @@ mod tests {
         // Linear region current should be less than saturation current
         let comp_sat = bsim3_companion(1.8, 1.8, 0.0, &sp, &m);
         assert!(comp.ids < comp_sat.ids, "Linear Ids < saturation Ids");
+    }
+
+    #[test]
+    fn test_bsim3_charges_and_caps() {
+        let m = Bsim3Model::new(MosfetType::Nmos);
+        let sp = m.size_dep_param(10e-6, 1e-6, TEMP_DEFAULT);
+        // Test charge function doesn't return NaN
+        let (qg, qb, qs) = bsim3_total_charges(1.8, 1.8, 0.0, &sp, &m);
+        assert!(!qg.is_nan(), "qg is NaN");
+        assert!(!qb.is_nan(), "qb is NaN");
+        assert!(!qs.is_nan(), "qs is NaN");
+        assert!(!qg.is_infinite(), "qg is infinite");
+        // Gate charge should be positive (inversion layer)
+        eprintln!("qg={qg:.4e}, qb={qb:.4e}, qs={qs:.4e}");
+
+        // Test companion capacitances are finite
+        let comp = bsim3_companion(1.8, 1.8, 0.0, &sp, &m);
+        eprintln!(
+            "cggb={:.4e}, cgdb={:.4e}, cgsb={:.4e}",
+            comp.cggb, comp.cgdb, comp.cgsb
+        );
+        eprintln!(
+            "cbgb={:.4e}, cbdb={:.4e}, cbsb={:.4e}",
+            comp.cbgb, comp.cbdb, comp.cbsb
+        );
+        eprintln!(
+            "cdgb={:.4e}, cddb={:.4e}, cdsb={:.4e}",
+            comp.cdgb, comp.cddb, comp.cdsb
+        );
+        assert!(!comp.cggb.is_nan(), "cggb is NaN");
+        assert!(!comp.cgsb.is_nan(), "cgsb is NaN");
+        assert!(comp.cggb > 0.0, "cggb should be positive: {}", comp.cggb);
+
+        // Test at VDS=0 (initial NR guess)
+        let (qg0, qb0, qs0) = bsim3_total_charges(0.0, 0.0, 0.0, &sp, &m);
+        assert!(!qg0.is_nan(), "qg at origin is NaN");
+        assert!(!qb0.is_nan(), "qb at origin is NaN");
+        assert!(!qs0.is_nan(), "qs at origin is NaN");
+        eprintln!("At origin: qg={qg0:.4e}, qb={qb0:.4e}, qs={qs0:.4e}");
+
+        let comp0 = bsim3_companion(0.0, 0.0, 0.0, &sp, &m);
+        assert!(!comp0.cggb.is_nan(), "cggb at origin is NaN");
+        assert!(!comp0.ids.is_nan(), "ids at origin is NaN: {}", comp0.ids);
+        eprintln!("At origin: ids={:.4e}, cggb={:.4e}", comp0.ids, comp0.cggb);
     }
 }

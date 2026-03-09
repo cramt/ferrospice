@@ -436,9 +436,9 @@ fn build_ac_system(
         let comp = crate::bsim3::bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
         let m = bsim.m;
 
-        let dp = bsim.drain_prime_idx;
+        let dp = bsim.drain_eff_idx();
         let g = bsim.gate_idx;
-        let sp = bsim.source_prime_idx;
+        let sp = bsim.source_eff_idx();
         let b = bsim.bulk_idx;
 
         crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
@@ -521,9 +521,9 @@ fn build_ac_system(
         let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
         let m = bsim.m;
 
-        let dp = bsim.drain_prime_idx;
+        let dp = bsim.drain_eff_idx();
         let g = bsim.gate_idx;
-        let sp = bsim.source_prime_idx;
+        let sp = bsim.source_eff_idx();
         let b = bsim.bulk_idx;
 
         crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
@@ -904,8 +904,8 @@ fn compute_total_noise(
         let comp = crate::bsim3::bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
         let m = bsim.m;
 
-        let dp = bsim.drain_prime_idx;
-        let sp = bsim.source_prime_idx;
+        let dp = bsim.drain_eff_idx();
+        let sp = bsim.source_eff_idx();
 
         // Channel thermal noise: (2/3) * 4kT * |gm|.
         let gm = comp.gm.abs() * m;
@@ -947,8 +947,8 @@ fn compute_total_noise(
         let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
         let m = bsim.m;
 
-        let dp = bsim.drain_prime_idx;
-        let sp = bsim.source_prime_idx;
+        let dp = bsim.drain_eff_idx();
+        let sp = bsim.source_eff_idx();
 
         // Channel thermal noise: (2/3) * 4kT * |gm|.
         let gm = comp.gm.abs() * m;
