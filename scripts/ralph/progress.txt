@@ -221,3 +221,13 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - capMod=0 and capMod=1 share the same charge partition code — factor into helper
   - Overlap charge model differs by capMod: 0/1 use linear (cgdo*vgd), 2/3 use smooth clamping with DELTA_1
 ---
+
+## 2026-03-09 - US-024 (implementation)
+- Verified all acceptance criteria already met from US-022 BSIM4 implementation
+- No code changes needed — Bsim4Model (237 parse arms), size_dep_param() temperature preprocessing, Bsim4Instance, wpemod/geomod, 8 unit tests all in place
+- Marked US-024 as passing
+- **Learnings for future iterations:**
+  - US-022 implemented BSIM4 so comprehensively that US-024/025/026 may all be partially or fully done
+  - US-025 (DC equations) likely also done — bsim4_companion() and stamp_bsim4() exist
+  - US-026 (AC/charge/noise) needs qaSpec test porting but AC/noise integration exists
+---

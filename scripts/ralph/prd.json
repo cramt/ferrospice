@@ -9,6 +9,13 @@
       "summary": "Implemented capMod 0/1/2 charge models for BSIM3, ported qaSpec tests as 11 integration tests covering DC sweep, AC frequency, transient, and OP analyses",
       "date": "2026-03-09",
       "storyId": "US-023"
+    },
+    {
+      "iteration": 2,
+      "passType": "implementation",
+      "summary": "Verified US-024 acceptance criteria already met from US-022 BSIM4 implementation: Bsim4Model with 237 parse arms, size_dep_param temperature preprocessing, 8 unit tests passing",
+      "date": "2026-03-09",
+      "storyId": "US-024"
     }
   ],
   "userStories": [
@@ -429,8 +436,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 24,
-      "passes": false,
-      "notes": "Reference: ngspice-upstream/src/spicelib/devices/bsim4/ — b4mpar.c (3685 lines), b4temp.c (2408 lines), bsim4def.h (3931 lines). BSIM4 has ~83% more parameters than BSIM3. Focus on data structures only."
+      "passes": true,
+      "notes": "Implemented during US-022. Bsim4Model with 237 parse arms (~212+ unique params), size_dep_param() temperature preprocessing, Bsim4Instance struct, wpemod/geomod support, 8 unit tests."
     },
     {
       "id": "US-025",
