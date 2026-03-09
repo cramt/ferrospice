@@ -627,6 +627,37 @@ impl Bsim4Instance {
             0.0
         }
     }
+
+    /// Build AC stamp data from this instance and its companion model.
+    pub fn ac_stamp(&self, comp: &Bsim4Companion) -> crate::ac::BsimAcStamp {
+        crate::ac::BsimAcStamp {
+            dp: self.drain_eff_idx(),
+            g: self.gate_idx,
+            sp: self.source_eff_idx(),
+            b: self.bulk_idx,
+            drain_idx: self.drain_idx,
+            source_idx: self.source_idx,
+            m: self.m,
+            gds: comp.gds,
+            gm: comp.gm,
+            gmbs: comp.gmbs,
+            gbd: comp.gbd,
+            gbs: comp.gbs,
+            g_drain: self.drain_conductance(),
+            g_source: self.source_conductance(),
+            cggb: comp.cggb,
+            cgdb: comp.cgdb,
+            cgsb: comp.cgsb,
+            cbgb: comp.cbgb,
+            cbdb: comp.cbdb,
+            cbsb: comp.cbsb,
+            cdgb: comp.cdgb,
+            cddb: comp.cddb,
+            cdsb: comp.cdsb,
+            capbd: comp.capbd,
+            capbs: comp.capbs,
+        }
+    }
 }
 
 impl Bsim4Model {

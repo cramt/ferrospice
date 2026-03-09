@@ -1,9 +1,11 @@
 use std::f64::consts::PI;
 
 use ferrospice_netlist::{
-    AcVariation, Analysis, Complex, Expr, Item, Netlist, SimPlot, SimResult, SimVector,
+    AcVariation, Analysis, Complex, Item, Netlist, SimPlot, SimResult, SimVector,
 };
 
+use crate::expr_val;
+use crate::expr_val_or;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
 use crate::simulate::simulate_op;
 use crate::sparse::ComplexLinearSystem;
@@ -122,49 +124,64 @@ fn solve_ac_point(
     omega: f64,
     netlist: &Netlist,
 ) -> Result<Vec<(f64, f64)>, MnaError> {
-    let num_ext_nodes = mna.node_map.len();
-    let num_internal = mna
-        .diodes
-        .iter()
-        .filter(|d| d.internal_idx.is_some())
-        .count()
-        + mna
-            .bjts
-            .iter()
-            .map(|b| b.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .mosfets
-            .iter()
-            .map(|m| m.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .jfets
-            .iter()
-            .map(|j| j.model.internal_node_count())
-            .sum::<usize>();
-    let num_nodes = num_ext_nodes + num_internal;
+    let num_nodes = mna.total_num_nodes();
     let dim = num_nodes + mna.vsource_names.len();
 
     let mut sys = ComplexLinearSystem::new(dim);
 
+    // Stamp base matrix, reactive elements, and all device small-signal models.
+    stamp_ac_devices(mna, op_solution, omega, &mut sys);
+
+    // Apply AC source excitation to RHS.
+    apply_ac_excitation(&mut sys, netlist, mna, num_nodes);
+
+    sys.solve().map_err(MnaError::SolveError)
+}
+
+/// Build a complex AC MNA system at a given frequency without solving it.
+///
+/// Used by noise analysis which needs the unsolved system to solve both
+/// forward and adjoint (transposed) systems.
+pub fn build_ac_system(
+    mna: &MnaSystem,
+    op_solution: &[f64],
+    omega: f64,
+    netlist: &Netlist,
+    num_nodes: usize,
+) -> ComplexLinearSystem {
+    let dim = num_nodes + mna.vsource_names.len();
+    let mut sys = ComplexLinearSystem::new(dim);
+
+    stamp_ac_devices(mna, op_solution, omega, &mut sys);
+    apply_ac_excitation(&mut sys, netlist, mna, num_nodes);
+
+    sys
+}
+
+/// Stamp all AC small-signal device models into a complex MNA system.
+///
+/// This includes:
+/// - DC conductance matrix (real part from base MNA stamps)
+/// - Capacitor and inductor reactive stamps (imaginary part)
+/// - Diode, BJT, MOSFET, JFET, BSIM3, BSIM4 small-signal models at the DC operating point
+pub fn stamp_ac_devices(
+    mna: &MnaSystem,
+    op_solution: &[f64],
+    omega: f64,
+    sys: &mut ComplexLinearSystem,
+) {
     // 1. Stamp DC conductance matrix (real part) from base MNA stamps.
-    // This includes resistors and voltage source topology.
     for triplet in mna.system.matrix.triplets() {
         sys.real.add(triplet.row, triplet.col, triplet.value);
     }
 
     // 2. Stamp capacitor AC admittance: jωC between nodes.
     for cap in &mna.capacitors {
-        let bc = omega * cap.capacitance; // susceptance = ωC
+        let bc = omega * cap.capacitance;
         stamp_imag_conductance(&mut sys.imag, cap.pos_idx, cap.neg_idx, bc);
     }
 
-    // 3. Stamp inductor AC impedance: jωL on the branch equation.
-    // Inductor topology stamps (±1 entries) are already in the real matrix from DC.
-    // For AC, the branch equation becomes: V(pos) - V(neg) = jωL * I_branch
-    // → V(pos) - V(neg) - jωL * I_branch = 0
-    // The -jωL goes on the diagonal of the branch equation (imaginary part).
+    // 3. Stamp inductor AC impedance: -jωL on branch diagonal.
     for ind in &mna.inductors {
         sys.imag
             .add(ind.branch_idx, ind.branch_idx, -omega * ind.inductance);
@@ -178,33 +195,26 @@ fn solve_ac_point(
             (diode.anode_idx, diode.cathode_idx)
         };
 
-        // Get junction voltage from DC solution.
         let v_anode = jct_anode.map(|i| op_solution[i]).unwrap_or(0.0);
         let v_cathode = jct_cathode.map(|i| op_solution[i]).unwrap_or(0.0);
         let v_jct = v_anode - v_cathode;
 
-        // Small-signal conductance: dI/dV at operating point.
         let (g_d, _i_eq) = diode.model.companion(v_jct);
         crate::stamp_conductance(&mut sys.real, jct_anode, jct_cathode, g_d);
 
-        // Series resistance (already in DC stamps if RS > 0).
         if let Some(int_idx) = diode.internal_idx {
             let g_rs = 1.0 / diode.model.rs;
             crate::stamp_conductance(&mut sys.real, diode.anode_idx, Some(int_idx), g_rs);
         }
 
-        // Junction capacitance: jω * Cj
         if diode.model.cjo > 0.0 {
             let cj = diode.model.junction_capacitance(v_jct);
-            let bc = omega * cj;
-            stamp_imag_conductance(&mut sys.imag, jct_anode, jct_cathode, bc);
+            stamp_imag_conductance(&mut sys.imag, jct_anode, jct_cathode, omega * cj);
         }
 
-        // Transit time capacitance: jω * τ * gd
         if diode.model.tt > 0.0 {
             let cd = diode.model.tt * g_d;
-            let bc = omega * cd;
-            stamp_imag_conductance(&mut sys.imag, jct_anode, jct_cathode, bc);
+            stamp_imag_conductance(&mut sys.imag, jct_anode, jct_cathode, omega * cd);
         }
     }
 
@@ -218,14 +228,10 @@ fn solve_ac_point(
         let cp = bjt.col_prime_idx;
         let ep = bjt.emit_prime_idx;
 
-        // gpi conductance b'-e' (real)
         crate::stamp_conductance(&mut sys.real, bp, ep, m * comp.gpi);
-        // gmu conductance b'-c' (real)
         crate::stamp_conductance(&mut sys.real, bp, cp, m * comp.gmu);
-        // go conductance c'-e' (real)
         crate::stamp_conductance(&mut sys.real, cp, ep, m * comp.go);
 
-        // gm VCCS: V_be controls current from e' to c' (real)
         let gm_scaled = m * comp.gm;
         if let Some(c) = cp {
             if let Some(b) = bp {
@@ -242,31 +248,25 @@ fn solve_ac_point(
             sys.real.add(e, e, gm_scaled);
         }
 
-        // Series resistances (real)
         if bjt.model.rb > 0.0 {
-            let gx = 1.0 / bjt.model.rb;
-            crate::stamp_conductance(&mut sys.real, bjt.base_idx, bp, m * gx);
+            crate::stamp_conductance(&mut sys.real, bjt.base_idx, bp, m / bjt.model.rb);
         }
         if bjt.model.rc > 0.0 {
-            let gcpr = 1.0 / bjt.model.rc;
-            crate::stamp_conductance(&mut sys.real, bjt.col_idx, cp, m * gcpr);
+            crate::stamp_conductance(&mut sys.real, bjt.col_idx, cp, m / bjt.model.rc);
         }
         if bjt.model.re > 0.0 {
-            let gepr = 1.0 / bjt.model.re;
-            crate::stamp_conductance(&mut sys.real, bjt.emit_idx, ep, m * gepr);
+            crate::stamp_conductance(&mut sys.real, bjt.emit_idx, ep, m / bjt.model.re);
         }
 
-        // B-E junction capacitance (imaginary): jω * (Cje + Tf*gbe)
         let cap_be = bjt.model.cap_be(vbe);
-        let gbe = comp.gpi * bjt.model.bf; // recover gbe from gpi = gbe/BF
+        let gbe = comp.gpi * bjt.model.bf;
         let total_cap_be = cap_be + bjt.model.tf * gbe;
         if total_cap_be > 0.0 {
             stamp_imag_conductance(&mut sys.imag, bp, ep, omega * m * total_cap_be);
         }
 
-        // B-C junction capacitance (imaginary): jω * (Cjc + Tr*gbc)
         let cap_bc = bjt.model.cap_bc(vbc);
-        let gbc = comp.gmu * bjt.model.br; // recover gbc from gmu = gbc/BR
+        let gbc = comp.gmu * bjt.model.br;
         let total_cap_bc = cap_bc + bjt.model.tr * gbc;
         if total_cap_bc > 0.0 {
             stamp_imag_conductance(&mut sys.imag, bp, cp, omega * m * total_cap_bc);
@@ -277,7 +277,6 @@ fn solve_ac_point(
     for mos in &mna.mosfets {
         let (vgs, vds, vbs) = mos.terminal_voltages(op_solution);
 
-        // Compute companion with effective beta
         let mut eff_model = mos.model.clone();
         eff_model.kp = mos.beta();
         let comp = eff_model.companion(vgs, vds, vbs);
@@ -294,10 +293,8 @@ fn solve_ac_point(
             (0.0, 1.0)
         };
 
-        // gds conductance d'-s' (real)
         crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
 
-        // gm VCCS: Vgs controls current s'→d' (real)
         let gm_scaled = m * comp.gm;
         if let Some(d) = dp {
             if let Some(gate) = g {
@@ -314,7 +311,6 @@ fn solve_ac_point(
             sys.real.add(s, s, (xnrm - xrev) * gm_scaled);
         }
 
-        // gmbs: Vbs controls current s'→d' (real)
         let gmbs_scaled = m * comp.gmbs;
         if let Some(d) = dp {
             if let Some(bulk) = b {
@@ -331,23 +327,16 @@ fn solve_ac_point(
             sys.real.add(s, s, (xnrm - xrev) * gmbs_scaled);
         }
 
-        // gbd conductance b-d' (real)
         crate::stamp_conductance(&mut sys.real, b, dp, m * comp.gbd);
-
-        // gbs conductance b-s' (real)
         crate::stamp_conductance(&mut sys.real, b, sp, m * comp.gbs);
 
-        // Series resistances (real)
         if mos.model.rd > 0.0 {
-            let grd = 1.0 / mos.model.rd;
-            crate::stamp_conductance(&mut sys.real, mos.drain_idx, dp, m * grd);
+            crate::stamp_conductance(&mut sys.real, mos.drain_idx, dp, m / mos.model.rd);
         }
         if mos.model.rs > 0.0 {
-            let grs = 1.0 / mos.model.rs;
-            crate::stamp_conductance(&mut sys.real, mos.source_idx, sp, m * grs);
+            crate::stamp_conductance(&mut sys.real, mos.source_idx, sp, m / mos.model.rs);
         }
 
-        // Gate overlap capacitances (imaginary)
         let cgso = mos.model.cgso * mos.w;
         let cgdo = mos.model.cgdo * mos.w;
         let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
@@ -363,7 +352,6 @@ fn solve_ac_point(
             stamp_imag_conductance(&mut sys.imag, g, b, omega * m * cgbo);
         }
 
-        // Bulk junction capacitances (imaginary)
         if mos.model.cbd > 0.0 {
             stamp_imag_conductance(&mut sys.imag, b, dp, omega * m * mos.model.cbd);
         }
@@ -382,14 +370,10 @@ fn solve_ac_point(
         let g = jfet.gate_idx;
         let sp = jfet.source_prime_idx;
 
-        // ggs conductance g-s' (real)
         crate::stamp_conductance(&mut sys.real, g, sp, m * comp.ggs);
-        // ggd conductance g-d' (real)
         crate::stamp_conductance(&mut sys.real, g, dp, m * comp.ggd);
-        // gds conductance d'-s' (real)
         crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
 
-        // gm VCCS: Vgs controls current s'→d' (real)
         let gm_scaled = m * comp.gm;
         if let Some(d) = dp {
             if let Some(gate) = g {
@@ -406,23 +390,18 @@ fn solve_ac_point(
             sys.real.add(s, s, gm_scaled);
         }
 
-        // Series resistances (real)
         if jfet.model.rd > 0.0 {
-            let grd = 1.0 / jfet.model.rd;
-            crate::stamp_conductance(&mut sys.real, jfet.drain_idx, dp, m * grd);
+            crate::stamp_conductance(&mut sys.real, jfet.drain_idx, dp, m / jfet.model.rd);
         }
         if jfet.model.rs > 0.0 {
-            let grs = 1.0 / jfet.model.rs;
-            crate::stamp_conductance(&mut sys.real, jfet.source_idx, sp, m * grs);
+            crate::stamp_conductance(&mut sys.real, jfet.source_idx, sp, m / jfet.model.rs);
         }
 
-        // Gate-source junction capacitance (imaginary)
         let cgs = jfet.model.junction_cap(vgs, jfet.model.cgs);
         if cgs > 0.0 {
             stamp_imag_conductance(&mut sys.imag, g, sp, omega * m * cgs);
         }
 
-        // Gate-drain junction capacitance (imaginary)
         let cgd = jfet.model.junction_cap(vgd, jfet.model.cgd);
         if cgd > 0.0 {
             stamp_imag_conductance(&mut sys.imag, g, dp, omega * m * cgd);
@@ -433,188 +412,24 @@ fn solve_ac_point(
     for bsim in &mna.bsim3s {
         let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);
         let comp = crate::bsim3::bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
-        let m = bsim.m;
-
-        let dp = bsim.drain_eff_idx();
-        let g = bsim.gate_idx;
-        let sp = bsim.source_eff_idx();
-        let b = bsim.bulk_idx;
-
-        // gds conductance d'-s' (real)
-        crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
-
-        // gm VCCS: Vgs controls current s'→d' (real)
-        let gm_scaled = m * comp.gm;
-        if let Some(d) = dp {
-            if let Some(gate) = g {
-                sys.real.add(d, gate, gm_scaled);
-            }
-            if let Some(s) = sp {
-                sys.real.add(d, s, -gm_scaled);
-            }
-        }
-        if let Some(s) = sp {
-            if let Some(gate) = g {
-                sys.real.add(s, gate, -gm_scaled);
-            }
-            sys.real.add(s, s, gm_scaled);
-        }
-
-        // gmbs: Vbs controls current s'→d' (real)
-        let gmbs_scaled = m * comp.gmbs;
-        if let Some(d) = dp {
-            if let Some(bulk) = b {
-                sys.real.add(d, bulk, gmbs_scaled);
-            }
-            if let Some(s) = sp {
-                sys.real.add(d, s, -gmbs_scaled);
-            }
-        }
-        if let Some(s) = sp {
-            if let Some(bulk) = b {
-                sys.real.add(s, bulk, -gmbs_scaled);
-            }
-            sys.real.add(s, s, gmbs_scaled);
-        }
-
-        // gbd conductance b-d' (real)
-        crate::stamp_conductance(&mut sys.real, b, dp, m * comp.gbd);
-        // gbs conductance b-s' (real)
-        crate::stamp_conductance(&mut sys.real, b, sp, m * comp.gbs);
-
-        // Series resistances (real)
-        let g_drain = bsim.drain_conductance();
-        if g_drain > 0.0 {
-            crate::stamp_conductance(&mut sys.real, bsim.drain_idx, dp, m * g_drain);
-        }
-        let g_source = bsim.source_conductance();
-        if g_source > 0.0 {
-            crate::stamp_conductance(&mut sys.real, bsim.source_idx, sp, m * g_source);
-        }
-
-        // Intrinsic capacitances (imaginary) - direct Y-matrix entries [G,D',S',B]
-        // These are direct admittance matrix entries, not conductances between nodes.
-        let cap_entries: &[(Option<usize>, Option<usize>, f64)] = &[
-            (g, g, comp.cggb),
-            (g, dp, comp.cgdb),
-            (g, sp, comp.cgsb),
-            (dp, g, comp.cdgb),
-            (dp, dp, comp.cddb),
-            (dp, sp, comp.cdsb),
-            (b, g, comp.cbgb),
-            (b, dp, comp.cbdb),
-            (b, sp, comp.cbsb),
-        ];
-        for &(row, col, cap) in cap_entries {
-            if cap.abs() > 0.0
-                && let (Some(r), Some(c)) = (row, col)
-            {
-                sys.imag.add(r, c, omega * m * cap);
-            }
-        }
-
-        // Junction capacitances (imaginary) - these ARE conductances between two nodes
-        if comp.capbd > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, b, dp, omega * m * comp.capbd);
-        }
-        if comp.capbs > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, b, sp, omega * m * comp.capbs);
-        }
+        stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }
 
     // 5e. Stamp BSIM4 small-signal model at DC operating point.
     for bsim in &mna.bsim4s {
         let (vgs, vds, vbs) = bsim.terminal_voltages(op_solution);
         let comp = crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
-        let m = bsim.m;
-
-        let dp = bsim.drain_eff_idx();
-        let g = bsim.gate_idx;
-        let sp = bsim.source_eff_idx();
-        let b = bsim.bulk_idx;
-
-        // gds conductance d'-s' (real)
-        crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
-
-        // gm VCCS: Vgs controls current s'→d' (real)
-        let gm_scaled = m * comp.gm;
-        if let Some(d) = dp {
-            if let Some(gate) = g {
-                sys.real.add(d, gate, gm_scaled);
-            }
-            if let Some(s) = sp {
-                sys.real.add(d, s, -gm_scaled);
-            }
-        }
-        if let Some(s) = sp {
-            if let Some(gate) = g {
-                sys.real.add(s, gate, -gm_scaled);
-            }
-            sys.real.add(s, s, gm_scaled);
-        }
-
-        // gmbs: Vbs controls current s'→d' (real)
-        let gmbs_scaled = m * comp.gmbs;
-        if let Some(d) = dp {
-            if let Some(bulk) = b {
-                sys.real.add(d, bulk, gmbs_scaled);
-            }
-            if let Some(s) = sp {
-                sys.real.add(d, s, -gmbs_scaled);
-            }
-        }
-        if let Some(s) = sp {
-            if let Some(bulk) = b {
-                sys.real.add(s, bulk, -gmbs_scaled);
-            }
-            sys.real.add(s, s, gmbs_scaled);
-        }
-
-        // gbd conductance b-d' (real)
-        crate::stamp_conductance(&mut sys.real, b, dp, m * comp.gbd);
-        // gbs conductance b-s' (real)
-        crate::stamp_conductance(&mut sys.real, b, sp, m * comp.gbs);
-
-        // Series resistances (real)
-        let g_drain = bsim.drain_conductance();
-        if g_drain > 0.0 {
-            crate::stamp_conductance(&mut sys.real, bsim.drain_idx, dp, m * g_drain);
-        }
-        let g_source = bsim.source_conductance();
-        if g_source > 0.0 {
-            crate::stamp_conductance(&mut sys.real, bsim.source_idx, sp, m * g_source);
-        }
-
-        // Intrinsic capacitances (imaginary)
-        let cap_entries: &[(Option<usize>, Option<usize>, f64)] = &[
-            (g, g, comp.cggb),
-            (g, dp, comp.cgdb),
-            (g, sp, comp.cgsb),
-            (dp, g, comp.cdgb),
-            (dp, dp, comp.cddb),
-            (dp, sp, comp.cdsb),
-            (b, g, comp.cbgb),
-            (b, dp, comp.cbdb),
-            (b, sp, comp.cbsb),
-        ];
-        for &(row, col, cap) in cap_entries {
-            if cap.abs() > 0.0
-                && let (Some(r), Some(c)) = (row, col)
-            {
-                sys.imag.add(r, c, omega * m * cap);
-            }
-        }
-
-        // Junction capacitances (imaginary)
-        if comp.capbd > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, b, dp, omega * m * comp.capbd);
-        }
-        if comp.capbs > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, b, sp, omega * m * comp.capbs);
-        }
+        stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }
+}
 
-    // 6. Apply AC source excitation to RHS.
+/// Apply AC source excitation to the complex RHS.
+fn apply_ac_excitation(
+    sys: &mut ComplexLinearSystem,
+    netlist: &Netlist,
+    mna: &MnaSystem,
+    num_nodes: usize,
+) {
     for element in netlist.elements() {
         match &element.kind {
             ferrospice_netlist::ElementKind::VoltageSource { source, .. } => {
@@ -629,7 +444,6 @@ fn solve_ac_point(
                     let ac_real = mag * phase_rad.cos();
                     let ac_imag = mag * phase_rad.sin();
 
-                    // Find the branch index for this voltage source.
                     if let Some(branch_pos) = mna
                         .vsource_names
                         .iter()
@@ -656,7 +470,6 @@ fn solve_ac_point(
                     let ni = mna.node_map.get(pos);
                     let nj = mna.node_map.get(neg);
 
-                    // Current source stamps on RHS (same convention as DC).
                     if let Some(i) = ni {
                         sys.rhs_real[i] -= ac_real;
                         sys.rhs_imag[i] -= ac_imag;
@@ -670,8 +483,150 @@ fn solve_ac_point(
             _ => {}
         }
     }
+}
 
-    sys.solve().map_err(MnaError::SolveError)
+/// AC small-signal data for a 4-terminal MOSFET-family device (BSIM3/BSIM4/SOI).
+///
+/// Captures the node indices, scale factor, conductances, and capacitances needed
+/// to stamp a BSIM-family device into the complex AC MNA matrix.
+pub struct BsimAcStamp {
+    pub dp: Option<usize>,
+    pub g: Option<usize>,
+    pub sp: Option<usize>,
+    pub b: Option<usize>,
+    pub drain_idx: Option<usize>,
+    pub source_idx: Option<usize>,
+    pub m: f64,
+    pub gds: f64,
+    pub gm: f64,
+    pub gmbs: f64,
+    pub gbd: f64,
+    pub gbs: f64,
+    pub g_drain: f64,
+    pub g_source: f64,
+    pub cggb: f64,
+    pub cgdb: f64,
+    pub cgsb: f64,
+    pub cbgb: f64,
+    pub cbdb: f64,
+    pub cbsb: f64,
+    pub cdgb: f64,
+    pub cddb: f64,
+    pub cdsb: f64,
+    pub capbd: f64,
+    pub capbs: f64,
+}
+
+/// Stamp a BSIM-family device's small-signal model into the complex AC system.
+///
+/// Used by BSIM3, BSIM4, and future BSIM-SOI variants to avoid duplicating
+/// the identical gm/gds/gmbs/cap stamping logic.
+pub fn stamp_bsim_ac(stamp: &BsimAcStamp, omega: f64, sys: &mut ComplexLinearSystem) {
+    let BsimAcStamp {
+        dp,
+        g,
+        sp,
+        b,
+        drain_idx,
+        source_idx,
+        m,
+        gds,
+        gm,
+        gmbs,
+        gbd,
+        gbs,
+        g_drain,
+        g_source,
+        cggb,
+        cgdb,
+        cgsb,
+        cbgb,
+        cbdb,
+        cbsb,
+        cdgb,
+        cddb,
+        cdsb,
+        capbd,
+        capbs,
+    } = *stamp;
+
+    // gds conductance d'-s' (real)
+    crate::stamp_conductance(&mut sys.real, dp, sp, m * gds);
+
+    // gm VCCS: Vgs controls current s'→d' (real)
+    let gm_scaled = m * gm;
+    if let Some(d) = dp {
+        if let Some(gate) = g {
+            sys.real.add(d, gate, gm_scaled);
+        }
+        if let Some(s) = sp {
+            sys.real.add(d, s, -gm_scaled);
+        }
+    }
+    if let Some(s) = sp {
+        if let Some(gate) = g {
+            sys.real.add(s, gate, -gm_scaled);
+        }
+        sys.real.add(s, s, gm_scaled);
+    }
+
+    // gmbs: Vbs controls current s'→d' (real)
+    let gmbs_scaled = m * gmbs;
+    if let Some(d) = dp {
+        if let Some(bulk) = b {
+            sys.real.add(d, bulk, gmbs_scaled);
+        }
+        if let Some(s) = sp {
+            sys.real.add(d, s, -gmbs_scaled);
+        }
+    }
+    if let Some(s) = sp {
+        if let Some(bulk) = b {
+            sys.real.add(s, bulk, -gmbs_scaled);
+        }
+        sys.real.add(s, s, gmbs_scaled);
+    }
+
+    // gbd conductance b-d' (real)
+    crate::stamp_conductance(&mut sys.real, b, dp, m * gbd);
+    // gbs conductance b-s' (real)
+    crate::stamp_conductance(&mut sys.real, b, sp, m * gbs);
+
+    // Series resistances (real)
+    if g_drain > 0.0 {
+        crate::stamp_conductance(&mut sys.real, drain_idx, dp, m * g_drain);
+    }
+    if g_source > 0.0 {
+        crate::stamp_conductance(&mut sys.real, source_idx, sp, m * g_source);
+    }
+
+    // Intrinsic capacitances (imaginary) - direct Y-matrix entries [G, D', S', B]
+    let cap_entries: &[(Option<usize>, Option<usize>, f64)] = &[
+        (g, g, cggb),
+        (g, dp, cgdb),
+        (g, sp, cgsb),
+        (dp, g, cdgb),
+        (dp, dp, cddb),
+        (dp, sp, cdsb),
+        (b, g, cbgb),
+        (b, dp, cbdb),
+        (b, sp, cbsb),
+    ];
+    for &(row, col, cap) in cap_entries {
+        if cap.abs() > 0.0
+            && let (Some(r), Some(c)) = (row, col)
+        {
+            sys.imag.add(r, c, omega * m * cap);
+        }
+    }
+
+    // Junction capacitances (imaginary)
+    if capbd > 0.0 {
+        stamp_imag_conductance(&mut sys.imag, b, dp, omega * m * capbd);
+    }
+    if capbs > 0.0 {
+        stamp_imag_conductance(&mut sys.imag, b, sp, omega * m * capbs);
+    }
 }
 
 /// Stamp an imaginary-part conductance (susceptance) between two nodes.
@@ -737,29 +692,8 @@ pub fn generate_ac_sweep(variation: AcVariation, n: u32, fstart: f64, fstop: f64
 }
 
 /// Extract DC operating point solution values in matrix-index order.
-fn extract_op_solution(op_result: &SimResult, mna: &MnaSystem) -> Vec<f64> {
-    let num_ext_nodes = mna.node_map.len();
-    let num_internal = mna
-        .diodes
-        .iter()
-        .filter(|d| d.internal_idx.is_some())
-        .count()
-        + mna
-            .bjts
-            .iter()
-            .map(|b| b.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .mosfets
-            .iter()
-            .map(|m| m.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .jfets
-            .iter()
-            .map(|j| j.model.internal_node_count())
-            .sum::<usize>();
-    let num_nodes = num_ext_nodes + num_internal;
+pub fn extract_op_solution(op_result: &SimResult, mna: &MnaSystem) -> Vec<f64> {
+    let num_nodes = mna.total_num_nodes();
     let dim = num_nodes + mna.vsource_names.len();
     let mut solution = vec![0.0; dim];
 
@@ -784,22 +718,6 @@ fn extract_op_solution(op_result: &SimResult, mna: &MnaSystem) -> Vec<f64> {
     }
 
     solution
-}
-
-fn expr_val(expr: &Expr, context: &str) -> Result<f64, MnaError> {
-    match expr {
-        Expr::Num(v) => Ok(*v),
-        _ => Err(MnaError::NonNumericValue {
-            element: context.to_string(),
-        }),
-    }
-}
-
-fn expr_val_or(expr: &Expr, default: f64) -> f64 {
-    match expr {
-        Expr::Num(v) => *v,
-        _ => default,
-    }
 }
 
 #[cfg(test)]

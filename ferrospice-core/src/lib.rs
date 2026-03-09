@@ -2,6 +2,26 @@
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+use ferrospice_netlist::Expr;
+
+/// Parse a numeric expression value, returning an error if it's not a literal number.
+pub(crate) fn expr_val(expr: &Expr, context: &str) -> Result<f64, mna::MnaError> {
+    match expr {
+        Expr::Num(v) => Ok(*v),
+        _ => Err(MnaError::NonNumericValue {
+            element: context.to_string(),
+        }),
+    }
+}
+
+/// Parse a numeric expression value, returning a default if it's not a literal number.
+pub(crate) fn expr_val_or(expr: &Expr, default: f64) -> f64 {
+    match expr {
+        Expr::Num(v) => *v,
+        _ => default,
+    }
+}
+
 pub mod ac;
 pub mod bjt;
 pub mod bsim3;

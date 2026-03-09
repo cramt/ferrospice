@@ -5,6 +5,7 @@ use crate::bjt::stamp_bjt;
 use crate::bsim3::{bsim3_companion, bsim3_limit, stamp_bsim3};
 use crate::bsim4::{bsim4_companion, bsim4_limit, stamp_bsim4};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
+use crate::expr_val;
 use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
@@ -599,15 +600,6 @@ fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), 
     }
 
     Ok(())
-}
-
-fn expr_val(expr: &Expr, context: &str) -> Result<f64, MnaError> {
-    match expr {
-        Expr::Num(v) => Ok(*v),
-        _ => Err(MnaError::NonNumericValue {
-            element: context.to_string(),
-        }),
-    }
 }
 
 #[cfg(test)]

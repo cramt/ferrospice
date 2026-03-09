@@ -8,11 +8,12 @@
 //! estimation using the difference between BE and Trap results for
 //! capacitor/inductor charges/fluxes.
 
-use ferrospice_netlist::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimVector};
+use ferrospice_netlist::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
 use crate::bjt::stamp_bjt;
 use crate::diode::{VT_NOM, pnjlim, vcrit};
+use crate::expr_val;
 use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
@@ -934,15 +935,6 @@ fn solve_timestep(
         load(prev_solution, &mut system, 1.0);
         let sol = system.solve()?;
         Ok(sol)
-    }
-}
-
-fn expr_val(expr: &Expr, context: &str) -> Result<f64, MnaError> {
-    match expr {
-        Expr::Num(v) => Ok(*v),
-        _ => Err(MnaError::NonNumericValue {
-            element: context.to_string(),
-        }),
     }
 }
 
