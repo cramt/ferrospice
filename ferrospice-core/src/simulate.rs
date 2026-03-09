@@ -28,11 +28,7 @@ fn stamp_current_source(rhs: &mut [f64], ni: Option<usize>, nj: Option<usize>, i
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
 
-    let has_nonlinear = !mna.diodes.is_empty()
-        || !mna.bjts.is_empty()
-        || !mna.mosfets.is_empty()
-        || !mna.jfets.is_empty();
-    let solution_vec = if !has_nonlinear {
+    let solution_vec = if !mna.has_nonlinear() {
         // Pure linear circuit — direct solve.
         let sol = mna.solve()?;
         // Extract raw values.
@@ -71,27 +67,7 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     }
 
     // Voltage source branch currents
-    let num_nodes = mna.node_map.len()
-        + mna
-            .diodes
-            .iter()
-            .filter(|d| d.internal_idx.is_some())
-            .count()
-        + mna
-            .bjts
-            .iter()
-            .map(|b| b.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .mosfets
-            .iter()
-            .map(|m| m.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .jfets
-            .iter()
-            .map(|j| j.model.internal_node_count())
-            .sum::<usize>();
+    let num_nodes = mna.total_num_nodes();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
         let idx = num_nodes + i;
         let current = if idx < solution_vec.len() {
@@ -117,12 +93,7 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// Solve the DC operating point and return the raw solution vector.
 /// Layout: [node_voltages..., internal_nodes..., branch_currents...].
 pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
-    let has_nonlinear = !mna.diodes.is_empty()
-        || !mna.bjts.is_empty()
-        || !mna.mosfets.is_empty()
-        || !mna.jfets.is_empty();
-
-    if !has_nonlinear {
+    if !mna.has_nonlinear() {
         mna.system.solve().map_err(MnaError::from)
     } else {
         solve_nonlinear_op(mna)
@@ -132,28 +103,7 @@ pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
 /// Solve a nonlinear DC operating point using Newton-Raphson.
 pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     let dim = mna.system.dim();
-    let num_ext_nodes = mna.node_map.len();
-    let num_internal_diodes = mna
-        .diodes
-        .iter()
-        .filter(|d| d.internal_idx.is_some())
-        .count();
-    let num_internal_bjts: usize = mna.bjts.iter().map(|b| b.model.internal_node_count()).sum();
-    let num_internal_mosfets: usize = mna
-        .mosfets
-        .iter()
-        .map(|m| m.model.internal_node_count())
-        .sum();
-    let num_internal_jfets: usize = mna
-        .jfets
-        .iter()
-        .map(|j| j.model.internal_node_count())
-        .sum();
-    let num_nodes = num_ext_nodes
-        + num_internal_diodes
-        + num_internal_bjts
-        + num_internal_mosfets
-        + num_internal_jfets;
+    let num_nodes = mna.total_num_nodes();
     let options = NrOptions::default();
 
     // The base linear system (matrix + RHS) from MNA assembly contains stamps
@@ -299,31 +249,6 @@ enum SweepSource {
     },
 }
 
-/// Compute total number of nodes including internal nodes for all nonlinear devices.
-pub(crate) fn total_num_nodes(mna: &MnaSystem) -> usize {
-    mna.node_map.len()
-        + mna
-            .diodes
-            .iter()
-            .filter(|d| d.internal_idx.is_some())
-            .count()
-        + mna
-            .bjts
-            .iter()
-            .map(|b| b.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .mosfets
-            .iter()
-            .map(|m| m.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .jfets
-            .iter()
-            .map(|j| j.model.internal_node_count())
-            .sum::<usize>()
-}
-
 /// Find the sweep source in the MNA system and return info for modifying the RHS.
 fn find_sweep_source(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, MnaError> {
     let src_lower = src_name.to_lowercase();
@@ -334,7 +259,7 @@ fn find_sweep_source(mna: &MnaSystem, src_name: &str) -> Result<SweepSource, Mna
         .iter()
         .position(|n| n.to_lowercase() == src_lower)
     {
-        let num_nodes = total_num_nodes(mna);
+        let num_nodes = mna.total_num_nodes();
         return Ok(SweepSource::Voltage {
             rhs_index: num_nodes + pos,
         });
@@ -566,11 +491,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
 /// Solve the MNA system and append the solution to result vectors.
 fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), MnaError> {
-    let has_nonlinear = !mna.diodes.is_empty()
-        || !mna.bjts.is_empty()
-        || !mna.mosfets.is_empty()
-        || !mna.jfets.is_empty();
-    if !has_nonlinear {
+    if !mna.has_nonlinear() {
         // Linear circuit — direct solve.
         let solution = mna.solve()?;
         let mut idx = 0;

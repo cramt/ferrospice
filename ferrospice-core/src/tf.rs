@@ -9,7 +9,7 @@ use crate::bjt::stamp_bjt;
 use crate::jfet::stamp_jfet;
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::mosfet::stamp_mosfet;
-use crate::simulate::{solve_op_raw, total_num_nodes};
+use crate::simulate::solve_op_raw;
 
 /// Input source classification for .tf analysis.
 enum InputSource {
@@ -41,7 +41,7 @@ fn parse_output_spec(
         Ok((pos, neg, true))
     } else if lower.starts_with("i(") && lower.ends_with(')') {
         let src_name = &lower[2..lower.len() - 1];
-        let num_nodes = total_num_nodes(mna);
+        let num_nodes = mna.total_num_nodes();
         if let Some(pos) = mna
             .vsource_names
             .iter()
@@ -66,7 +66,7 @@ fn find_input_source(
     mna: &MnaSystem,
     netlist: &Netlist,
 ) -> Result<InputSource, MnaError> {
-    let num_nodes = total_num_nodes(mna);
+    let num_nodes = mna.total_num_nodes();
 
     // Check voltage sources
     if let Some(pos) = mna

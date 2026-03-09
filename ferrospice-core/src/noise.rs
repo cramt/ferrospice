@@ -67,7 +67,7 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let op_result = simulate_op(netlist)?;
     let mna = assemble_mna(netlist)?;
     let op_solution = extract_op_solution(&op_result, &mna);
-    let num_nodes = total_num_nodes(&mna);
+    let num_nodes = mna.total_num_nodes();
 
     // Resolve output node indices.
     let out_pos_idx = mna.node_map.get(&out_pos);
@@ -788,7 +788,7 @@ fn integrate_noise(freqs: &[f64], noise_sqrt: &[f64]) -> f64 {
 
 /// Extract DC operating point solution in matrix-index order.
 fn extract_op_solution(op_result: &SimResult, mna: &MnaSystem) -> Vec<f64> {
-    let num_nodes = total_num_nodes(mna);
+    let num_nodes = mna.total_num_nodes();
     let dim = num_nodes + mna.vsource_names.len();
     let mut solution = vec![0.0; dim];
 
@@ -813,31 +813,6 @@ fn extract_op_solution(op_result: &SimResult, mna: &MnaSystem) -> Vec<f64> {
     }
 
     solution
-}
-
-/// Compute total number of nodes including internal nodes for all nonlinear devices.
-fn total_num_nodes(mna: &MnaSystem) -> usize {
-    mna.node_map.len()
-        + mna
-            .diodes
-            .iter()
-            .filter(|d| d.internal_idx.is_some())
-            .count()
-        + mna
-            .bjts
-            .iter()
-            .map(|b| b.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .mosfets
-            .iter()
-            .map(|m| m.model.internal_node_count())
-            .sum::<usize>()
-        + mna
-            .jfets
-            .iter()
-            .map(|j| j.model.internal_node_count())
-            .sum::<usize>()
 }
 
 fn expr_val(expr: &Expr, context: &str) -> Result<f64, MnaError> {

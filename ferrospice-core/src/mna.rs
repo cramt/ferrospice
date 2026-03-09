@@ -265,6 +265,41 @@ impl MnaSystem {
             vsource_names: &self.vsource_names,
         })
     }
+
+    /// Returns `true` if the circuit contains any nonlinear devices requiring
+    /// Newton-Raphson iteration.
+    pub fn has_nonlinear(&self) -> bool {
+        !self.diodes.is_empty()
+            || !self.bjts.is_empty()
+            || !self.mosfets.is_empty()
+            || !self.jfets.is_empty()
+    }
+
+    /// Total number of nodes including internal nodes created by nonlinear
+    /// device series resistances (RS, RB, RC, RE, RD).
+    pub fn total_num_nodes(&self) -> usize {
+        self.node_map.len()
+            + self
+                .diodes
+                .iter()
+                .filter(|d| d.internal_idx.is_some())
+                .count()
+            + self
+                .bjts
+                .iter()
+                .map(|b| b.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .mosfets
+                .iter()
+                .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .jfets
+                .iter()
+                .map(|j| j.model.internal_node_count())
+                .sum::<usize>()
+    }
 }
 
 /// Solution of an MNA system with named access to node voltages and branch currents.

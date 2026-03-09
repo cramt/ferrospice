@@ -471,10 +471,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         .map(|d| vcrit(d.model.n * VT_NOM, d.model.is))
         .collect();
 
-    let has_nonlinear = !mna.diodes.is_empty()
-        || !mna.bjts.is_empty()
-        || !mna.mosfets.is_empty()
-        || !mna.jfets.is_empty();
+    let has_nonlinear = mna.has_nonlinear();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
     let tran_params = TranParams {
