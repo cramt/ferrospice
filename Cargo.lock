@@ -436,6 +436,7 @@ name = "ferrospice"
 version = "0.1.0"
 dependencies = [
  "faer",
+ "ferrospice-core",
  "ferrospice-netlist",
  "getrandom",
  "wasm-bindgen-test",

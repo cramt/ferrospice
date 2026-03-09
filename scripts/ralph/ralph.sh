@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude] [--task US-XXX] [max_iterations]
 
 set -e
 
 # Parse arguments
 TOOL="amp"  # Default to amp for backwards compatibility
 MAX_ITERATIONS=10
+TASK=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -16,6 +17,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tool=*)
       TOOL="${1#*=}"
+      shift
+      ;;
+    --task)
+      TASK="$2"
+      shift 2
+      ;;
+    --task=*)
+      TASK="${1#*=}"
       shift
       ;;
     *)
@@ -32,6 +41,11 @@ done
 if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
   echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
   exit 1
+fi
+
+# When a specific task is given, force a single iteration
+if [ -n "$TASK" ]; then
+  MAX_ITERATIONS=1
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRD_FILE="$SCRIPT_DIR/prd.json"
@@ -125,7 +139,11 @@ build_pass_history() {
   fi
 }
 
-echo "Starting Ralph - Tool: $TOOL - Max iterations: $MAX_ITERATIONS"
+if [ -n "$TASK" ]; then
+  echo "Starting Ralph - Tool: $TOOL - Task: $TASK - Max iterations: $MAX_ITERATIONS"
+else
+  echo "Starting Ralph - Tool: $TOOL - Max iterations: $MAX_ITERATIONS"
+fi
 
 for i in $(seq 1 $MAX_ITERATIONS); do
   echo ""
@@ -144,6 +162,15 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       print
     }
   }' "$CLAUDE_MD")
+
+  # Inject task directive if specified
+  if [ -n "$TASK" ]; then
+    PROMPT="$PROMPT
+
+## TASK OVERRIDE
+
+You MUST work on story **$TASK** specifically. Do not pick a different story. This is an implementation pass targeting $TASK."
+  fi
 
   # Run the selected tool with the ralph prompt
   if [[ "$TOOL" == "amp" ]]; then
