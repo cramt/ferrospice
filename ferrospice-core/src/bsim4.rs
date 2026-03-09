@@ -175,6 +175,10 @@ pub struct Bsim4Model {
     pub bgidl: f64,
     pub cgidl: f64,
     pub egidl: f64,
+    pub agisl: f64,
+    pub bgisl: f64,
+    pub cgisl: f64,
+    pub egisl: f64,
 
     // Gate tunneling
     pub aigc: f64,
@@ -415,6 +419,10 @@ pub struct Bsim4SizeParam {
     pub bgidl: f64,
     pub cgidl: f64,
     pub egidl: f64,
+    pub agisl: f64,
+    pub bgisl: f64,
+    pub cgisl: f64,
+    pub egisl: f64,
 
     pub aigc: f64,
     pub bigc: f64,
@@ -508,6 +516,9 @@ pub struct Bsim4SizeParam {
 
     // Abulk factor
     pub abulk_cv_factor: f64,
+
+    // Mobility model derived
+    pub vtfbphi1: f64,
 }
 
 /// NR companion result for BSIM4.
@@ -744,6 +755,10 @@ impl Bsim4Model {
             bgidl: 2.3e9,
             cgidl: 0.5,
             egidl: 0.8,
+            agisl: 0.0,
+            bgisl: 2.3e9,
+            cgisl: 0.5,
+            egisl: 0.8,
 
             aigc: if is_nmos { 1.36e-2 } else { 9.80e-3 },
             bigc: if is_nmos { 1.71e-3 } else { 7.59e-4 },
@@ -1135,11 +1150,15 @@ impl Bsim4Model {
                 "alpha1" => model.alpha1 = v,
                 "beta0" => model.beta0 = v,
 
-                // GIDL
+                // GIDL/GISL
                 "agidl" => model.agidl = v,
                 "bgidl" => model.bgidl = v,
                 "cgidl" => model.cgidl = v,
                 "egidl" => model.egidl = v,
+                "agisl" => model.agisl = v,
+                "bgisl" => model.bgisl = v,
+                "cgisl" => model.cgisl = v,
+                "egisl" => model.egisl = v,
 
                 // Gate tunneling
                 "aigc" => model.aigc = v,
@@ -1439,6 +1458,10 @@ impl Bsim4Model {
         let bgidl = bin!(self.bgidl, "bgidl");
         let cgidl = bin!(self.cgidl, "cgidl");
         let egidl = bin!(self.egidl, "egidl");
+        let agisl = bin!(self.agisl, "agisl");
+        let bgisl = bin!(self.bgisl, "bgisl");
+        let cgisl = bin!(self.cgisl, "cgisl");
+        let egisl = bin!(self.egisl, "egisl");
         let aigc = bin!(self.aigc, "aigc");
         let bigc = bin!(self.bigc, "bigc");
         let cigc = bin!(self.cigc, "cigc");
@@ -1643,6 +1666,14 @@ impl Bsim4Model {
         let aechvb_edge_d = aechvb_base * weff * dlcig * tox_ratio_edge;
         let bechvb_edge = -bechvb_base * self.toxe * poxedge;
 
+        // vtfbphi1 for mobMod 2/4/5/6 (matching b4temp.c)
+        let t3_vtfb = type_sign * vth0 - vfb - phi;
+        let vtfbphi1 = if self.mos_type == MosfetType::Nmos {
+            (2.0 * t3_vtfb).max(0.0)
+        } else {
+            (2.5 * t3_vtfb).max(0.0)
+        };
+
         Bsim4SizeParam {
             leff,
             weff,
@@ -1713,6 +1744,10 @@ impl Bsim4Model {
             bgidl,
             cgidl,
             egidl,
+            agisl,
+            bgisl,
+            cgisl,
+            egisl,
             aigc,
             bigc,
             cigc,
@@ -1789,6 +1824,7 @@ impl Bsim4Model {
             tox_ratio,
             tox_ratio_edge,
             abulk_cv_factor,
+            vtfbphi1,
         }
     }
 }
@@ -1867,6 +1903,10 @@ fn is_binnable_param(name: &str) -> bool {
             | "bgidl"
             | "cgidl"
             | "egidl"
+            | "agisl"
+            | "bgisl"
+            | "cgisl"
+            | "egisl"
             | "aigc"
             | "bigc"
             | "cigc"
@@ -2060,22 +2100,54 @@ pub fn bsim4_companion(
     let abulk = abulk0 * tmp_abulk;
     let abulk = abulk.max(0.1);
 
-    // Mobility (mobMod=0)
+    // Mobility degradation (mobMod dispatch)
     let t14 = 0.0; // mtrlMod=0
-    let t0_mob = vgsteff + vth + vth - t14;
-    let t3_mob = t0_mob / model.toxe;
-    let t12_mob = (vth * vth + 0.0001).sqrt();
-    let t9_mob = 1.0 / (vgsteff + 2.0 * t12_mob);
-    let t10_mob = t9_mob * model.toxe;
-    let t8_mob = sp.ud * t10_mob * t10_mob * vth;
-    let t6_mob = t8_mob * vth;
-    let t2_mob = sp.ua + sp.uc * vbs_eff;
-    let t5_mob = t3_mob * (t2_mob + sp.ub * t3_mob) + t6_mob;
+    let toxe = model.toxe;
+
+    let t5_mob = match model.mob_mod {
+        1 => {
+            // mobMod=1: multiplicative form
+            let t0 = vgsteff + vth + vth - t14;
+            let t2 = 1.0 + sp.uc * vbs_eff;
+            let t3 = t0 / toxe;
+            let t4 = t3 * (sp.ua + sp.ub * t3);
+            let t12 = (vth * vth + 0.0001).sqrt();
+            let t9 = 1.0 / (vgsteff + 2.0 * t12);
+            let t10 = t9 * toxe;
+            let t8 = sp.ud * t10 * t10 * vth;
+            let t6 = t8 * vth;
+            t4 * t2 + t6
+        }
+        2 => {
+            // mobMod=2: power-law (universal mobility)
+            let t0 = (vgsteff + sp.vtfbphi1) / toxe;
+            let t0 = t0.max(1.0e-20);
+            let t1 = t0.powf(model.eu);
+            let t2 = sp.ua + sp.uc * vbs_eff;
+            let t12 = (vth * vth + 0.0001).sqrt();
+            let t9 = 1.0 / (vgsteff + 2.0 * t12);
+            let t10 = t9 * toxe;
+            let t8 = sp.ud * t10 * t10 * vth;
+            let t6 = t8 * vth;
+            t1 * t2 + t6
+        }
+        _ => {
+            // mobMod=0 (default): linear degradation
+            let t0 = vgsteff + vth + vth - t14;
+            let t3 = t0 / toxe;
+            let t12 = (vth * vth + 0.0001).sqrt();
+            let t9 = 1.0 / (vgsteff + 2.0 * t12);
+            let t10 = t9 * toxe;
+            let t8 = sp.ud * t10 * t10 * vth;
+            let t6 = t8 * vth;
+            let t2 = sp.ua + sp.uc * vbs_eff;
+            t3 * (t2 + sp.ub * t3) + t6
+        }
+    };
 
     let denomi = if t5_mob >= -0.8 {
         1.0 + t5_mob
     } else {
-        // Smooth clamp
         let t9 = 1.0 / (7.0 + 10.0 * t5_mob);
         (0.6 + t5_mob) * t9
     };
@@ -2142,18 +2214,20 @@ pub fn bsim4_companion(
         1.0e30
     };
 
-    // VADITS
-    let vadits = if sp.pdits > 0.0 {
-        let t0 = sp.pdits * sp.leff / sp.litl;
-        let t1 = vds_mode / vdsat;
-        let t2 = t1 - 1.0;
-        let t2 = t2.max(-EXP_THRESHOLD);
-        let t3 = safe_exp(t0 * t2);
-        1.0 / t3 / sp.pditsd * sp.leff
+    // VADITS (matching b4ld.c lines 2003-2024)
+    let vadits = if sp.pdits > MIN_EXP {
+        let t0 = sp.pditsd * vds_mode;
+        let t1 = if t0 > EXP_THRESHOLD {
+            MAX_EXP
+        } else {
+            t0.exp()
+        };
+        let t2 = 1.0 + model.pditsl * sp.leff;
+        let vadits_raw = (1.0 + t2 * t1) / sp.pdits;
+        (vadits_raw * fp).max(1.0e-18)
     } else {
-        1.0e30
+        MAX_EXP
     };
-    let vadits = vadits.max(1.0e-18);
 
     // VASCBE
     let vascbe = if diff_vds > 1.0e-9 && sp.pscbe1 > 0.0 {
@@ -2243,15 +2317,31 @@ pub fn bsim4_companion(
         0.0
     };
 
-    let igisl = 0.0; // simplified
+    // GISL (mirror of GIDL using source side)
+    let igisl = if sp.agisl > 0.0 {
+        let vgd_eff_gisl = type_sign * (vgs_mode - vds_mode);
+        let t0 = 3.0 * model.toxe;
+        let t1 = (-vds_mode - vgd_eff_gisl - sp.egisl) / t0;
+        if t1 > 0.27 {
+            let t2 = sp.bgisl / t1;
+            if t2 < 100.0 {
+                sp.agisl * sp.weff_cj * t1 * (-t2).exp()
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
 
-    // NR equivalent currents
-    let ceq_d =
-        type_sign * (ids / vdseff * vdseff - gds * vds_mode - gm * vgs_mode - gmbs * vbs_mode);
+    // NR equivalent currents (no type_sign here — stamp_bsim4 applies it)
+    let ceq_d = ids - gds * vds_mode - gm * vgs_mode - gmbs * vbs_mode;
     let ceq_bs = cbs_current - gbs * vbs;
     let ceq_bd = cbd_current - gbd * (vbs - vds);
 
-    let ceq_sub = type_sign * isub;
+    let ceq_sub = isub;
 
     // Capacitances (simplified capMod=2 CTM)
     let vfbzb = sp.vfbzb_factor + type_sign * sp.vth0;
