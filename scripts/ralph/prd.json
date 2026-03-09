@@ -51,6 +51,13 @@
       "summary": "Implemented BSIM3SOI-FD model (level 55): ~1900-line model with FD-specific surface potential chain (Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0eff→Vbsmos→Vbseff), body node feedback mechanism, no junction currents, impact ionization with AII/BII/CII/DII, full MNA/simulate/AC/transient/noise integration, 6 tests (4 passing, 2 ignored pending convergence improvements)",
       "date": "2026-03-09",
       "storyId": "US-028"
+    },
+    {
+      "iteration": 8,
+      "passType": "implementation",
+      "summary": "Implemented BSIM3SOI-DD model (level 56): ~2000-line hybrid model combining FD body bias chain with PD junction currents (4-component: diffusion, recombination, BJT, tunneling), GIDL, FD-style impact ionization (AII/BII/CII/DII), DD-specific params (DVBD0/DVBD1/VBSA/KB1/KB3/DELP/ABP/MXC), full MNA/simulate/AC/transient/noise integration, 7 unit tests passing",
+      "date": "2026-03-09",
+      "storyId": "US-029"
     }
   ],
   "userStories": [
@@ -557,7 +564,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 29,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: ngspice bsim3soidd/ — 14,860 lines. Third SOI variant, should reuse most of PD/FD infrastructure."
     },
     {
@@ -744,6 +751,145 @@
       "priority": 40,
       "passes": false,
       "notes": ""
+    },
+    {
+      "id": "US-041",
+      "title": "Cargo.toml metadata for all crates",
+      "description": "As a maintainer, I need all Cargo.toml files to have the metadata required for crates.io publication.",
+      "acceptanceCriteria": [
+        "All three crates (ferrospice, ferrospice-core, ferrospice-netlist) have: license, repository, homepage, keywords, categories, readme fields",
+        "Path dependencies include version constraints (e.g. ferrospice-netlist = { version = \"0.1\", path = \"...\" })",
+        "rust-version (MSRV) is set and documented — pick a version, test it in CI",
+        "cargo publish --dry-run succeeds for all three crates with no errors",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "Currently missing: license field on subcrates, repository/homepage/keywords/categories on all crates, version constraints on path deps. ferrospice root uses edition 2024 (Rust 1.85+)."
+    },
+    {
+      "id": "US-042",
+      "title": "LICENSE file and README files",
+      "description": "As a user evaluating ferrospice on crates.io, I need a LICENSE file and per-crate READMEs so I can understand the project and its terms.",
+      "acceptanceCriteria": [
+        "BSD-3-Clause LICENSE file at repository root",
+        "Root README.md: project description, feature overview, quick-start usage example, supported analyses, supported device models, MSRV, license badge",
+        "ferrospice-netlist/README.md: crate-specific docs with parsing usage example",
+        "ferrospice-core/README.md: crate-specific docs with simulation usage example",
+        "Each README renders correctly on crates.io (no broken links, no relative paths to repo files)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": "No LICENSE file or README currently exists. The netlist crate has good module-level rustdoc already."
+    },
+    {
+      "id": "US-043",
+      "title": "Public API audit and documentation",
+      "description": "As a library consumer, I need a clean, well-documented public API so I can use ferrospice programmatically.",
+      "acceptanceCriteria": [
+        "Crate-level #![doc] comments on ferrospice-core and ferrospice root with usage examples",
+        "All public types, traits, and functions have rustdoc comments",
+        "#![warn(missing_docs)] enabled on all library crates and compiles clean",
+        "cargo doc --no-deps --workspace builds with no warnings",
+        "At least one end-to-end doctested example in each crate's top-level doc (parse netlist, simulate, read results)",
+        "Internal-only items are pub(crate) not pub — audit and restrict visibility where possible",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": "ferrospice-netlist has excellent docs already. ferrospice-core has module-level docs on device models but no crate-level doc comment. Need to audit pub visibility — some internal helpers may be needlessly public."
+    },
+    {
+      "id": "US-044",
+      "title": "Stable public API design",
+      "description": "As a library consumer, I need a stable, ergonomic top-level API so that basic workflows (parse → simulate → read results) are straightforward and unlikely to break.",
+      "acceptanceCriteria": [
+        "ferrospice root crate re-exports a curated public API (don't just pub use everything from core)",
+        "Top-level convenience functions: e.g. ferrospice::simulate(netlist) that runs all analyses",
+        "SimResult types are ergonomic: named field access, iteration, indexing by node name",
+        "Error types are public, well-structured, and use thiserror — no String errors or panics in the public API",
+        "Builder or options pattern for simulation configuration (tolerances, iteration limits, etc.)",
+        "No accidental exposure of internal types (MNA matrices, device stamps, NR state) in the public API",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": "Currently the root crate is just a Hello World main.rs. Need to design what ferrospice as a library actually exports. Consider: should users depend on ferrospice (umbrella) or ferrospice-core directly?"
+    },
+    {
+      "id": "US-045",
+      "title": "Examples directory with runnable examples",
+      "description": "As a user discovering ferrospice on crates.io, I need runnable examples so I can quickly understand how to use the library.",
+      "acceptanceCriteria": [
+        "examples/ directory in the root crate with at least 4 examples:",
+        "  - dc_operating_point.rs: parse a simple circuit, run .op, print node voltages",
+        "  - dc_sweep.rs: sweep a source, collect I-V curve data",
+        "  - ac_analysis.rs: frequency response of an RC filter",
+        "  - transient.rs: pulse response of an RC circuit",
+        "All examples compile and run successfully via cargo run --example <name>",
+        "Examples use only the public API (no pub(crate) imports)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": "No examples/ directory exists. Examples serve as both documentation and API integration tests."
+    },
+    {
+      "id": "US-046",
+      "title": "CI pipeline for publish readiness",
+      "description": "As a maintainer, I need CI checks that prevent publishing regressions so the crate stays publishable.",
+      "acceptanceCriteria": [
+        "CI runs: cargo test, cargo clippy -D warnings, cargo fmt --check, cargo doc --no-deps",
+        "CI runs cargo publish --dry-run for each crate (catches missing metadata, version issues)",
+        "CI tests on the declared MSRV (not just latest nightly/stable)",
+        "CI configuration is in .github/workflows/ or equivalent",
+        "All CI checks pass on the current codebase",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": "No CI exists yet. The project uses nix develop for reproducible dev environments — CI should leverage this."
+    },
+    {
+      "id": "US-047",
+      "title": "CHANGELOG and release process",
+      "description": "As a maintainer, I need a changelog and documented release process so publishing is repeatable and transparent.",
+      "acceptanceCriteria": [
+        "CHANGELOG.md at root following Keep a Changelog format",
+        "Initial 0.1.0 entry summarizing supported features (analyses, device models, netlists)",
+        "RELEASING.md documenting the publish process: version bump, changelog update, cargo publish order (netlist → core → ferrospice), git tag",
+        "Version numbers are consistent across workspace (all 0.1.0 for initial release)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": "Publishing order matters: ferrospice-netlist first (no internal deps), then ferrospice-core, then ferrospice."
+    },
+    {
+      "id": "US-048",
+      "title": "Crate size and dependency audit",
+      "description": "As a library consumer, I need ferrospice to have a reasonable download size and no unnecessary dependencies.",
+      "acceptanceCriteria": [
+        "ngspice-upstream/ is excluded from the published crate (via Cargo.toml exclude or .gitignore)",
+        "scripts/ and test fixtures are excluded from published crates where not needed",
+        "cargo package --list for each crate shows only necessary files",
+        "No unnecessary dev-dependencies leak into the published crate",
+        "Total published crate sizes are reasonable (document them)",
+        "Dependency tree (cargo tree) has no surprising or heavyweight transitive deps",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": "ngspice-upstream/ is ~100MB+ of C source — must be excluded. The scripts/ralph/ directory with prd.json should also be excluded."
     }
   ]
 }

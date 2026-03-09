@@ -125,6 +125,12 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - BSIM3SOI-FD model: `Bsim3SoiFdModel`, `Bsim3SoiFdInstance`, `Bsim3SoiFdCompanion` in ferrospice-core::bsim3soi_fd
 - BSIM3SOI-FD level=55: FD body is self-consistent (computed, not free) — needs body feedback conductance in stamp
 - FD body feedback: 1S conductance + current source drives body node to FD-computed Vbs (prevents floating node divergence)
+- BSIM3SOI-DD model: `Bsim3SoiDdModel`, `Bsim3SoiDdInstance`, `Bsim3SoiDdCompanion` in ferrospice-core::bsim3soi_dd
+- BSIM3SOI-DD level=56: hybrid of FD (body bias chain) + PD (4-component junction currents)
+- DD body bias: FD-style Vbs0t→Vbs0→Vbs0mos→Vthfd→Vbs0eff→Vbsmos→Vbseff chain with Nfb feedback
+- DD junction currents: PD-style 4-component (diffusion, recombination, BJT, tunneling) + GIDL
+- DD impact ionization: FD-style AII/BII/CII/DII + ALPHA0/ALPHA1/BETA0 (not PD's VDSATII0/ESATII)
+- DD-specific params: DVBD0, DVBD1, VBSA, KB1, KB3, DELP, ABP, MXC, ADICE0, KBJT1, EDL
 - PZ analysis: `simulate_pz(&Netlist) -> Result<SimResult>` in ferrospice-core::pz
 - PZ uses eigenvalue decomposition: poles from det(G+sC)=0, zeros from cofactor determinant
 - PZ eigenvalues: G^{-1}*C eigenvalues → poles = -1/λ for non-zero λ; fallback to GEV when G singular
