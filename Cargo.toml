@@ -19,6 +19,7 @@ edition = "2024"
 description = "A Rust rewrite of ngspice - open-source mixed-level/mixed-signal electronic circuit simulator"
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
+publish = false
 
 [dependencies]
 thevenin-types = { path = "thevenin-types" }
