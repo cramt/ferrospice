@@ -7,18 +7,7 @@
 use thevenin_types::{Expr, ModelDef, Param};
 
 use crate::diode::{VT_NOM, pnjlim, vcrit};
-
-/// Maximum exponent argument to prevent overflow.
-const EXP_LIMIT: f64 = 500.0;
-
-/// Safe exponential that clamps the argument to avoid overflow.
-fn safe_exp(x: f64) -> f64 {
-    if x > EXP_LIMIT {
-        EXP_LIMIT.exp()
-    } else {
-        x.exp()
-    }
-}
+use crate::physics::safe_exp;
 
 /// BJT polarity: NPN or PNP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -87,9 +87,8 @@ pub(crate) fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
 /// this version uses hardcoded defaults (IS=1e-14, Vt at 300.15K) matching
 /// ngspice's BSIM3/BSIM4 implementations.
 pub(crate) fn bsim_pnjlim(vnew: f64, vold: f64) -> f64 {
-    const KBOQ: f64 = 8.617_333_262e-5;
     const TEMP_DEFAULT: f64 = 300.15;
-    let vt = KBOQ * TEMP_DEFAULT;
+    let vt = crate::physics::KBOQ * TEMP_DEFAULT;
     let vcrit_val = vt * (vt / (std::f64::consts::SQRT_2 * 1e-14)).ln();
     if vnew > vcrit_val && (vnew - vold).abs() > 2.0 * vt {
         if vold > 0.0 {

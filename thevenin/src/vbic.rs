@@ -7,16 +7,7 @@
 use thevenin_types::{Expr, ModelDef, Param};
 
 use crate::diode::{VT_NOM, pnjlim, vcrit};
-
-const EXP_LIMIT: f64 = 500.0;
-
-fn safe_exp(x: f64) -> f64 {
-    if x > EXP_LIMIT {
-        EXP_LIMIT.exp()
-    } else {
-        x.exp()
-    }
-}
+use crate::physics::safe_exp;
 
 /// Boltzmann constant (J/K).
 const KB: f64 = 1.380649e-23;

@@ -11,18 +11,7 @@ use thevenin_types::{Expr, ModelDef};
 
 use crate::diode::VT_NOM;
 use crate::mosfet::{MosfetCompanion, MosfetType};
-
-/// Maximum exponent argument to prevent overflow.
-const EXP_LIMIT: f64 = 500.0;
-
-/// Safe exponential that clamps the argument to avoid overflow.
-fn safe_exp(x: f64) -> f64 {
-    if x > EXP_LIMIT {
-        EXP_LIMIT.exp()
-    } else {
-        x.exp()
-    }
-}
+use crate::physics::{EXP_LIMIT, safe_exp};
 
 /// MOS Level 6 model parameters.
 #[derive(Debug, Clone)]

@@ -929,8 +929,7 @@ fn bsim4_eval_1ovf_noise(
     }
 }
 
-/// BSIM4 thermal voltage constant (kB/q).
-const KBOQ: f64 = 8.617087e-5;
+use crate::physics::KBOQ;
 
 /// Compute |V_adj(n1) - V_adj(n2)|² from the adjoint solution.
 ///

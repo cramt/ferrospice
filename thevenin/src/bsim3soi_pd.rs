@@ -10,49 +10,17 @@
 use thevenin_types::{Expr, ModelDef};
 
 use crate::mosfet::MosfetType;
+use crate::physics::{
+    CHARGE_Q, EPSOX, EPSSI, EXP_THRESHOLD, EXPL_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP, MIN_EXPL,
+    soi_dexp,
+};
 
-// Physical constants (same as BSIM3)
-const EPSOX: f64 = 3.453133e-11;
-const EPSSI: f64 = 1.03594e-10;
-const CHARGE_Q: f64 = 1.60219e-19;
-const KBOQ: f64 = 8.617087e-5;
-const EG300: f64 = 1.115;
-const EXP_THRESHOLD: f64 = 34.0;
-const MAX_EXP: f64 = 5.834617425e14;
-const MIN_EXP: f64 = 1.713908431e-15;
-const EXPL_THRESHOLD: f64 = 100.0;
-const MAX_EXPL: f64 = 2.688117142e43;
-const MIN_EXPL: f64 = 3.720075976e-44;
 const DELTA_1: f64 = 0.02;
 const DELTA_3_SOI: f64 = 0.08;
 const DELTA_4: f64 = 0.02;
 const DELT_VBSEFF: f64 = 0.005;
 
 const TEMP_DEFAULT: f64 = 300.15;
-
-fn safe_exp(x: f64) -> f64 {
-    if x > EXP_THRESHOLD {
-        MAX_EXP
-    } else if x < -EXP_THRESHOLD {
-        MIN_EXP
-    } else {
-        x.exp()
-    }
-}
-
-/// Safe exponential for SOI (larger threshold than BSIM3).
-/// Returns (exp_val, derivative) where derivative = exp_val when in range,
-/// MAX_EXPL at saturation, 0 at underflow.
-fn soi_dexp(x: f64) -> (f64, f64) {
-    if x > EXPL_THRESHOLD {
-        (MAX_EXPL * (1.0 + x - EXPL_THRESHOLD), MAX_EXPL)
-    } else if x < -EXPL_THRESHOLD {
-        (MIN_EXPL, 0.0)
-    } else {
-        let e = x.exp();
-        (e, e)
-    }
-}
 
 /// BSIM3SOI-PD model parameters (from .model card, Level=57).
 #[derive(Debug, Clone)]

@@ -5,21 +5,11 @@
 
 use thevenin_types::{Expr, ModelDef, Param};
 
+use crate::physics::safe_exp;
+
 /// Thermal voltage at nominal temperature (27°C = 300.15K).
 /// Vt = kT/q where k = 1.3806e-23, q = 1.602e-19.
 pub const VT_NOM: f64 = 0.02585;
-
-/// Maximum exponent argument to prevent overflow.
-const EXP_LIMIT: f64 = 500.0;
-
-/// Safe exponential that clamps the argument to avoid overflow.
-fn safe_exp(x: f64) -> f64 {
-    if x > EXP_LIMIT {
-        EXP_LIMIT.exp()
-    } else {
-        x.exp()
-    }
-}
 
 /// Diode model parameters matching ngspice defaults.
 #[derive(Debug, Clone)]

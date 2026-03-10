@@ -7,27 +7,11 @@
 use thevenin_types::{Expr, ModelDef};
 
 use crate::mosfet::MosfetType;
-
-// Physical constants
-const EPSOX: f64 = 3.453133e-11;
-const EPSSI: f64 = 1.03594e-10;
-const CHARGE_Q: f64 = 1.60219e-19;
-const KBOQ: f64 = 8.617087e-5; // KB / CHARGE_Q
-const EXP_THRESHOLD: f64 = 34.0;
-const MAX_EXP: f64 = 5.834617425e14; // exp(34)
-const MIN_EXP: f64 = 1.713908431e-15; // exp(-34)
+use crate::physics::{
+    CHARGE_Q, EPSOX, EPSSI, EXP_THRESHOLD, KBOQ, MAX_EXP, MIN_EXP, bsim_safe_exp as safe_exp,
+};
 
 const TEMP_DEFAULT: f64 = 300.15;
-
-fn safe_exp(x: f64) -> f64 {
-    if x > EXP_THRESHOLD {
-        MAX_EXP
-    } else if x < -EXP_THRESHOLD {
-        MIN_EXP
-    } else {
-        x.exp()
-    }
-}
 
 /// BSIM3v3 model parameters (from .model card).
 #[derive(Debug, Clone)]
