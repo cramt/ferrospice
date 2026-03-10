@@ -463,6 +463,27 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 - Commit: ea84e7a
 ---
 
+## 2026-03-10 - Architecture Pass (physics.rs extraction)
+- What was refactored:
+  - Created `physics.rs` module with shared physical constants and safe exponential functions
+  - Extracted from 11 device model files: EPSOX, EPSSI, CHARGE_Q, KBOQ, EG300, EXP_LIMIT, EXP_THRESHOLD, MAX_EXP, MIN_EXP, EXPL_THRESHOLD, MAX_EXPL, MIN_EXPL
+  - Extracted `safe_exp()` (simple, EXP_LIMIT=500), `bsim_safe_exp()` (BSIM, EXP_THRESHOLD=34), `soi_dexp()` (SOI, EXPL_THRESHOLD=100)
+  - All device models now import from `crate::physics` instead of defining their own copies
+- Why:
+  - `safe_exp` was duplicated in 10 files (diode, bjt, jfet, mosfet, mos6, vbic, bsim3, bsim4, soi_pd/fd/dd)
+  - Physics constants duplicated in 6+ files
+  - Risk of values drifting between copies (device_stamp.rs already had a different KBOQ value)
+- Impact on future work:
+  - New device models import physics constants from one place instead of copy-pasting
+  - Consistent constant values across all models
+  - Net 127 lines removed (87 added in physics.rs, 214 removed across 14 files)
+- **Codebase pattern updates:**
+  - `crate::physics` module contains all shared physical constants and safe exponential functions
+  - `safe_exp(x)` — simple clamp at 500 (for diode/bjt/jfet/mosfet/mos6/vbic)
+  - `bsim_safe_exp(x)` — BSIM clamp at ±34 (for bsim3/bsim4/soi models; aliased as `safe_exp` via import)
+  - `soi_dexp(x)` — SOI extended range clamp at ±100, returns (value, derivative)
+---
+
 2026-03-10 US-034 HFET+MESFET implementation pass: PASS
   - HFET1 level=5 model with conditional internal nodes
   - MESFET level=1 Statz/Curtice model

@@ -107,6 +107,13 @@
       "summary": "HFET1 (level=5) and MESFET (level=1 Statz/Curtice) models implemented. Fixed model defaults to match ngspice hfetsetup.c. Fixed conditional internal node creation for HFET. Fixed series resistance ground-node stamping bug. All 3 tests pass (hfet/id_vgs, mes/subth, hfet/inverter ignored).",
       "date": "2026-03-10",
       "storyId": "US-034"
+    },
+    {
+      "iteration": 15,
+      "passType": "architecture",
+      "summary": "Extracted shared physics constants (EPSOX, EPSSI, CHARGE_Q, KBOQ, EG300) and safe exponential functions (safe_exp, bsim_safe_exp, soi_dexp) from 11 device model files into physics.rs. Net 127 lines removed.",
+      "date": "2026-03-10",
+      "storyId": null
     }
   ],
   "userStories": [
