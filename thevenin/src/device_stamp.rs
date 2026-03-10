@@ -15,8 +15,10 @@ use crate::bsim3soi_fd::{bsim3soi_fd_companion, bsim3soi_fd_limit, stamp_bsim3so
 use crate::bsim3soi_pd::{bsim3soi_pd_companion, bsim3soi_pd_limit, stamp_bsim3soi_pd};
 use crate::bsim4::{bsim4_companion, bsim4_limit, stamp_bsim4};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
+use crate::hfet::hfet_companion_full;
 use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mesa::{mesa_companion, stamp_mesa};
+use crate::mesfet::{mesfet_companion, stamp_mesfet_with_voltages};
 use crate::mna::{MnaSystem, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::vbic::stamp_vbic_with_voltages;
@@ -127,6 +129,9 @@ pub(crate) struct DeviceVoltageState {
     prev_mesa: RefCell<Vec<(f64, f64)>>,
     mesa_vcrits: Vec<f64>,
     mesa_vcritd: Vec<f64>,
+    prev_mesfet: RefCell<Vec<(f64, f64)>>,
+    mesfet_vcrits: Vec<f64>,
+    prev_hfet: RefCell<Vec<(f64, f64)>>,
 }
 
 impl DeviceVoltageState {
@@ -160,6 +165,9 @@ impl DeviceVoltageState {
             prev_mesa: RefCell::new(vec![(0.0, 0.0); mna.mesas.len()]),
             mesa_vcrits: mna.mesas.iter().map(|m| m.precomp.vcrits).collect(),
             mesa_vcritd: mna.mesas.iter().map(|m| m.precomp.vcritd).collect(),
+            prev_mesfet: RefCell::new(vec![(0.0, 0.0); mna.mesfets.len()]),
+            mesfet_vcrits: mna.mesfets.iter().map(|m| m.model.vcrit).collect(),
+            prev_hfet: RefCell::new(vec![(0.0, 0.0); mna.hfets.len()]),
         }
     }
 
@@ -264,6 +272,19 @@ impl DeviceVoltageState {
             ),
             mesa_vcrits: mna.mesas.iter().map(|m| m.precomp.vcrits).collect(),
             mesa_vcritd: mna.mesas.iter().map(|m| m.precomp.vcritd).collect(),
+            prev_mesfet: RefCell::new(
+                mna.mesfets
+                    .iter()
+                    .map(|m| m.junction_voltages(prev_solution))
+                    .collect(),
+            ),
+            mesfet_vcrits: mna.mesfets.iter().map(|m| m.model.vcrit).collect(),
+            prev_hfet: RefCell::new(
+                mna.hfets
+                    .iter()
+                    .map(|h| h.junction_voltages(prev_solution))
+                    .collect(),
+            ),
         }
     }
 
@@ -537,6 +558,52 @@ impl DeviceVoltageState {
 
                 let comp = mesa_companion(mesa, vgs, vgd, 1e-12);
                 stamp_mesa(&comp, mesa, &mut system.matrix, &mut system.rhs);
+            }
+        }
+
+        // MESFETs
+        {
+            let mut prev = self.prev_mesfet.borrow_mut();
+            for (mi, mes) in mna.mesfets.iter().enumerate() {
+                let (raw_vgs, raw_vgd) = mes.junction_voltages(solution);
+
+                let vgs = pnjlim(raw_vgs, prev[mi].0, VT_NOM, self.mesfet_vcrits[mi]);
+                let vgd = pnjlim(raw_vgd, prev[mi].1, VT_NOM, self.mesfet_vcrits[mi]);
+                let vgs = fetlim(vgs, prev[mi].0, mes.model.vt0);
+                let vgd = fetlim(vgd, prev[mi].1, mes.model.vt0);
+                prev[mi] = (vgs, vgd);
+
+                let comp = mesfet_companion(mes, vgs, vgd, 1e-12);
+                stamp_mesfet_with_voltages(
+                    &comp,
+                    mes,
+                    vgs,
+                    vgd,
+                    &mut system.matrix,
+                    &mut system.rhs,
+                );
+            }
+        }
+
+        // HFETs
+        {
+            let mut prev = self.prev_hfet.borrow_mut();
+            for (hi, hfet) in mna.hfets.iter().enumerate() {
+                let (raw_vgs, raw_vgd) = hfet.junction_voltages(solution);
+
+                let vgs = fetlim(raw_vgs, prev[hi].0, hfet.precomp.t_vto);
+                let vgd = fetlim(raw_vgd, prev[hi].1, hfet.precomp.t_vto);
+                prev[hi] = (vgs, vgd);
+
+                let comp = hfet_companion_full(hfet, vgs, vgd, 1e-12);
+                crate::hfet::stamp_hfet_with_voltages(
+                    &comp,
+                    hfet,
+                    vgs,
+                    vgd,
+                    &mut system.matrix,
+                    &mut system.rhs,
+                );
             }
         }
     }

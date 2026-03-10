@@ -126,7 +126,10 @@ fn solve_nonlinear_op_with_guess(
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
 
-    let dev_state = DeviceVoltageState::new_zero(mna);
+    let dev_state = match initial_guess {
+        Some(guess) if guess.len() == dim => DeviceVoltageState::from_solution(mna, guess),
+        _ => DeviceVoltageState::new_zero(mna),
+    };
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps.

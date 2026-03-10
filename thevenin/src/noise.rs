@@ -727,6 +727,78 @@ fn compute_total_noise(
         }
     }
 
+    // MESFET noise sources.
+    for mes in &mna.mesfets {
+        let (vgs, vgd) = mes.junction_voltages(op_solution);
+        let comp = crate::mesfet::mesfet_companion(mes, vgs, vgd, 1e-12);
+
+        let dp = mes.drain_prime_idx.or(mes.drain_idx);
+        let sp = mes.source_prime_idx.or(mes.source_idx);
+
+        // RD thermal noise: 4kT * drain_conduct
+        if mes.model.drain_conduct > 0.0 {
+            let rd_noise = 4.0 * K_BOLTZ * T_NOM * mes.model.drain_conduct;
+            total += rd_noise * adjoint_transfer_sq(adjoint, mes.drain_idx, dp);
+        }
+
+        // RS thermal noise: 4kT * source_conduct
+        if mes.model.source_conduct > 0.0 {
+            let rs_noise = 4.0 * K_BOLTZ * T_NOM * mes.model.source_conduct;
+            total += rs_noise * adjoint_transfer_sq(adjoint, mes.source_idx, sp);
+        }
+
+        // Channel noise: 4kT * gm * 2/3
+        let id_noise = 4.0 * K_BOLTZ * T_NOM * comp.gm * 2.0 / 3.0;
+        if id_noise > 0.0 {
+            total += id_noise * adjoint_transfer_sq(adjoint, dp, sp);
+        }
+
+        // Flicker noise: KF * |Id|^AF / freq
+        if mes.model.kf > 0.0 && freq > 0.0 {
+            let id = (comp.cd + comp.cgd_current).abs();
+            let flicker = mes.model.kf * id.powf(mes.model.af) / freq;
+            total += flicker * adjoint_transfer_sq(adjoint, dp, sp);
+        }
+    }
+
+    // HFET noise sources.
+    for hfet in &mna.hfets {
+        let (vgs, vgd) = hfet.junction_voltages(op_solution);
+        let comp = crate::hfet::hfet_companion_full(hfet, vgs, vgd, 1e-12);
+
+        let dp = hfet.drain_prime_idx.or(hfet.drain_idx);
+        let sp = hfet.source_prime_idx.or(hfet.source_idx);
+
+        // RD thermal noise
+        if hfet.model.drain_conduct > 0.0 {
+            let rd_noise = 4.0 * K_BOLTZ * T_NOM * hfet.model.drain_conduct;
+            total += rd_noise * adjoint_transfer_sq(adjoint, hfet.drain_idx, dp);
+        }
+
+        // RS thermal noise
+        if hfet.model.source_conduct > 0.0 {
+            let rs_noise = 4.0 * K_BOLTZ * T_NOM * hfet.model.source_conduct;
+            total += rs_noise * adjoint_transfer_sq(adjoint, hfet.source_idx, sp);
+        }
+
+        // RG thermal noise
+        if hfet.model.gate_conduct > 0.0 {
+            let rg_noise = 4.0 * K_BOLTZ * T_NOM * hfet.model.gate_conduct;
+            total += rg_noise
+                * adjoint_transfer_sq(
+                    adjoint,
+                    hfet.gate_idx,
+                    hfet.gate_prime_idx.or(hfet.gate_idx),
+                );
+        }
+
+        // Channel noise: 4kT * gm * 2/3
+        let id_noise = 4.0 * K_BOLTZ * T_NOM * comp.gm * 2.0 / 3.0;
+        if id_noise > 0.0 {
+            total += id_noise * adjoint_transfer_sq(adjoint, dp, sp);
+        }
+    }
+
     // MESA FET noise sources.
     for mesa in &mna.mesas {
         let (vgs, vgd) = mesa.junction_voltages(op_solution);

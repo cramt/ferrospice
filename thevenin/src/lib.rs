@@ -31,8 +31,10 @@ pub mod bsim3soi_pd;
 pub mod bsim4;
 pub(crate) mod device_stamp;
 pub mod diode;
+pub mod hfet;
 pub mod jfet;
 pub mod mesa;
+pub mod mesfet;
 pub mod mna;
 pub mod mos6;
 pub mod mosfet;
@@ -62,8 +64,10 @@ pub use bsim3soi_pd::{
 };
 pub use bsim4::{Bsim4Companion, Bsim4Instance, Bsim4Model, stamp_bsim4};
 pub use diode::DiodeModel;
+pub use hfet::{HfetCompanion, HfetInstance, HfetModel, HfetType};
 pub use jfet::{JfetInstance, JfetModel, JfetType, stamp_jfet};
 pub use mesa::{MesaCompanion, MesaInstance, MesaModel, stamp_mesa};
+pub use mesfet::{MesfetCompanion, MesfetInstance, MesfetModel, MesfetType};
 pub use mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
     ResistorInstance, VoltageSourceInstance, assemble_mna, stamp_conductance,

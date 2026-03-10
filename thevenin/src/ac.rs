@@ -823,6 +823,152 @@ pub fn stamp_ac_devices(
             }
         }
     }
+
+    // 5i. Stamp MESFET small-signal model at DC operating point.
+    for mes in &mna.mesfets {
+        let (vgs, vgd) = mes.junction_voltages(op_solution);
+        let comp = crate::mesfet::mesfet_companion(mes, vgs, vgd, 1e-12);
+
+        let gate = mes.gate_idx;
+        let dp = mes.drain_prime_idx.or(mes.drain_idx);
+        let sp = mes.source_prime_idx.or(mes.source_idx);
+
+        // Series resistance stamps (use stamp_conductance to handle ground nodes)
+        if mes.drain_prime_idx.is_some() {
+            let gdpr = mes.model.drain_conduct * mes.area;
+            crate::mna::stamp_conductance(&mut sys.real, mes.drain_idx, mes.drain_prime_idx, gdpr);
+        }
+        if mes.source_prime_idx.is_some() {
+            let gspr = mes.model.source_conduct * mes.area;
+            crate::mna::stamp_conductance(
+                &mut sys.real,
+                mes.source_idx,
+                mes.source_prime_idx,
+                gspr,
+            );
+        }
+
+        // Channel conductance stamps
+        if let Some(g) = gate {
+            sys.real.add(g, g, comp.ggs + comp.ggd);
+        }
+        if let Some(dpi) = dp {
+            sys.real.add(dpi, dpi, comp.gds + comp.ggd);
+        }
+        if let Some(spi) = sp {
+            sys.real.add(spi, spi, comp.gds + comp.gm + comp.ggs);
+        }
+        if let (Some(g), Some(dpi)) = (gate, dp) {
+            sys.real.add(g, dpi, -comp.ggd);
+            sys.real.add(dpi, g, comp.gm - comp.ggd);
+        }
+        if let (Some(g), Some(spi)) = (gate, sp) {
+            sys.real.add(g, spi, -comp.ggs);
+            sys.real.add(spi, g, -comp.ggs - comp.gm);
+        }
+        if let (Some(dpi), Some(spi)) = (dp, sp) {
+            sys.real.add(dpi, spi, -comp.gds - comp.gm);
+            sys.real.add(spi, dpi, -comp.gds);
+        }
+
+        // Capacitance stamps
+        let xgs = comp.capgs * omega;
+        let xgd = comp.capgd * omega;
+        if xgs != 0.0 {
+            stamp_imag_conductance(&mut sys.imag, gate, sp, xgs);
+        }
+        if xgd != 0.0 {
+            stamp_imag_conductance(&mut sys.imag, gate, dp, xgd);
+        }
+    }
+
+    // 5j. Stamp HFET small-signal model at DC operating point.
+    for hfet_inst in &mna.hfets {
+        let (vgs, vgd) = hfet_inst.junction_voltages(op_solution);
+        let comp = crate::hfet::hfet_companion_full(hfet_inst, vgs, vgd, 1e-12);
+
+        let gp = hfet_inst.gate_prime_idx.or(hfet_inst.gate_idx);
+        let dp = hfet_inst.drain_prime_idx.or(hfet_inst.drain_idx);
+        let sp = hfet_inst.source_prime_idx.or(hfet_inst.source_idx);
+
+        // Series resistance stamps (use stamp_conductance to handle ground nodes)
+        if hfet_inst.drain_prime_idx.is_some() {
+            crate::mna::stamp_conductance(
+                &mut sys.real,
+                hfet_inst.drain_idx,
+                hfet_inst.drain_prime_idx,
+                hfet_inst.model.drain_conduct,
+            );
+        }
+        if hfet_inst.source_prime_idx.is_some() {
+            crate::mna::stamp_conductance(
+                &mut sys.real,
+                hfet_inst.source_idx,
+                hfet_inst.source_prime_idx,
+                hfet_inst.model.source_conduct,
+            );
+        }
+        if hfet_inst.gate_prime_idx.is_some() {
+            crate::mna::stamp_conductance(
+                &mut sys.real,
+                hfet_inst.gate_idx,
+                hfet_inst.gate_prime_idx,
+                hfet_inst.model.gate_conduct,
+            );
+        }
+
+        // Channel conductance stamps
+        if let Some(gpi) = gp {
+            sys.real.add(gpi, gpi, comp.ggs + comp.ggd);
+        }
+        if let Some(dpi) = dp {
+            sys.real.add(dpi, dpi, comp.gds + comp.ggd);
+        }
+        if let Some(spi) = sp {
+            sys.real.add(spi, spi, comp.gds + comp.gm + comp.ggs);
+        }
+        if let (Some(gpi), Some(dpi)) = (gp, dp) {
+            sys.real.add(gpi, dpi, -comp.ggd);
+            sys.real.add(dpi, gpi, comp.gm - comp.ggd);
+        }
+        if let (Some(gpi), Some(spi)) = (gp, sp) {
+            sys.real.add(gpi, spi, -comp.ggs);
+            sys.real.add(spi, gpi, -comp.ggs - comp.gm);
+        }
+        if let (Some(dpi), Some(spi)) = (dp, sp) {
+            sys.real.add(dpi, spi, -comp.gds - comp.gm);
+            sys.real.add(spi, dpi, -comp.gds);
+        }
+
+        // Feedback resistances (ri, rf)
+        if let (Some(dpi), Some(dppi)) = (hfet_inst.drain_prime_idx, hfet_inst.drain_prm_prm_idx) {
+            let g = hfet_inst.model.gf;
+            sys.real.add(dpi, dpi, g);
+            sys.real.add(dppi, dppi, g);
+            sys.real.add(dpi, dppi, -g);
+            sys.real.add(dppi, dpi, -g);
+        }
+        if let (Some(spi), Some(sppi)) = (hfet_inst.source_prime_idx, hfet_inst.source_prm_prm_idx)
+        {
+            let g = hfet_inst.model.gi;
+            sys.real.add(spi, spi, g);
+            sys.real.add(sppi, sppi, g);
+            sys.real.add(spi, sppi, -g);
+            sys.real.add(sppi, spi, -g);
+        }
+
+        // Capacitance stamps
+        let spp = hfet_inst.source_prm_prm_idx.or(sp);
+        let dpp = hfet_inst.drain_prm_prm_idx.or(dp);
+        let xgs = comp.capgs * omega;
+        let xgd = comp.capgd * omega;
+        if xgs != 0.0 {
+            stamp_imag_conductance(&mut sys.imag, gp, spp, xgs);
+        }
+        if xgd != 0.0 {
+            stamp_imag_conductance(&mut sys.imag, gp, dpp, xgd);
+        }
+    }
 }
 
 /// Apply AC source excitation to the complex RHS.

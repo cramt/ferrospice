@@ -253,6 +253,10 @@ pub struct MnaSystem {
     pub jfets: Vec<JfetInstance>,
     /// Resolved MESA FET instances for NR iteration.
     pub mesas: Vec<crate::mesa::MesaInstance>,
+    /// Resolved MESFET (MES) instances for NR iteration.
+    pub mesfets: Vec<crate::mesfet::MesfetInstance>,
+    /// Resolved HFET instances for NR iteration.
+    pub hfets: Vec<crate::hfet::HfetInstance>,
     /// Resolved BSIM3 MOSFET instances for NR iteration.
     pub bsim3s: Vec<Bsim3Instance>,
     /// Resolved BSIM3SOI-DD MOSFET instances for NR iteration.
@@ -307,6 +311,8 @@ impl MnaSystem {
             || !self.bsim4s.is_empty()
             || !self.vbics.is_empty()
             || !self.mesas.is_empty()
+            || !self.mesfets.is_empty()
+            || !self.hfets.is_empty()
     }
 
     /// Total number of nodes including internal nodes created by nonlinear
@@ -410,6 +416,16 @@ impl MnaSystem {
                 .sum::<usize>()
             + self
                 .mesas
+                .iter()
+                .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .mesfets
+                .iter()
+                .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .hfets
                 .iter()
                 .map(|m| m.model.internal_node_count())
                 .sum::<usize>()
@@ -740,12 +756,27 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 node_map.index(g);
                 node_map.index(s);
                 let _ = params;
-                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    crate::mesa::MesaModel::from_model_def(mdef)
-                } else {
-                    crate::mesa::MesaModel::new()
-                };
-                internal_node_count += mm.internal_node_count();
+                let mdef_opt = models.get(&model.to_uppercase());
+                let model_kind = mdef_opt.map(|m| m.kind.to_uppercase());
+                let level = get_mosfet_level(mdef_opt, params);
+                match model_kind.as_deref() {
+                    Some("NMF" | "PMF") if level == 1 => {
+                        let mm = crate::mesfet::MesfetModel::from_model_def(mdef_opt.unwrap());
+                        internal_node_count += mm.internal_node_count();
+                    }
+                    Some("NHFET" | "PHFET") => {
+                        let mm = crate::hfet::HfetModel::from_model_def(mdef_opt.unwrap());
+                        internal_node_count += mm.internal_node_count();
+                    }
+                    _ => {
+                        let mm = if let Some(mdef) = mdef_opt {
+                            crate::mesa::MesaModel::from_model_def(mdef)
+                        } else {
+                            crate::mesa::MesaModel::new()
+                        };
+                        internal_node_count += mm.internal_node_count();
+                    }
+                }
             }
             ElementKind::Vcvs {
                 out_pos,
@@ -806,6 +837,8 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut mos6s = Vec::new();
     let mut jfets = Vec::new();
     let mut mesas = Vec::new();
+    let mut mesfets = Vec::new();
+    let mut hfets = Vec::new();
     let mut bsim3s = Vec::new();
     let mut bsim3soi_dds = Vec::new();
     let mut bsim3soi_pds = Vec::new();
@@ -1495,86 +1528,202 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 model,
                 params,
             } => {
-                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
-                    crate::mesa::MesaModel::from_model_def(mdef)
-                } else {
-                    crate::mesa::MesaModel::new()
-                };
-
                 let drain_idx = node_map.get(d);
                 let gate_idx = node_map.get(g);
                 let source_idx = node_map.get(s);
 
-                // Extract L, W from instance params
-                let mut w = 20e-6;
-                let mut l = 1e-6;
-                for p in params {
-                    if let Expr::Num(v) = &p.value {
-                        match p.name.to_uppercase().as_str() {
-                            "W" => w = *v,
-                            "L" => l = *v,
-                            _ => {}
+                let mdef_opt = models.get(&model.to_uppercase());
+                let model_kind = mdef_opt.map(|m| m.kind.to_uppercase());
+                let level = get_mosfet_level(mdef_opt, params);
+                match model_kind.as_deref() {
+                    Some("NMF" | "PMF") if level == 1 => {
+                        let mm = crate::mesfet::MesfetModel::from_model_def(mdef_opt.unwrap());
+
+                        // Extract AREA and M from instance params
+                        let mut area = 1.0;
+                        let mut m_mult = 1.0;
+                        for p in params {
+                            if let Expr::Num(v) = &p.value {
+                                match p.name.to_uppercase().as_str() {
+                                    "AREA" => area = *v,
+                                    "M" => m_mult = *v,
+                                    _ => {}
+                                }
+                            }
                         }
+
+                        let drain_prime_idx = if mm.rd > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_idx
+                        };
+                        let source_prime_idx = if mm.rs > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_idx
+                        };
+
+                        mesfets.push(crate::mesfet::MesfetInstance {
+                            name: element.name.clone(),
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            model: mm,
+                            area,
+                            m: m_mult,
+                        });
+                    }
+                    Some("NHFET" | "PHFET") => {
+                        let mm = crate::hfet::HfetModel::from_model_def(mdef_opt.unwrap());
+
+                        let mut w = 10e-6;
+                        let mut l = 1e-6;
+                        for p in params {
+                            if let Expr::Num(v) = &p.value {
+                                match p.name.to_uppercase().as_str() {
+                                    "W" => w = *v,
+                                    "L" => l = *v,
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        let drain_prime_idx = if mm.rd != 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_idx
+                        };
+                        let source_prime_idx = if mm.rs != 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_idx
+                        };
+                        let gate_prime_idx = if mm.rg > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            gate_idx
+                        };
+                        let drain_prm_prm_idx = if mm.rf > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_prime_idx
+                        };
+                        let source_prm_prm_idx = if mm.ri > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_prime_idx
+                        };
+
+                        let pre = crate::hfet::HfetPrecomp::compute(&mm, 300.15, 300.15, w, l);
+
+                        hfets.push(crate::hfet::HfetInstance {
+                            name: element.name.clone(),
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            gate_prime_idx,
+                            drain_prime_idx,
+                            source_prime_idx,
+                            drain_prm_prm_idx,
+                            source_prm_prm_idx,
+                            model: mm,
+                            precomp: pre,
+                            w,
+                            l,
+                        });
+                    }
+                    _ => {
+                        let mm = if let Some(mdef) = mdef_opt {
+                            crate::mesa::MesaModel::from_model_def(mdef)
+                        } else {
+                            crate::mesa::MesaModel::new()
+                        };
+
+                        let mut w = 20e-6;
+                        let mut l = 1e-6;
+                        for p in params {
+                            if let Expr::Num(v) = &p.value {
+                                match p.name.to_uppercase().as_str() {
+                                    "W" => w = *v,
+                                    "L" => l = *v,
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        let drain_prime_idx = if mm.rd > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_idx
+                        };
+                        let source_prime_idx = if mm.rs > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_idx
+                        };
+                        let gate_prime_idx = if mm.rg > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            gate_idx
+                        };
+                        let source_prm_prm_idx = if mm.ri > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            source_prime_idx
+                        };
+                        let drain_prm_prm_idx = if mm.rf > 0.0 {
+                            let idx = internal_idx;
+                            internal_idx += 1;
+                            Some(idx)
+                        } else {
+                            drain_prime_idx
+                        };
+
+                        let pre =
+                            crate::mesa::MesaPrecomp::compute(&mm, 300.15, 300.15, 300.15, w, l);
+
+                        mesas.push(crate::mesa::MesaInstance {
+                            name: element.name.clone(),
+                            model: mm,
+                            precomp: pre,
+                            w,
+                            l,
+                            drain_idx,
+                            gate_idx,
+                            source_idx,
+                            drain_prime_idx,
+                            gate_prime_idx,
+                            source_prime_idx,
+                            source_prm_prm_idx,
+                            drain_prm_prm_idx,
+                        });
                     }
                 }
-
-                // Internal nodes for series resistances
-                let drain_prime_idx = if mm.rd > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    drain_idx
-                };
-                let source_prime_idx = if mm.rs > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    source_idx
-                };
-                let gate_prime_idx = if mm.rg > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    gate_idx
-                };
-                // Source'' node (for Ri feedback resistance)
-                let source_prm_prm_idx = if mm.ri > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    source_prime_idx
-                };
-                // Drain'' node (for Rf feedback resistance)
-                let drain_prm_prm_idx = if mm.rf > 0.0 {
-                    let idx = internal_idx;
-                    internal_idx += 1;
-                    Some(idx)
-                } else {
-                    drain_prime_idx
-                };
-
-                let pre = crate::mesa::MesaPrecomp::compute(&mm, 300.15, 300.15, 300.15, w, l);
-
-                mesas.push(crate::mesa::MesaInstance {
-                    name: element.name.clone(),
-                    model: mm,
-                    precomp: pre,
-                    w,
-                    l,
-                    drain_idx,
-                    gate_idx,
-                    source_idx,
-                    drain_prime_idx,
-                    gate_prime_idx,
-                    source_prime_idx,
-                    source_prm_prm_idx,
-                    drain_prm_prm_idx,
-                });
-                // MESA stamps are applied during NR iteration, not here.
+                // Z-element stamps are applied during NR iteration, not here.
             }
             ElementKind::Capacitor {
                 pos,
@@ -1786,6 +1935,8 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         mos6s,
         jfets,
         mesas,
+        mesfets,
+        hfets,
         capacitors,
         inductors,
         voltage_sources,
