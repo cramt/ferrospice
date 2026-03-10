@@ -375,3 +375,32 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - transient: RC pulse response with τ = 10ms
 - **Tests:** All existing tests pass, clippy clean, fmt clean
 ---
+
+## 2026-03-10 - Architecture Pass
+- What was refactored:
+  - Extracted shared NR device stamping loop from simulate.rs and transient.rs into `device_stamp.rs`
+  - Created `DeviceVoltageState` struct that bundles all per-device-type previous voltage RefCells
+  - `new_zero()` constructor for DC OP (all zeros), `from_solution()` for transient (previous solution)
+  - `stamp_devices()` method encapsulates all 10 device type stamping loops (diode, BJT, MOSFET, JFET, BSIM3, BSIM3SOI-PD/FD/DD, BSIM4, VBIC)
+  - Moved `fetlim` and BSIM-simplified `pnjlim` (now `bsim_pnjlim`) from bsim3.rs/bsim4.rs into device_stamp.rs
+  - Moved `stamp_current_source` from simulate.rs and transient.rs into device_stamp.rs
+  - bsim3.rs re-exports `fetlim` as `pub(crate)` for SOI models that reference `crate::bsim3::fetlim`
+- Why:
+  - ~250 lines of identical NR device stamping were duplicated between simulate.rs and transient.rs
+  - `fetlim` was duplicated identically in bsim3.rs and bsim4.rs (~35 lines)
+  - `pnjlim` (BSIM simplified 2-arg version) was duplicated in bsim3.rs and bsim4.rs (~18 lines)
+  - `stamp_current_source` was duplicated in simulate.rs and transient.rs
+  - Adding a new device model required updating both simulate.rs and transient.rs with identical code
+- Impact on future work:
+  - New device models (MESA, MOS6, HFET, etc.) only need to add their stamping loop in ONE place (device_stamp.rs)
+  - simulate.rs reduced from 1536 to 1232 lines (-304)
+  - transient.rs reduced from 1532 to 1157 lines (-375)
+  - bsim3.rs reduced by 57 lines, bsim4.rs reduced by 55 lines
+  - Net ~323 lines removed across 6 files (501 added in device_stamp.rs, 807 removed elsewhere)
+- **Codebase pattern updates:**
+  - `DeviceVoltageState` struct in device_stamp.rs bundles all NR voltage limiting state
+  - `DeviceVoltageState::stamp_devices()` is the single place for NR nonlinear device stamping
+  - `fetlim()` and `bsim_pnjlim()` live in device_stamp.rs — shared across BSIM3/BSIM4/SOI
+  - `stamp_current_source()` lives in device_stamp.rs — shared across simulate.rs and transient.rs
+  - When adding a new device type: add RefCell + vcrits to DeviceVoltageState, add stamping to stamp_devices(), update constructors
+---

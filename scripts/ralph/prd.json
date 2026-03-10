@@ -72,6 +72,13 @@
       "summary": "Created examples/ directory with 4 runnable examples (dc_operating_point, dc_sweep, ac_analysis, transient) using only the public API. Added ferrospice-core as root crate dependency.",
       "date": "2026-03-09",
       "storyId": "US-045"
+    },
+    {
+      "iteration": 11,
+      "passType": "architecture",
+      "summary": "Extracted shared NR device stamping into DeviceVoltageState in device_stamp.rs, consolidated fetlim/bsim_pnjlim/stamp_current_source. Net ~323 lines removed across 6 files.",
+      "date": "2026-03-10",
+      "storyId": null
     }
   ],
   "userStories": [
