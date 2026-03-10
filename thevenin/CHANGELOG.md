@@ -18,4 +18,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - format resistance and transient tests
 - copy ngspice test fixtures into repo so CI doesn't need ngspice-upstream
 - add release-plz and CI workflows, add crates.io metadata
-- rename ferrospice-core to thevenin and ferrospice-netlist to thevenin-types
+- rename crates: core crate is now `thevenin`, parser crate is now `thevenin-types`

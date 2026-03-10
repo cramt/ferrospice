@@ -1,5 +1,5 @@
 {
-  description = "Ferrospice - ngspice rewrite in Rust";
+  description = "Thevenin - ngspice rewrite in Rust";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -41,7 +41,7 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonCraneArgs;
 
-        ferrospice = craneLib.buildPackage (commonCraneArgs
+        thevenin = craneLib.buildPackage (commonCraneArgs
           // {
             inherit cargoArtifacts;
             doCheck = true;
@@ -49,8 +49,8 @@
 
         ci-build = pkgs.writeShellScriptBin "ci-build" ''
           set -euo pipefail
-          echo "=== Building ferrospice ==="
-          ${pkgs.nix}/bin/nix build .#ferrospice --print-build-logs
+          echo "=== Building thevenin ==="
+          ${pkgs.nix}/bin/nix build .#thevenin --print-build-logs
           echo ""
           echo "=== Build complete ==="
         '';
@@ -78,12 +78,12 @@
         '';
       in {
         packages = {
-          default = ferrospice;
-          inherit ferrospice ci-build update-deps test-wasm;
+          default = thevenin;
+          inherit thevenin ci-build update-deps test-wasm;
         };
 
         apps.default = flake-utils.lib.mkApp {
-          drv = ferrospice;
+          drv = thevenin;
         };
 
         apps.ci-build = flake-utils.lib.mkApp {
@@ -115,7 +115,7 @@
           shellHook = ''
             export RUST_BACKTRACE=1
             export RUST_LOG=info
-            echo "=== Ferrospice dev environment ==="
+            echo "=== Thevenin dev environment ==="
             echo "  rustc: $(rustc --version)"
             echo ""
             echo "  Build:   cargo build"

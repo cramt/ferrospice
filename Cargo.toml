@@ -13,10 +13,10 @@ faer = {version = "0.24", default-features = false, features = ["npy", "rand", "
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
 
 [package]
-name = "ferrospice"
+name = "thevenin-cli"
 version = "0.1.0"
 edition = "2024"
-description = "A Rust rewrite of ngspice - open-source mixed-level/mixed-signal electronic circuit simulator"
+description = "CLI for thevenin - a Rust rewrite of ngspice circuit simulator"
 license = "BSD-3-Clause"
 repository = "https://github.com/cramt/thevenin"
 publish = false

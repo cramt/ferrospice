@@ -3,7 +3,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
-- AC analysis: `simulate_ac(&Netlist) -> Result<SimResult>` in ferrospice-core::ac
+- AC analysis: `simulate_ac(&Netlist) -> Result<SimResult>` in thevenin::ac
 - AC uses `ComplexLinearSystem` (separate real/imag sparse matrices) solved via faer `c64` LU decomposition
 - AC sweep modes: DEC (n pts/decade, log spacing), OCT (n pts/octave), LIN (n total points, linear)
 - AC source excitation: `AcSpec { mag, phase }` on voltage/current sources → complex RHS in branch/node equations
@@ -19,13 +19,13 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - LTE tolerance: `TRTOL * max(vol_tol, chg_tol)` where TRTOL=7.0 (matching ngspice CKTtrtol)
 - Timestep adjustment: reject if new_h < 0.9×step_h, accept and grow up to 2× otherwise
 - step_h vs h: step_h is the actual step size used this iteration, h is the suggested next step from LTE
-- Waveform evaluation: `waveform::evaluate(&Waveform, t, &TranParams) -> f64` in ferrospice-core::waveform
+- Waveform evaluation: `waveform::evaluate(&Waveform, t, &TranParams) -> f64` in thevenin::waveform
 - `TranParams { tstep, tstop }` provides defaults for waveform parameters (rise/fall times, SIN freq, etc.)
 - `VoltageSourceInstance` and `CurrentSourceInstance` in MnaSystem track branch_idx/node indices + waveform
 - In transient, after copying base stamps, waveform values override source RHS entries at each timestep
 - PULSE defaults: td=0, tr=tstep, tf=tstep, pw=0, per=tr+pw+tf; repeats via time modulo period
 - SIN phase parameter is in degrees (converted to radians internally), damping via exp(-theta*(t-td))
-- Transient: `simulate_tran(&Netlist) -> Result<SimResult>` in ferrospice-core::transient
+- Transient: `simulate_tran(&Netlist) -> Result<SimResult>` in thevenin::transient
 - Transient uses BE for first timestep, then switches to Trapezoidal (matching ngspice)
 - Capacitor companion model: BE → geq=C/h, ieq=-C/h*v_prev; Trap → geq=2C/h, ieq=-(2C/h*v_prev + i_prev)
 - Inductor companion model: BE → req=L/h, veq=-L/h*i_prev; Trap → req=2L/h, veq=-(2L/h*i_prev + v_prev)
@@ -33,20 +33,20 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - `CapacitorInstance` and `InductorInstance` in MnaSystem hold resolved values and IC params
 - IC= param on C/L elements overrides DC OP initial voltage/current for transient
 - Transient output: "time" vector + node voltages + branch currents, plot name "tran1"
-- DC sweep: `simulate_dc(&Netlist) -> Result<SimResult>` in ferrospice-core::simulate
+- DC sweep: `simulate_dc(&Netlist) -> Result<SimResult>` in thevenin::simulate
 - DC sweep reuses assembled MNA matrix, only modifies RHS entries per sweep point
 - Voltage source sweep: set `system.rhs[num_nodes + vsource_idx] = sweep_value`
 - Current source sweep: undo old stamp, apply new value at node RHS entries
 - DC sweep result has sweep variable as first vector (e.g., "v1"), then node voltages and branch currents
 - Double sweep: outer loop is src2, inner loop is src1
 - `NodeMap::len()` and `NodeMap::is_empty()` are now public
-- BSIM3 model: `Bsim3Model`, `Bsim3Instance`, `Bsim3Companion`, `Bsim3SizeParam` in ferrospice-core::bsim3
+- BSIM3 model: `Bsim3Model`, `Bsim3Instance`, `Bsim3Companion`, `Bsim3SizeParam` in thevenin::bsim3
 - BSIM3 size-dependent params: `param = base + l_param*Inv_L + w_param*Inv_W + p_param*Inv_LW` via `size_dep_param(w, l, temp)`
 - BSIM3 MOSFET level detection: `get_mosfet_level()` in mna.rs checks instance then model params (LEVEL=8 or 49)
 - BSIM3 integration: MNA assembly creates `Bsim3Instance`, NR solver calls `bsim3_companion()` + `stamp_bsim3()`
 - BSIM3 AC: intrinsic caps (cggb/cgdb/cgsb/cbgb/cbdb/cbsb/cdgb/cddb/cdsb) are direct Y-matrix entries, NOT conductances between nodes
 - BSIM3 noise: channel thermal (8/3)*4kT*|gm|, series R thermal, flicker noise NOIA*|Id|^EF/(f*Cox*Leff²)
-- Integration tests go in `ferrospice-core/tests/` — use `CARGO_MANIFEST_DIR` to locate ngspice test files
+- Integration tests go in `thevenin/tests/` — use `CARGO_MANIFEST_DIR` to locate ngspice test files
 - ngspice check.sh filters: SPARSE|KLU|CPU|Dynamic|Note|Circuit|Doing|---|Data|Index|trans|acan|etc.
 - ngspice .out data rows are tab-separated, start with integer index, use scientific notation
 - `simulate_op` works on any netlist regardless of what analysis commands are present (ignores .tran/.ac)
@@ -54,11 +54,11 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Import `faer::prelude::Solve` trait to use `.solve()` on LU decomposition
 - `SparseMatrix` uses triplet (COO) form with duplicate summing — standard for MNA stamp accumulation
 - `LinearSystem` wraps `SparseMatrix` + RHS vector and provides `.solve()` -> `Result<Vec<f64>>`
-- ferrospice-netlist already parses: R, C, L, V, I, D, Q, M, J, K, E, F, G, H, B, X elements
-- ferrospice-netlist already parses: .op, .dc, .tran, .ac, .noise, .tf, .sens analyses
+- thevenin-types already parses: R, C, L, V, I, D, Q, M, J, K, E, F, G, H, B, X elements
+- thevenin-types already parses: .op, .dc, .tran, .ac, .noise, .tf, .sens analyses
 - Workspace deps: `thiserror` (workspace), `facet` (workspace), `approx` (dev)
-- MNA assembly: `assemble_mna(&Netlist) -> Result<MnaSystem>` in ferrospice-core::mna
-- DC OP solver: `simulate_op(&Netlist) -> Result<SimResult, MnaError>` in ferrospice-core::simulate
+- MNA assembly: `assemble_mna(&Netlist) -> Result<MnaSystem>` in thevenin::mna
+- DC OP solver: `simulate_op(&Netlist) -> Result<SimResult, MnaError>` in thevenin::simulate
 - SimResult vectors: node voltages as `v(node_name)`, branch currents as `vsource_name#branch` (lowercase)
 - Node "0" is ground and excluded from the MNA matrix (NodeMap returns None for it)
 - MNA matrix size = num_non_ground_nodes + num_voltage_sources
@@ -68,13 +68,13 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Inductor in DC is modeled as a 0V voltage source (branch equation), added to `vsource_names`
 - Capacitor in DC has no MNA contribution — just register nodes, skip stamping
 - `simulate_op` automatically includes inductor branch currents since they share `vsource_names`
-- NR solver: `newton_raphson_solve(options, dim, num_nodes, load_system, initial_guess)` in ferrospice-core::newton
+- NR solver: `newton_raphson_solve(options, dim, num_nodes, load_system, initial_guess)` in thevenin::newton
 - `load_system` callback signature: `Fn(&[f64], &mut LinearSystem, f64)` — (solution, system, source_factor)
 - NR convergence: voltages use `reltol * max(|old|,|new|) + vntol`, currents use `abstol` instead of `vntol`
 - NR fallback chain: direct NR → Gmin stepping (1e-2 down to 1e-12) → source stepping (0.0 to 1.0)
 - Diode companion model: g_d = IS/Vt * exp(V/Vt), i_eq = I(V) - g_d * V; stamp g_d as conductance, i_eq as current source
 - `NrOptions::default()` matches ngspice: ABSTOL=1e-12, RELTOL=1e-3, VNTOL=1e-6, ITL1=100, ITL2=50, GMIN=1e-12
-- Diode model: `DiodeModel` in ferrospice-core::diode — IS, N, RS, BV, IBV, CJO, VJ, M, TT params
+- Diode model: `DiodeModel` in thevenin::diode — IS, N, RS, BV, IBV, CJO, VJ, M, TT params
 - Diode companion: `(g_eq, i_eq) = model.companion(v_jct)` — stamp g_eq as conductance, i_eq as current source
 - `DiodeModel::from_model_def(&ModelDef)` parses .model params; `.with_instance_params(&[Param])` applies overrides
 - `DiodeInstance` in MNA: tracks anode_idx, cathode_idx, internal_idx (for RS>0), and resolved DiodeModel
@@ -85,7 +85,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - `solve_nonlinear_op(mna)` builds NR load closure that replays base stamps + diode companions
 - Voltage limiting: `pnjlim(v_new, v_old, vt, vcrit)` prevents NR divergence from exp() overflow
 - `collect_solution_into` and `simulate_dc` also detect diodes and use NR for each sweep point
-- MOSFET Level 1: `MosfetModel` + `MosfetInstance` + `MosfetCompanion` + `stamp_mosfet()` in ferrospice-core::mosfet
+- MOSFET Level 1: `MosfetModel` + `MosfetInstance` + `MosfetCompanion` + `stamp_mosfet()` in thevenin::mosfet
 - MOSFET follows BJT pattern: companion() computes linearized model, stamp_mosfet() applies to MNA
 - MOSFET source-drain symmetry: mode=+1 (normal) or -1 (reversed when VDS<0)
 - MOSFET body effect: Vth = VTO + GAMMA*(sqrt(PHI-VBS)-sqrt(PHI)), gmbs = gm * 0.5*GAMMA/sqrt(PHI-VBS)
@@ -93,7 +93,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - MOSFET AC: gds/gm/gmbs real conductances + gate overlap caps (CGSO*W, CGDO*W, CGBO*L) + junction caps (CBD, CBS)
 - MOSFET internal nodes: RD>0 creates internal drain, RS>0 creates internal source (like BJT series resistances)
 - `has_nonlinear` checks: `!mna.diodes.is_empty() || !mna.bjts.is_empty() || !mna.mosfets.is_empty()`
-- Subcircuit expansion: `flatten_netlist(&Netlist) -> Result<Netlist, SubcktError>` in ferrospice-core::subckt
+- Subcircuit expansion: `flatten_netlist(&Netlist) -> Result<Netlist, SubcktError>` in thevenin::subckt
 - Controlled sources: VCVS (E), VCCS (G), CCCS (F), CCVS (H) all stamped as linear elements in base MNA matrix
 - VCVS/CCVS add branch equations (like voltage sources); VCCS/CCCS stamp directly into admittance matrix
 - F and H elements reference controlling voltage source by name → vsource_offset_map built during first pass
@@ -104,7 +104,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - Expanded internal nodes: `instance_prefix.node_name` (e.g., "x1.mid"); ground "0" never remapped
 - `.global` nodes pass through subcircuit expansion unchanged (never prefixed)
 - Model defs inside subcircuits are hoisted to top level without name changes
-- Noise analysis: `simulate_noise(&Netlist) -> Result<SimResult>` in ferrospice-core::noise
+- Noise analysis: `simulate_noise(&Netlist) -> Result<SimResult>` in thevenin::noise
 - Noise uses adjoint (transposed) AC MNA solve: inject unit current at output, measure response at noise sources
 - Noise contribution formula: noise_density * |V_adj(n1) - V_adj(n2)|² (NevalSrc convention)
 - `ComplexLinearSystem::solve_transpose()` solves adjoint (transposed) complex system
@@ -116,18 +116,18 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - `BsimAcStamp` struct + `stamp_bsim_ac()` in ac.rs — unified BSIM3/BSIM4 AC small-signal stamping
 - `expr_val()` and `expr_val_or()` live in lib.rs as `pub(crate)` — shared across simulate.rs, transient.rs, ac.rs, noise.rs
 - BSIM3/BSIM4 instances have `ac_stamp(&self, companion) -> BsimAcStamp` method for data-oriented AC extraction
-- BSIM3SOI-PD model: `Bsim3SoiPdModel`, `Bsim3SoiPdInstance`, `Bsim3SoiPdCompanion` in ferrospice-core::bsim3soi_pd
+- BSIM3SOI-PD model: `Bsim3SoiPdModel`, `Bsim3SoiPdInstance`, `Bsim3SoiPdCompanion` in thevenin::bsim3soi_pd
 - BSIM3SOI-PD uses 4-tuple voltages (vgs, vds, vbs, ves) instead of 3-tuple — ves is back-gate voltage
 - SOI MOSFET parser: `body: Option<String>` field on Mosfet variant, heuristic detects 4 vs 5 terminals
 - SOI internal body node: always created, body potential from junction KCL (Ibs+Ibd+Iii+Igidl=0)
 - SOI junction model: 4 components — diffusion (Ibs1/Ibd1), recombination (Ibs2/Ibd2), BJT (Ibs3/Ibd3), tunneling (Ibs4/Ibd4)
 - BSIM3SOI-PD level=57 routing in mna.rs, uses `internal_node_count(nrd, nrs)` method
-- BSIM3SOI-FD model: `Bsim3SoiFdModel`, `Bsim3SoiFdInstance`, `Bsim3SoiFdCompanion` in ferrospice-core::bsim3soi_fd
+- BSIM3SOI-FD model: `Bsim3SoiFdModel`, `Bsim3SoiFdInstance`, `Bsim3SoiFdCompanion` in thevenin::bsim3soi_fd
 - BSIM3SOI-FD level=55: FD body is self-consistent (computed, not free) — needs body feedback conductance in stamp
 - FD body feedback: 1S conductance + current source drives body node to FD-computed Vbs (prevents floating node divergence)
-- BSIM3SOI-DD model: `Bsim3SoiDdModel`, `Bsim3SoiDdInstance`, `Bsim3SoiDdCompanion` in ferrospice-core::bsim3soi_dd
+- BSIM3SOI-DD model: `Bsim3SoiDdModel`, `Bsim3SoiDdInstance`, `Bsim3SoiDdCompanion` in thevenin::bsim3soi_dd
 - BSIM3SOI-DD level=56: hybrid of FD (body bias chain) + PD (4-component junction currents)
-- VBIC model (LEVEL=4 BJT): `VbicModel`, `VbicInstance`, `VbicCompanion` in ferrospice-core::vbic
+- VBIC model (LEVEL=4 BJT): `VbicModel`, `VbicInstance`, `VbicCompanion` in thevenin::vbic
 - VBIC routing: get_bjt_level() in mna.rs checks LEVEL param; LEVEL=4 → VbicModel, default → BjtModel
 - VBIC has 7 internal nodes (3 always: collCI, baseBI, baseBP; 4 conditional: collCX, baseBX, emitEI, subsSI)
 - VBIC stamp uses stamp_vbic_with_voltages() with full Norton companion (multi-control branches need separate VCCS stamps)
@@ -135,7 +135,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - DD junction currents: PD-style 4-component (diffusion, recombination, BJT, tunneling) + GIDL
 - DD impact ionization: FD-style AII/BII/CII/DII + ALPHA0/ALPHA1/BETA0 (not PD's VDSATII0/ESATII)
 - DD-specific params: DVBD0, DVBD1, VBSA, KB1, KB3, DELP, ABP, MXC, ADICE0, KBJT1, EDL
-- PZ analysis: `simulate_pz(&Netlist) -> Result<SimResult>` in ferrospice-core::pz
+- PZ analysis: `simulate_pz(&Netlist) -> Result<SimResult>` in thevenin::pz
 - PZ uses eigenvalue decomposition: poles from det(G+sC)=0, zeros from cofactor determinant
 - PZ eigenvalues: G^{-1}*C eigenvalues → poles = -1/λ for non-zero λ; fallback to GEV when G singular
 - PZ conjugate dedup: only remove conjugate pairs (opposite imaginary sign), preserve repeated real roots
@@ -156,7 +156,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - `#[expect(clippy::too_many_arguments)]` needed for functions exceeding the limit
 - Edition 2024 supports `if let` chains (collapsed nested if + if let)
 - Rust 1.94 edition 2024 is in use
-- SimResult/SimPlot/SimVector types live in ferrospice-netlist, not ferrospice-core
+- SimResult/SimPlot/SimVector types live in thevenin-types, not thevenin
 - Integration tests use `include_str!()` to embed .cir/.out files at compile time
 - faer supports `c64` type natively — `Mat::<c64>::zeros()` and `FullPivLu` work with complex matrices
 - `faer::Scale` is a tuple struct (capital S), not `faer::scale`
@@ -170,7 +170,7 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 
 ## 2026-03-08 - US-021
 - Implemented BSIM3v3.2.4 MOSFET model (ngspice level 8/49)
-- Files created: ferrospice-core/src/bsim3.rs (~1800 lines), ferrospice-core/tests/bsim3.rs
+- Files created: thevenin/src/bsim3.rs (~1800 lines), thevenin/tests/bsim3.rs
 - Files modified: lib.rs, mna.rs, simulate.rs, ac.rs, noise.rs, transient.rs
 - **What was implemented:**
   - `Bsim3Model` struct with ~380 parameters including L/W/P size-dependent binning variants
@@ -195,24 +195,24 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - BSIM4 follows same integration pattern as BSIM3: level=14 routing in mna.rs, companion+stamp in simulate/ac/noise/transient
   - BSIM4 uses BTreeMap for L/W/P binning params instead of ~400 individual struct fields
   - BSIM4 `size_dep_param()` takes an extra `nf` (number of fingers) parameter compared to BSIM3
-  - `ferrospice_netlist::Netlist::parse()` is the correct way to parse netlists in tests (not `ferrospice_netlist::parse()`)
+  - `thevenin_types::Netlist::parse()` is the correct way to parse netlists in tests (not `thevenin_types::parse()`)
 - BSIM3 capMod dispatch: capMod 0/1 use simple linear overlap caps, capMod 2/3 use smooth overlap (DELTA_1/ckappa)
 - BSIM3 charge partition helper: `charge_partition(xpart, cox_wl, vgsteff, t0, t1)` shared across capMod 0/1/2
 - qaSpec BSIM3 tests are NOT .cir/.out format — need manual conversion to SPICE netlists
 - AC analysis vectors: `v.complex` (not `v.real`) contains the frequency response data
-- Full qaSpec BSIM3 NMOS model params: see `BSIM3_NMOS_PARAMS` const in ferrospice-core/tests/bsim3.rs
+- Full qaSpec BSIM3 NMOS model params: see `BSIM3_NMOS_PARAMS` const in thevenin/tests/bsim3.rs
 ---
 
 ## 2026-03-08 - US-022
 - Implemented BSIM4 MOSFET model (level=14) in ~2400 lines of Rust
 - Files changed:
-  - ferrospice-core/src/bsim4.rs (new: complete BSIM4 device model)
-  - ferrospice-core/src/lib.rs (added bsim4 module and exports)
-  - ferrospice-core/src/mna.rs (level 14 routing, Bsim4Instance creation)
-  - ferrospice-core/src/simulate.rs (NR iteration with BSIM4)
-  - ferrospice-core/src/ac.rs (small-signal AC stamps)
-  - ferrospice-core/src/noise.rs (noise sources and AC stamps)
-  - ferrospice-core/src/transient.rs (transient NR iteration)
+  - thevenin/src/bsim4.rs (new: complete BSIM4 device model)
+  - thevenin/src/lib.rs (added bsim4 module and exports)
+  - thevenin/src/mna.rs (level 14 routing, Bsim4Instance creation)
+  - thevenin/src/simulate.rs (NR iteration with BSIM4)
+  - thevenin/src/ac.rs (small-signal AC stamps)
+  - thevenin/src/noise.rs (noise sources and AC stamps)
+  - thevenin/src/transient.rs (transient NR iteration)
   - .gitignore (minor cleanup)
   - src/main.rs (removed duplicate import)
 - **Learnings for future iterations:**
@@ -226,8 +226,8 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 - Implemented capMod 0/1/2 charge models for BSIM3 (previously only capMod=3)
 - Ported ngspice qaSpec BSIM3 tests as 11 integration tests
 - Files changed:
-  - ferrospice-core/src/bsim3.rs (refactored bsim3_total_charges to dispatch by cap_mod, added charge_partition, compute_vfbeff, compute_qac0_qsub0 helpers)
-  - ferrospice-core/tests/bsim3.rs (rewrote with full qaSpec model parameters, 11 tests)
+  - thevenin/src/bsim3.rs (refactored bsim3_total_charges to dispatch by cap_mod, added charge_partition, compute_vfbeff, compute_qac0_qsub0 helpers)
+  - thevenin/tests/bsim3.rs (rewrote with full qaSpec model parameters, 11 tests)
 - **What was implemented:**
   - capMod=0: Simple charge model (no Qac0/Qsub0, no centroid)
   - capMod=1: k1ox sqrt model for bulk charge + VdsatCV charge partition
@@ -258,8 +258,8 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 ## 2026-03-09 - US-025 (implementation)
 - Completed BSIM4 DC equations: GISL, mobMod 1/2, vtfbphi1, VADITS fix
 - Files changed:
-  - ferrospice-core/src/bsim4.rs (GISL params/parsing/binning/computation, mobMod 1/2 dispatch, vtfbphi1 preprocessing, VADITS bug fix, ceq_d sign fix)
-  - ferrospice-core/tests/bsim4.rs (new: 7 integration tests with full qaSpec CMC parameters)
+  - thevenin/src/bsim4.rs (GISL params/parsing/binning/computation, mobMod 1/2 dispatch, vtfbphi1 preprocessing, VADITS bug fix, ceq_d sign fix)
+  - thevenin/tests/bsim4.rs (new: 7 integration tests with full qaSpec CMC parameters)
 - **Critical bug fixed:** VADITS formula was completely wrong — used a fabricated formula instead of ngspice b4ld.c lines 2003-2024. Caused drain currents of -27178A with full qaSpec params. Fixed to: `VADITS = (1 + (1+pditsl*Leff)*exp(pditsd*Vds)) / pdits * FP`
 - **What was implemented:**
   - GISL (gate-induced source leakage): agisl/bgisl/cgisl/egisl params, parsing, binning, computation mirroring GIDL
@@ -317,8 +317,8 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - MNA integration: level 57 routing in both passes, internal body node always created
   - Simulate/AC/transient/noise integration following BSIM3/BSIM4 pattern
   - 7 integration tests: NMOS OP, NMOS bias points (4 biases), PMOS OP, 5-terminal + 3 ignored (inverter/DC sweep convergence)
-- **Files created:** ferrospice-core/src/bsim3soi_pd.rs (~2000 lines), ferrospice-core/tests/bsim3soi_pd.rs
-- **Files modified:** ferrospice-netlist/src/parse.rs, ferrospice-netlist/src/lib.rs, ferrospice-netlist/tests/netlist.rs, ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/ac.rs, ferrospice-core/src/transient.rs, ferrospice-core/src/noise.rs, ferrospice-core/src/subckt.rs, ferrospice-core/src/bsim3.rs (made fetlim pub)
+- **Files created:** thevenin/src/bsim3soi_pd.rs (~2000 lines), thevenin/tests/bsim3soi_pd.rs
+- **Files modified:** thevenin-types/src/parse.rs, thevenin-types/src/lib.rs, thevenin-types/tests/netlist.rs, thevenin/src/lib.rs, thevenin/src/mna.rs, thevenin/src/simulate.rs, thevenin/src/ac.rs, thevenin/src/transient.rs, thevenin/src/noise.rs, thevenin/src/subckt.rs, thevenin/src/bsim3.rs (made fetlim pub)
 - **Known limitations:** Inverter and DC sweep tests don't converge — likely needs source-stepping improvements for multi-device SOI circuits with floating body
 - **Tests:** 4 BSIM3SOI-PD tests pass, 3 ignored, all existing tests still pass, clippy/fmt clean
 ---
@@ -332,8 +332,8 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 - FD-specific voltage limiting: ±0.2V body steps, SmartVbs clamps Vbs≥0
 - FD-specific precomputed params: cbox (EPSOX/tbox), csi (EPSSI/tsi), qsi (Q*npeak*tsi), csieff, qsieff, vfbb
 - Full integration: mna.rs, simulate.rs, ac.rs, transient.rs, noise.rs
-- **Files created:** ferrospice-core/src/bsim3soi_fd.rs (~1900 lines), ferrospice-core/tests/bsim3soi_fd.rs
-- **Files modified:** ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/ac.rs, ferrospice-core/src/transient.rs, ferrospice-core/src/noise.rs
+- **Files created:** thevenin/src/bsim3soi_fd.rs (~1900 lines), thevenin/tests/bsim3soi_fd.rs
+- **Files modified:** thevenin/src/lib.rs, thevenin/src/mna.rs, thevenin/src/simulate.rs, thevenin/src/ac.rs, thevenin/src/transient.rs, thevenin/src/noise.rs
 - **Learnings for future iterations:**
   - FD SOI body node is fundamentally different from PD: body voltage is computed, not free
   - Need body feedback conductance to prevent floating node in NR (gmin alone insufficient)
@@ -352,8 +352,8 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 - depletion_charge() helper for junction capacitance model
 - Voltage limiting via pnjlim on Vbei and Vbci junctions
 - Self-heating and excess phase (NQS) intentionally skipped for this pass
-- **Files created:** ferrospice-core/src/vbic.rs (~1700 lines)
-- **Files modified:** ferrospice-core/src/lib.rs, ferrospice-core/src/mna.rs, ferrospice-core/src/simulate.rs, ferrospice-core/src/ac.rs, ferrospice-core/src/transient.rs, ferrospice-core/src/noise.rs
+- **Files created:** thevenin/src/vbic.rs (~1700 lines)
+- **Files modified:** thevenin/src/lib.rs, thevenin/src/mna.rs, thevenin/src/simulate.rs, thevenin/src/ac.rs, thevenin/src/transient.rs, thevenin/src/noise.rs
 - **Learnings for future iterations:**
   - VBIC has 7 internal nodes (3 always, 4 conditional on resistance values) vs BJT's 3
   - The vbic_4T_et_cf_fj equation kernel is auto-generated C code at the bottom of vbicload.c, not a separate file
@@ -365,9 +365,9 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 
 ## 2026-03-09 - US-045 (implementation)
 - Created examples/ directory with 4 runnable examples using only the public API
-- Added ferrospice-core as root crate dependency
+- Added thevenin as root crate dependency
 - Files created: examples/dc_operating_point.rs, examples/dc_sweep.rs, examples/ac_analysis.rs, examples/transient.rs
-- Files modified: Cargo.toml (added ferrospice-core dep)
+- Files modified: Cargo.toml (added thevenin dep)
 - **Examples:**
   - dc_operating_point: resistive voltage divider, prints V(mid) ≈ 0.667V
   - dc_sweep: diode I-V curve from -0.5V to 0.8V

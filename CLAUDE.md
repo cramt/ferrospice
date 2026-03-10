@@ -1,4 +1,4 @@
-# Ferrospice
+# Thevenin
 
 A Rust rewrite of [ngspice](https://ngspice.sourceforge.io/), the open-source mixed-level/mixed-signal electronic circuit simulator.
 

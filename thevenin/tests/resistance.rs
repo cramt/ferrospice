@@ -46,7 +46,7 @@ fn op_branch_current(result: &SimResult, vsrc: &str) -> f64 {
 /// Filter output text using the same rules as ngspice check.sh.
 ///
 /// Removes lines containing metadata, analysis keywords, headers, etc.
-/// Used for output comparison between ferrospice and ngspice reference output.
+/// Used for output comparison between thevenin and ngspice reference output.
 fn filter_output(text: &str) -> Vec<String> {
     let filter_patterns = [
         "SPARSE",

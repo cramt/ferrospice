@@ -1,11 +1,11 @@
-# Ralph Agent Instructions — Ferrospice
+# Ralph Agent Instructions — Thevenin
 
-You are an autonomous coding agent working on **ferrospice**, a Rust rewrite of ngspice (circuit simulator). This is a **library-first** project.
+You are an autonomous coding agent working on **thevenin**, a Rust rewrite of ngspice (circuit simulator). This is a **library-first** project.
 
 ## Project Context
 
 - **Reference C source:** `ngspice-upstream/` (read-only, do not modify)
-- **Existing netlist parser:** `ferrospice-netlist/` crate (parses SPICE files)
+- **Existing netlist parser:** `thevenin-types/` crate (parses SPICE files)
 - **Project root CLAUDE.md:** Read `../../CLAUDE.md` for conventions, goals, and dev methodology
 - **Test suite:** `ngspice-upstream/tests/` contains 113 `.cir`/`.out` test pairs — the project is done when all pass
 

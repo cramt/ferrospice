@@ -1,12 +1,12 @@
-# PRD: Ferrospice Simulation Engine
+# PRD: Thevenin Simulation Engine
 
 ## Introduction
 
-Build a SPICE circuit simulation engine in Rust as a library crate (`ferrospice`). This is a ground-up rewrite of ngspice's simulation core, using the existing `ferrospice-netlist` crate for parsing. The engine must produce identical numerical results to ngspice for all supported analyses.
+Build a SPICE circuit simulation engine in Rust as a library crate (`thevenin`). This is a ground-up rewrite of ngspice's simulation core, using the existing `thevenin-types` crate for parsing. The engine must produce identical numerical results to ngspice for all supported analyses.
 
-**The project is done when ferrospice passes the entire ngspice base test suite** (113 `.cir` tests in `ngspice-upstream/tests/`). The test suite includes resistance circuits, filters, transient analysis, device models (BJT, MOSFET, JFET, MESFET, transmission lines), pole-zero analysis, sensitivity analysis, and regression tests.
+**The project is done when thevenin passes the entire ngspice base test suite** (113 `.cir` tests in `ngspice-upstream/tests/`). The test suite includes resistance circuits, filters, transient analysis, device models (BJT, MOSFET, JFET, MESFET, transmission lines), pole-zero analysis, sensitivity analysis, and regression tests.
 
-This is a **library-first** project. Ferrospice is shipped as a Rust crate for embedding in other tools. A CLI may be added for convenience and test-running, but the public API surface is the library.
+This is a **library-first** project. Thevenin is shipped as a Rust crate for embedding in other tools. A CLI may be added for convenience and test-running, but the public API surface is the library.
 
 ## Goals
 
@@ -21,11 +21,11 @@ This is a **library-first** project. Ferrospice is shipped as a Rust crate for e
 
 ### Phase 1: Foundation (MNA + DC Operating Point)
 
-### US-001: Create ferrospice-core crate with sparse matrix types
+### US-001: Create thevenin crate with sparse matrix types
 **Description:** As a developer, I need a sparse matrix representation suitable for MNA so that circuit equations can be assembled and solved.
 
 **Acceptance Criteria:**
-- [ ] New crate `ferrospice-core` in the workspace
+- [ ] New crate `thevenin` in the workspace
 - [ ] Sparse matrix struct supporting dynamic insertion and triplet-form assembly
 - [ ] LU factorization and solve (use `faer` or similar — pick what fits, pure Rust preferred)
 - [ ] Unit tests: assemble a 3x3 system, solve it, verify result within 1e-12 tolerance
@@ -36,7 +36,7 @@ This is a **library-first** project. Ferrospice is shipped as a Rust crate for e
 **Description:** As a developer, I need to convert a parsed `Netlist` into an MNA equation system so that the circuit can be solved.
 
 **Acceptance Criteria:**
-- [ ] Function that takes a `ferrospice_netlist::Netlist` and produces an MNA system (matrix + RHS vector)
+- [ ] Function that takes a `thevenin_types::Netlist` and produces an MNA system (matrix + RHS vector)
 - [ ] Node name → matrix index mapping (ground node "0" is the reference, not in matrix)
 - [ ] Stamps for: resistor, independent voltage source (adds branch equation), independent current source
 - [ ] Unit test: voltage divider (V1=5V, R1=1k, R2=1k) → MNA system has correct dimensions and entries
@@ -67,11 +67,11 @@ This is a **library-first** project. Ferrospice is shipped as a Rust crate for e
 - [ ] `cargo test --workspace` passes
 
 ### US-005: Port ngspice resistance test suite
-**Description:** As a developer, I need the ngspice resistance tests running against ferrospice to validate basic DC solving.
+**Description:** As a developer, I need the ngspice resistance tests running against thevenin to validate basic DC solving.
 
 **Acceptance Criteria:**
 - [ ] Integration test module that loads `.cir` files from `ngspice-upstream/tests/resistance/`
-- [ ] Parse each `.cir` with `ferrospice_netlist`, simulate with ferrospice, compare output to `.out`
+- [ ] Parse each `.cir` with `thevenin_types`, simulate with thevenin, compare output to `.out`
 - [ ] Output comparison uses the same filtering as ngspice's `check.sh` (ignore metadata, compare numerical values)
 - [ ] All 3 resistance tests pass (res_simple, res_tc, res_temp — or skip temp-dependent ones with `#[ignore]` and a TODO)
 - [ ] `cargo clippy --workspace -- -D warnings` passes
@@ -366,10 +366,10 @@ This is a **library-first** project. Ferrospice is shipped as a Rust crate for e
 - [ ] `cargo test --workspace` passes
 
 ### US-029: Minimal CLI for running netlists
-**Description:** As a user, I want a CLI to run SPICE netlists so I can use ferrospice from the command line.
+**Description:** As a user, I want a CLI to run SPICE netlists so I can use thevenin from the command line.
 
 **Acceptance Criteria:**
-- [ ] `ferrospice --batch input.cir` runs all analyses and prints results to stdout
+- [ ] `thevenin --batch input.cir` runs all analyses and prints results to stdout
 - [ ] Output format matches ngspice's batch output (for test compatibility)
 - [ ] CLI is a thin wrapper around the library — all logic lives in library crates
 - [ ] `cargo clippy --workspace -- -D warnings` passes
@@ -377,7 +377,7 @@ This is a **library-first** project. Ferrospice is shipped as a Rust crate for e
 
 ## Functional Requirements
 
-- FR-1: Library crate `ferrospice` exposes `simulate(netlist: &Netlist) -> Result<SimResult>` as the primary API
+- FR-1: Library crate `thevenin` exposes `simulate(netlist: &Netlist) -> Result<SimResult>` as the primary API
 - FR-2: All analysis types (`.op`, `.dc`, `.tran`, `.ac`, `.noise`, `.tf`, `.sens`, `.pz`) are supported
 - FR-3: All linear devices (R, C, L, V, I, E, F, G, H, K) have correct MNA stamps
 - FR-4: All nonlinear devices (D, Q, M, J) use Newton-Raphson with companion models
@@ -402,10 +402,10 @@ This is a **library-first** project. Ferrospice is shipped as a Rust crate for e
 ## Technical Considerations
 
 - **Workspace structure:** Split into subcrates along natural boundaries:
-  - `ferrospice-netlist` — parser (already exists)
-  - `ferrospice-core` — sparse matrix, MNA assembly, solver infrastructure
-  - `ferrospice-devices` — device model implementations (stamps, companion models)
-  - `ferrospice` — top-level library tying it together + CLI binary
+  - `thevenin-types` — parser (already exists)
+  - `thevenin` — sparse matrix, MNA assembly, solver infrastructure
+  - `thevenin-devices` — device model implementations (stamps, companion models)
+  - `thevenin` — top-level library tying it together + CLI binary
 - **Linear algebra:** Use `faer` or similar pure-Rust sparse solver. Avoid C dependencies.
 - **Device model trait:** Define a `Device` trait with methods for DC stamp, AC stamp, transient stamp, noise contribution. Each device type implements this trait.
 - **Test infrastructure:** Build a test harness that can load `.cir`/`.out` pairs from ngspice-upstream and run them as Rust integration tests.

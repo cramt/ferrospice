@@ -1,4 +1,4 @@
-# Ferrospice development commands
+# Thevenin development commands
 
 # Run benchmark comparison: native x86 vs wasm32
 bench:

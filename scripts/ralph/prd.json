@@ -1,7 +1,7 @@
 {
-  "project": "Ferrospice",
+  "project": "Thevenin",
   "branchName": "ralph/simulation-engine",
-  "description": "Ferrospice Simulation Engine - SPICE circuit simulator library in Rust, rewriting ngspice. Done when all 113 ngspice base test suite .cir files pass.",
+  "description": "Thevenin Simulation Engine - SPICE circuit simulator library in Rust, rewriting ngspice. Done when all 113 ngspice base test suite .cir files pass.",
   "passLog": [
     {
       "iteration": 1,
@@ -69,7 +69,7 @@
     {
       "iteration": 10,
       "passType": "implementation",
-      "summary": "Created examples/ directory with 4 runnable examples (dc_operating_point, dc_sweep, ac_analysis, transient) using only the public API. Added ferrospice-core as root crate dependency.",
+      "summary": "Created examples/ directory with 4 runnable examples (dc_operating_point, dc_sweep, ac_analysis, transient) using only the public API. Added thevenin as root crate dependency.",
       "date": "2026-03-09",
       "storyId": "US-045"
     },
@@ -98,10 +98,10 @@
   "userStories": [
     {
       "id": "US-001",
-      "title": "Create ferrospice-core crate with sparse matrix types",
+      "title": "Create thevenin crate with sparse matrix types",
       "description": "As a developer, I need a sparse matrix representation suitable for MNA so that circuit equations can be assembled and solved.",
       "acceptanceCriteria": [
-        "New crate ferrospice-core in the workspace",
+        "New crate thevenin in the workspace",
         "Sparse matrix struct supporting dynamic insertion and triplet-form assembly",
         "LU factorization and solve (use faer or similar — pick what fits, pure Rust preferred)",
         "Unit tests: assemble a 3x3 system, solve it, verify result within 1e-12 tolerance",
@@ -120,7 +120,7 @@
       "title": "MNA matrix assembly from netlist",
       "description": "As a developer, I need to convert a parsed Netlist into an MNA equation system so that the circuit can be solved.",
       "acceptanceCriteria": [
-        "Function that takes a ferrospice_netlist::Netlist and produces an MNA system (matrix + RHS vector)",
+        "Function that takes a thevenin_types::Netlist and produces an MNA system (matrix + RHS vector)",
         "Node name to matrix index mapping (ground node 0 is the reference, not in matrix)",
         "Stamps for: resistor, independent voltage source (adds branch equation), independent current source",
         "Unit test: voltage divider (V1=5V, R1=1k, R2=1k) produces MNA system with correct dimensions and entries",
@@ -176,10 +176,10 @@
     {
       "id": "US-005",
       "title": "Port ngspice resistance test suite",
-      "description": "As a developer, I need the ngspice resistance tests running against ferrospice to validate basic DC solving.",
+      "description": "As a developer, I need the ngspice resistance tests running against thevenin to validate basic DC solving.",
       "acceptanceCriteria": [
         "Integration test module that loads .cir files from ngspice-upstream/tests/resistance/",
-        "Parse each .cir with ferrospice_netlist, simulate with ferrospice, compare output to .out",
+        "Parse each .cir with thevenin_types, simulate with thevenin, compare output to .out",
         "Output comparison uses the same filtering as ngspice check.sh (ignore metadata, compare numerical values)",
         "All 3 resistance tests pass (skip temp-dependent ones with #[ignore] and a TODO if needed)",
         "cargo clippy --workspace -- -D warnings passes",
@@ -844,7 +844,7 @@
       ],
       "priority": 37,
       "passes": false,
-      "notes": "These test the netlist parser, function evaluation, and .lib/.include processing. May require parser enhancements in ferrospice-netlist.",
+      "notes": "These test the netlist parser, function evaluation, and .lib/.include processing. May require parser enhancements in thevenin-types.",
       "tags": [
         "testing"
       ]
@@ -893,9 +893,9 @@
     {
       "id": "US-040",
       "title": "Minimal CLI for running netlists",
-      "description": "As a user, I want a CLI to run SPICE netlists so I can use ferrospice from the command line.",
+      "description": "As a user, I want a CLI to run SPICE netlists so I can use thevenin from the command line.",
       "acceptanceCriteria": [
-        "ferrospice --batch input.cir runs all analyses and prints results to stdout",
+        "thevenin --batch input.cir runs all analyses and prints results to stdout",
         "Output format matches ngspice batch output (for test compatibility)",
         "CLI is a thin wrapper around the library — all logic lives in library crates",
         "cargo clippy --workspace -- -D warnings passes",
@@ -913,8 +913,8 @@
       "title": "Cargo.toml metadata for all crates",
       "description": "As a maintainer, I need all Cargo.toml files to have the metadata required for crates.io publication.",
       "acceptanceCriteria": [
-        "All three crates (ferrospice, ferrospice-core, ferrospice-netlist) have: license, repository, homepage, keywords, categories, readme fields",
-        "Path dependencies include version constraints (e.g. ferrospice-netlist = { version = \"0.1\", path = \"...\" })",
+        "All three crates (thevenin-cli, thevenin, thevenin-types) have: license, repository, homepage, keywords, categories, readme fields",
+        "Path dependencies include version constraints (e.g. thevenin-types = { version = \"0.1\", path = \"...\" })",
         "rust-version (MSRV) is set and documented — pick a version, test it in CI",
         "cargo publish --dry-run succeeds for all three crates with no errors",
         "cargo clippy --workspace -- -D warnings passes",
@@ -922,7 +922,7 @@
       ],
       "priority": 41,
       "passes": false,
-      "notes": "Currently missing: license field on subcrates, repository/homepage/keywords/categories on all crates, version constraints on path deps. ferrospice root uses edition 2024 (Rust 1.85+).",
+      "notes": "Currently missing: license field on subcrates, repository/homepage/keywords/categories on all crates, version constraints on path deps. thevenin-cli root uses edition 2024 (Rust 1.85+).",
       "tags": [
         "crate"
       ]
@@ -930,12 +930,12 @@
     {
       "id": "US-042",
       "title": "LICENSE file and README files",
-      "description": "As a user evaluating ferrospice on crates.io, I need a LICENSE file and per-crate READMEs so I can understand the project and its terms.",
+      "description": "As a user evaluating thevenin on crates.io, I need a LICENSE file and per-crate READMEs so I can understand the project and its terms.",
       "acceptanceCriteria": [
         "BSD-3-Clause LICENSE file at repository root",
         "Root README.md: project description, feature overview, quick-start usage example, supported analyses, supported device models, MSRV, license badge",
-        "ferrospice-netlist/README.md: crate-specific docs with parsing usage example",
-        "ferrospice-core/README.md: crate-specific docs with simulation usage example",
+        "thevenin-types/README.md: crate-specific docs with parsing usage example",
+        "thevenin/README.md: crate-specific docs with simulation usage example",
         "Each README renders correctly on crates.io (no broken links, no relative paths to repo files)",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
@@ -950,9 +950,9 @@
     {
       "id": "US-043",
       "title": "Public API audit and documentation",
-      "description": "As a library consumer, I need a clean, well-documented public API so I can use ferrospice programmatically.",
+      "description": "As a library consumer, I need a clean, well-documented public API so I can use thevenin programmatically.",
       "acceptanceCriteria": [
-        "Crate-level #![doc] comments on ferrospice-core and ferrospice root with usage examples",
+        "Crate-level #![doc] comments on thevenin and thevenin-cli root with usage examples",
         "All public types, traits, and functions have rustdoc comments",
         "#![warn(missing_docs)] enabled on all library crates and compiles clean",
         "cargo doc --no-deps --workspace builds with no warnings",
@@ -963,7 +963,7 @@
       ],
       "priority": 43,
       "passes": false,
-      "notes": "ferrospice-netlist has excellent docs already. ferrospice-core has module-level docs on device models but no crate-level doc comment. Need to audit pub visibility — some internal helpers may be needlessly public.",
+      "notes": "thevenin-types has excellent docs already. thevenin has module-level docs on device models but no crate-level doc comment. Need to audit pub visibility — some internal helpers may be needlessly public.",
       "tags": [
         "crate"
       ]
@@ -973,8 +973,8 @@
       "title": "Stable public API design",
       "description": "As a library consumer, I need a stable, ergonomic top-level API so that basic workflows (parse → simulate → read results) are straightforward and unlikely to break.",
       "acceptanceCriteria": [
-        "ferrospice root crate re-exports a curated public API (don't just pub use everything from core)",
-        "Top-level convenience functions: e.g. ferrospice::simulate(netlist) that runs all analyses",
+        "thevenin-cli root crate re-exports a curated public API (don't just pub use everything from core)",
+        "Top-level convenience functions: e.g. thevenin::simulate(netlist) that runs all analyses",
         "SimResult types are ergonomic: named field access, iteration, indexing by node name",
         "Error types are public, well-structured, and use thiserror — no String errors or panics in the public API",
         "Builder or options pattern for simulation configuration (tolerances, iteration limits, etc.)",
@@ -984,7 +984,7 @@
       ],
       "priority": 44,
       "passes": false,
-      "notes": "Currently the root crate is just a Hello World main.rs. Need to design what ferrospice as a library actually exports. Consider: should users depend on ferrospice (umbrella) or ferrospice-core directly?",
+      "notes": "Currently the root crate is just a Hello World main.rs. Need to design what thevenin as a library actually exports. Consider: should users depend on thevenin-cli (umbrella) or thevenin directly?",
       "tags": [
         "crate"
       ]
@@ -992,7 +992,7 @@
     {
       "id": "US-045",
       "title": "Examples directory with runnable examples",
-      "description": "As a user discovering ferrospice on crates.io, I need runnable examples so I can quickly understand how to use the library.",
+      "description": "As a user discovering thevenin on crates.io, I need runnable examples so I can quickly understand how to use the library.",
       "acceptanceCriteria": [
         "examples/ directory in the root crate with at least 4 examples:",
         "  - dc_operating_point.rs: parse a simple circuit, run .op, print node voltages",
@@ -1038,14 +1038,14 @@
       "acceptanceCriteria": [
         "CHANGELOG.md at root following Keep a Changelog format",
         "Initial 0.1.0 entry summarizing supported features (analyses, device models, netlists)",
-        "RELEASING.md documenting the publish process: version bump, changelog update, cargo publish order (netlist → core → ferrospice), git tag",
+        "RELEASING.md documenting the publish process: version bump, changelog update, cargo publish order (netlist → core → thevenin-cli), git tag",
         "Version numbers are consistent across workspace (all 0.1.0 for initial release)",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 47,
       "passes": false,
-      "notes": "Publishing order matters: ferrospice-netlist first (no internal deps), then ferrospice-core, then ferrospice.",
+      "notes": "Publishing order matters: thevenin-types first (no internal deps), then thevenin, then thevenin-cli.",
       "tags": [
         "crate"
       ]
@@ -1053,7 +1053,7 @@
     {
       "id": "US-048",
       "title": "Crate size and dependency audit",
-      "description": "As a library consumer, I need ferrospice to have a reasonable download size and no unnecessary dependencies.",
+      "description": "As a library consumer, I need thevenin to have a reasonable download size and no unnecessary dependencies.",
       "acceptanceCriteria": [
         "ngspice-upstream/ is excluded from the published crate (via Cargo.toml exclude or .gitignore)",
         "scripts/ and test fixtures are excluded from published crates where not needed",
@@ -1077,7 +1077,7 @@
       "description": "As a library consumer, I need a fundamentally rethought public API that is ergonomic, idiomatic Rust, and makes common workflows (parse → simulate → extract results) simple and discoverable.",
       "acceptanceCriteria": [
         "Audit current public API surface across all crates — identify what's exposed vs what should be internal",
-        "Design a cohesive top-level API: consider whether ferrospice should be the only user-facing crate or if ferrospice-core/ferrospice-netlist should also have stable public APIs",
+        "Design a cohesive top-level API: consider whether thevenin should be the only user-facing crate or if thevenin/thevenin-types should also have stable public APIs",
         "Evaluate SimResult ergonomics: can users easily extract node voltages by name, iterate sweep points, access complex AC values?",
         "Error types are well-structured with thiserror — no String errors, panics, or unwraps in public paths",
         "Consider builder/options pattern for simulation configuration (tolerances, iteration limits, analysis selection)",
@@ -1119,9 +1119,9 @@
     {
       "id": "US-051",
       "title": "Eliminate all unwrap/panic paths",
-      "description": "As a library consumer, I need ferrospice to never panic so that my application can handle all errors gracefully via Result types.",
+      "description": "As a library consumer, I need thevenin to never panic so that my application can handle all errors gracefully via Result types.",
       "acceptanceCriteria": [
-        "Zero .unwrap() calls in library code (ferrospice-core, ferrospice-netlist, ferrospice root lib)",
+        "Zero .unwrap() calls in library code (thevenin, thevenin-types, thevenin-cli root lib)",
         "Zero .expect() calls in library code — use proper error propagation with ? instead",
         "Zero panic!(), unreachable!(), unimplemented!(), todo!() in library code",
         "All fallible operations return Result with meaningful error variants",

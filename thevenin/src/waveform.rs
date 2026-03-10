@@ -269,7 +269,7 @@ fn eval_sffm(v0: f64, va: f64, fc: f64, fs: f64, md: f64, t: f64) -> f64 {
 /// After td: va * (vo + sin(2*pi*fs*t)) * sin(2*pi*fc*t)
 ///
 /// Note: ngspice AM parameters are (VO, VMO, VMA, FM, FC, TD, ...) but
-/// ferrospice-netlist parses as (va, vo, fc, fs, td) — mapping:
+/// thevenin-types parses as (va, vo, fc, fs, td) — mapping:
 /// va = amplitude, vo = offset, fc = carrier freq, fs = signal freq
 fn eval_am(va: f64, vo: f64, fc: f64, fs: f64, td: f64, t: f64) -> f64 {
     if t < td {
