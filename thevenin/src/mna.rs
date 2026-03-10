@@ -269,6 +269,8 @@ pub struct MnaSystem {
     pub bsim4s: Vec<Bsim4Instance>,
     /// Resolved VBIC BJT instances (LEVEL=4) for NR iteration.
     pub vbics: Vec<VbicInstance>,
+    /// Resolved LTRA (lossy transmission line) instances.
+    pub ltras: Vec<crate::ltra::LtraInstance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -429,6 +431,16 @@ impl MnaSystem {
                 .iter()
                 .map(|m| m.model.internal_node_count())
                 .sum::<usize>()
+    }
+
+    /// Stamp LTRA DC equations into the given linear system.
+    /// Called by DC solver paths (not stored in the base matrix so that
+    /// transient can use different convolution-based stamps).
+    pub fn stamp_ltra_dc_all(&self, system: &mut crate::LinearSystem) {
+        let n = self.total_num_nodes();
+        for inst in &self.ltras {
+            crate::ltra::stamp_ltra_dc(inst, system, n);
+        }
     }
 }
 
@@ -820,6 +832,20 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 vsource_offset_map.insert(element.name.to_lowercase(), vsource_count);
                 vsource_count += 1; // CCVS adds a branch equation
             }
+            ElementKind::Ltra {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                ..
+            } => {
+                node_map.index(pos1);
+                node_map.index(neg1);
+                node_map.index(pos2);
+                node_map.index(neg2);
+                // LTRA adds 2 branch equations (one per port)
+                vsource_count += 2;
+            }
             _ => {}
         }
     }
@@ -844,6 +870,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut bsim3soi_pds = Vec::new();
     let mut bsim3soi_fds = Vec::new();
     let mut bsim4s = Vec::new();
+    let mut ltras = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
@@ -1908,6 +1935,51 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 vsource_names.push(element.name.clone());
                 vsource_idx += 1;
             }
+            ElementKind::Ltra {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                model,
+                ..
+            } => {
+                let ltra_model = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    crate::ltra::LtraModel::from_model_def(mdef)
+                } else {
+                    return Err(MnaError::UnsupportedElement(format!(
+                        "{}: unknown LTRA model '{}'",
+                        element.name, model
+                    )));
+                };
+
+                let pos1_idx = node_map.get(pos1);
+                let neg1_idx = node_map.get(neg1);
+                let pos2_idx = node_map.get(pos2);
+                let neg2_idx = node_map.get(neg2);
+
+                let br1 = vsource_idx;
+                let br2 = vsource_idx + 1;
+                vsource_idx += 2;
+
+                vsource_names.push(format!("{}#branch1", element.name.to_lowercase()));
+                vsource_names.push(format!("{}#branch2", element.name.to_lowercase()));
+
+                let inst = crate::ltra::LtraInstance {
+                    name: element.name.clone(),
+                    pos1_idx,
+                    neg1_idx,
+                    pos2_idx,
+                    neg2_idx,
+                    br_eq1: br1,
+                    br_eq2: br2,
+                    model: ltra_model,
+                };
+
+                // NOTE: LTRA DC stamps are NOT added to the base matrix here.
+                // They are added separately in the DC solver paths so that
+                // the transient solver can use different (convolution-based) stamps.
+                ltras.push(inst);
+            }
             _ => {
                 stamp_element(
                     element,
@@ -1951,6 +2023,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         bsim3soi_fds,
         bsim4s,
         vbics,
+        ltras,
     })
 }
 

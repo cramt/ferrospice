@@ -10,6 +10,7 @@ repository = "https://github.com/cramt/thevenin"
 thiserror.workspace = true
 faer.workspace = true
 thevenin-types = { path = "../thevenin-types", version = "0.1.0" }
+libm = "0.2"
 
 [dev-dependencies]
 approx = "0.5"

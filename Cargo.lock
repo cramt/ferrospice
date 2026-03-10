@@ -1365,6 +1365,7 @@ dependencies = [
  "approx",
  "faer",
  "getrandom",
+ "libm",
  "thevenin-types",
  "thiserror 2.0.18",
  "wasm-bindgen",

@@ -483,6 +483,15 @@ pub enum ElementKind {
         subckt: String,
         params: Vec<Param>,
     },
+    /// `Oname n1+ n1- n2+ n2- model [IC=v1,i1,v2,i2]`
+    Ltra {
+        pos1: String,
+        neg1: String,
+        pos2: String,
+        neg2: String,
+        model: String,
+        params: Vec<Param>,
+    },
     /// Any element type not explicitly handled — stored verbatim after name.
     Raw(String),
 }
@@ -645,6 +654,17 @@ impl fmt::Display for Element {
                     write!(f, " {p}")?;
                 }
                 write!(f, " {subckt}")?;
+                write_params(f, params)
+            }
+            ElementKind::Ltra {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                model,
+                params,
+            } => {
+                write!(f, "{} {pos1} {neg1} {pos2} {neg2} {model}", self.name)?;
                 write_params(f, params)
             }
             ElementKind::Raw(rest) => {

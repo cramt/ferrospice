@@ -438,6 +438,48 @@ fn parse_source(tokens: &[String]) -> Source {
     src
 }
 
+/// Collect model parameters: key=value pairs and bare flags.
+/// Bare tokens (without `=`) are treated as flag parameters with value 1.0.
+fn collect_model_params(tokens: &[String]) -> Vec<Param> {
+    let mut params = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let upper = tokens[i].to_uppercase();
+        if upper == "PARAMS:" || upper == "PARAM:" {
+            i += 1;
+            continue;
+        }
+        if tokens[i].contains('=') {
+            if let Some(kv) = parse_kv(&tokens[i]) {
+                params.push(kv);
+            }
+        } else if i + 1 < tokens.len() && tokens[i + 1].starts_with('=') {
+            // Handle `key = value` split across tokens
+            let key = tokens[i].clone();
+            let val_tok = if tokens[i + 1] == "=" && i + 2 < tokens.len() {
+                i += 2;
+                &tokens[i]
+            } else {
+                // `key =value`
+                i += 1;
+                &tokens[i][1..]
+            };
+            params.push(Param {
+                name: key,
+                value: parse_expr(val_tok),
+            });
+        } else {
+            // Bare token — treat as flag param with value 1.0
+            params.push(Param {
+                name: tokens[i].clone(),
+                value: Expr::Num(1.0),
+            });
+        }
+        i += 1;
+    }
+    params
+}
+
 // ---------------------------------------------------------------------------
 // Element line parsing
 // ---------------------------------------------------------------------------
@@ -695,6 +737,23 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 params,
             }
         }
+        'O' => {
+            // O<name> n1+ n1- n2+ n2- model [IC=v1,i1,v2,i2]
+            let pos1 = need!(0, "n1+").to_string();
+            let neg1 = need!(1, "n1-").to_string();
+            let pos2 = need!(2, "n2+").to_string();
+            let neg2 = need!(3, "n2-").to_string();
+            let model = need!(4, "model").to_string();
+            let params = collect_params(&rest[5..]);
+            ElementKind::Ltra {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                model,
+                params,
+            }
+        }
         _ => {
             // Unknown element — store everything after the name verbatim
             ElementKind::Raw(rest.join(" "))
@@ -907,7 +966,7 @@ fn parse_dot(
                 params.extend(collect_params(&tokens[3..]));
                 (type_part, params)
             } else {
-                (raw_kind.to_uppercase(), collect_params(&tokens[3..]))
+                (raw_kind.to_uppercase(), collect_model_params(&tokens[3..]))
             };
             Ok(Item::Model(ModelDef { name, kind, params }))
         }

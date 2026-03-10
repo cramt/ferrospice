@@ -441,6 +441,21 @@ fn remap_element(
         ElementKind::SubcktCall { .. } => {
             unreachable!("SubcktCall should be expanded before remap")
         }
+        ElementKind::Ltra {
+            pos1,
+            neg1,
+            pos2,
+            neg2,
+            model,
+            params,
+        } => ElementKind::Ltra {
+            pos1: remap(pos1),
+            neg1: remap(neg1),
+            pos2: remap(pos2),
+            neg2: remap(neg2),
+            model: model.clone(),
+            params: resolve_params(params, param_map),
+        },
         ElementKind::Raw(s) => ElementKind::Raw(s.clone()),
     };
 

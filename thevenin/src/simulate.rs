@@ -36,29 +36,7 @@ pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
 /// Uses Newton-Raphson iteration when nonlinear elements (diodes) are present.
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
-    let nr_opts = nr_options_from_netlist(netlist);
-
-    let solution_vec = if !mna.has_nonlinear() {
-        // Pure linear circuit — direct solve.
-        let sol = mna.solve()?;
-        // Extract raw values.
-        let mut values = Vec::with_capacity(mna.system.dim());
-        for (_name, idx) in mna.node_map.iter() {
-            // Ensure we write at the right index.
-            if values.len() <= idx {
-                values.resize(idx + 1, 0.0);
-            }
-            values[idx] = sol.voltage(_name).unwrap_or(0.0);
-        }
-        // Append branch currents.
-        for vsrc in &mna.vsource_names {
-            values.push(sol.branch_current(vsrc).unwrap_or(0.0));
-        }
-        values
-    } else {
-        // Nonlinear circuit — use Newton-Raphson.
-        solve_nonlinear_op(&mna, &nr_opts)?
-    };
+    let solution_vec = solve_op_raw(&mna)?;
 
     let mut vecs = Vec::new();
 
@@ -104,7 +82,18 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// Layout: [node_voltages..., internal_nodes..., branch_currents...].
 pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     if !mna.has_nonlinear() {
-        mna.system.solve().map_err(MnaError::from)
+        if mna.ltras.is_empty() {
+            mna.system.solve().map_err(MnaError::from)
+        } else {
+            // LTRA DC stamps are not in the base matrix; add them to a copy.
+            let mut system = LinearSystem::new(mna.system.dim());
+            for triplet in mna.system.matrix.triplets() {
+                system.matrix.add(triplet.row, triplet.col, triplet.value);
+            }
+            system.rhs = mna.system.rhs.clone();
+            mna.stamp_ltra_dc_all(&mut system);
+            system.solve().map_err(MnaError::from)
+        }
     } else {
         solve_nonlinear_op(mna, &NrOptions::default())
     }
@@ -140,7 +129,10 @@ fn solve_nonlinear_op_with_guess(
             system.rhs[i] += val * source_factor;
         }
 
-        // 2. Stamp all nonlinear device companions.
+        // 2. Stamp LTRA DC equations (not in base matrix).
+        mna.stamp_ltra_dc_all(system);
+
+        // 3. Stamp all nonlinear device companions.
         dev_state.stamp_devices(solution, system, mna);
     };
 
@@ -331,8 +323,12 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let stop_val = expr_val(&stop, ".dc")?;
     let step_val = expr_val(&step, ".dc")?;
 
-    // Assemble the MNA system.
+    // Assemble the MNA system and stamp LTRA DC equations into the base matrix.
     let mut mna = assemble_mna(netlist)?;
+    let n = mna.total_num_nodes();
+    for inst in &mna.ltras {
+        crate::ltra::stamp_ltra_dc(inst, &mut mna.system, n);
+    }
     let original_rhs = mna.system.rhs.clone();
 
     // Resolve the primary sweep source.

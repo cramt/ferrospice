@@ -33,6 +33,7 @@ pub(crate) mod device_stamp;
 pub mod diode;
 pub mod hfet;
 pub mod jfet;
+pub mod ltra;
 pub mod mesa;
 pub mod mesfet;
 pub mod mna;

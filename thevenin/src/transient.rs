@@ -13,6 +13,7 @@ use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
 use crate::LinearSystem;
 use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
 use crate::expr_val;
+use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrOptions, newton_raphson_solve};
 use crate::simulate::simulate_op;
@@ -436,6 +437,29 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
+    // Initialize LTRA transient state.
+    let has_ltra = !mna.ltras.is_empty();
+    let mut ltra_states: Vec<LtraState> = mna
+        .ltras
+        .iter()
+        .map(|inst| {
+            let mut state = LtraState::new();
+            let v1 =
+                node_voltage(&solution, inst.pos1_idx) - node_voltage(&solution, inst.neg1_idx);
+            let i1 = solution[num_nodes + inst.br_eq1];
+            let v2 =
+                node_voltage(&solution, inst.pos2_idx) - node_voltage(&solution, inst.neg2_idx);
+            let i2 = solution[num_nodes + inst.br_eq2];
+            state.init_from_dc(v1, i1, v2, i2);
+            // Record initial values as first history point.
+            state.accept(v1, i1, v2, i2);
+            state
+        })
+        .collect();
+    let mut ltra_coeffs: Vec<LtraCoeffs> = mna.ltras.iter().map(|_| LtraCoeffs::new()).collect();
+    // Time points history for LTRA convolution.
+    let mut ltra_time_points: Vec<f64> = if has_ltra { vec![0.0] } else { Vec::new() };
+
     // Prepare output vectors.
     let mut time_vec = SimVector {
         name: "time".to_string(),
@@ -525,6 +549,40 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             IntegrationMethod::Trapezoidal
         };
 
+        // Recompute LTRA convolution coefficients for the new timepoint.
+        if has_ltra {
+            let cur_time = t + step_h;
+            let time_index = ltra_time_points.len() - 1;
+            for (li, inst) in mna.ltras.iter().enumerate() {
+                match inst.model.special_case {
+                    crate::ltra::LtraCase::Rlc => {
+                        crate::ltra::rlc_coeffs_setup(
+                            &mut ltra_coeffs[li],
+                            inst.model.td,
+                            inst.model.alpha,
+                            inst.model.beta,
+                            cur_time,
+                            &ltra_time_points,
+                            time_index,
+                            inst.model.reltol,
+                        );
+                    }
+                    crate::ltra::LtraCase::Rc => {
+                        crate::ltra::rc_coeffs_setup(
+                            &mut ltra_coeffs[li],
+                            inst.model.c_by_r,
+                            inst.model.rclsqr,
+                            cur_time,
+                            &ltra_time_points,
+                            time_index,
+                            inst.model.reltol,
+                        );
+                    }
+                    _ => {} // LC and RG don't need coefficient setup
+                }
+            }
+        }
+
         // Solve this timestep.
         let new_solution = solve_timestep(
             &mna,
@@ -539,6 +597,13 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             &nr_options,
             dim,
             num_nodes,
+            if has_ltra { Some(&ltra_states) } else { None },
+            if has_ltra { Some(&ltra_coeffs) } else { None },
+            if has_ltra {
+                Some(&ltra_time_points)
+            } else {
+                None
+            },
         )?;
 
         // LTE-based timestep control (only for Trap with reactive elements).
@@ -604,6 +669,20 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             };
         }
 
+        // Update LTRA histories.
+        if has_ltra {
+            ltra_time_points.push(t);
+            for (li, inst) in mna.ltras.iter().enumerate() {
+                let v1 =
+                    node_voltage(&solution, inst.pos1_idx) - node_voltage(&solution, inst.neg1_idx);
+                let i1 = solution[num_nodes + inst.br_eq1];
+                let v2 =
+                    node_voltage(&solution, inst.pos2_idx) - node_voltage(&solution, inst.neg2_idx);
+                let i2 = solution[num_nodes + inst.br_eq2];
+                ltra_states[li].accept(v1, i1, v2, i2);
+            }
+        }
+
         // Record output point.
         if t >= t_start {
             record_point(
@@ -629,6 +708,11 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             vecs,
         }],
     })
+}
+
+/// Extract a node voltage from the solution vector, returning 0 for ground.
+fn node_voltage(solution: &[f64], idx: Option<usize>) -> f64 {
+    idx.map(|i| solution[i]).unwrap_or(0.0)
 }
 
 /// Record a solution point into output vectors.
@@ -667,6 +751,9 @@ fn solve_timestep(
     nr_options: &NrOptions,
     dim: usize,
     num_nodes: usize,
+    ltra_states: Option<&[LtraState]>,
+    ltra_coeffs: Option<&[LtraCoeffs]>,
+    ltra_time_points: Option<&[f64]>,
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -701,6 +788,25 @@ fn solve_timestep(
                 if let Some(nj) = cs.neg_idx {
                     system.rhs[nj] += i_diff * source_factor;
                 }
+            }
+        }
+
+        // 1c. Stamp LTRA transient equations.
+        if let (Some(states), Some(coeffs), Some(time_pts)) =
+            (ltra_states, ltra_coeffs, ltra_time_points)
+        {
+            let time_index = time_pts.len() - 1;
+            for (li, inst) in mna.ltras.iter().enumerate() {
+                crate::ltra::stamp_ltra_transient(
+                    inst,
+                    &states[li],
+                    &coeffs[li],
+                    system,
+                    num_nodes,
+                    t,
+                    time_pts,
+                    time_index,
+                );
             }
         }
 
