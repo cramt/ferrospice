@@ -13,10 +13,10 @@ use std::f64::consts::PI;
 
 use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
 
-use crate::ac::{extract_op_solution, generate_ac_sweep};
+use crate::ac::generate_ac_sweep;
 use crate::expr_val;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::simulate::simulate_op;
+use crate::simulate::{nr_options_from_netlist, solve_nonlinear_op};
 use crate::sparse::ComplexLinearSystem;
 
 /// Boltzmann constant (J/K).
@@ -65,9 +65,13 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let (out_pos, out_neg) = parse_output_spec(&output)?;
 
     // DC operating point.
-    let op_result = simulate_op(netlist)?;
     let mna = assemble_mna(netlist)?;
-    let op_solution = extract_op_solution(&op_result, &mna);
+    let nr_opts = nr_options_from_netlist(netlist);
+    let op_solution = if mna.has_nonlinear() {
+        solve_nonlinear_op(&mna, &nr_opts)?
+    } else {
+        mna.system.solve()?
+    };
     let num_nodes = mna.total_num_nodes();
 
     // Resolve output node indices.
@@ -177,13 +181,13 @@ fn parse_output_spec(output: &str) -> Result<(String, Option<String>), MnaError>
         rest.strip_suffix(')').unwrap_or(rest)
     } else {
         // Bare node name.
-        return Ok((s.to_lowercase(), None));
+        return Ok((s.to_string(), None));
     };
 
     if let Some((pos, neg)) = inner.split_once(',') {
-        Ok((pos.trim().to_lowercase(), Some(neg.trim().to_lowercase())))
+        Ok((pos.trim().to_string(), Some(neg.trim().to_string())))
     } else {
-        Ok((inner.trim().to_lowercase(), None))
+        Ok((inner.trim().to_string(), None))
     }
 }
 

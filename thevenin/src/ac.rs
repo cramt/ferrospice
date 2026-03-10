@@ -7,7 +7,7 @@ use thevenin_types::{
 use crate::expr_val;
 use crate::expr_val_or;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::simulate::simulate_op;
+use crate::simulate::{nr_options_from_netlist, solve_nonlinear_op};
 use crate::sparse::ComplexLinearSystem;
 
 /// Perform AC small-signal analysis.
@@ -39,14 +39,15 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let fstart_val = expr_val(&fstart, ".ac")?;
     let fstop_val = expr_val(&fstop, ".ac")?;
 
-    // Compute DC operating point (linearizes nonlinear devices).
-    let op_result = simulate_op(netlist)?;
-
-    // Assemble the DC MNA system for its structure.
+    // Assemble the MNA system and solve DC operating point directly
+    // to get the full solution vector including internal device nodes.
     let mna = assemble_mna(netlist)?;
-
-    // Extract DC operating point solution for linearization.
-    let op_solution = extract_op_solution(&op_result, &mna);
+    let nr_opts = nr_options_from_netlist(netlist);
+    let op_solution = if mna.has_nonlinear() {
+        solve_nonlinear_op(&mna, &nr_opts)?
+    } else {
+        mna.system.solve()?
+    };
 
     // Generate frequency sweep points.
     let frequencies = generate_ac_sweep(variation, n, fstart_val, fstop_val);
@@ -488,10 +489,10 @@ pub fn stamp_ac_devices(
         crate::stamp_conductance(&mut sys.real, bx, ei, s * comp.dibex_dvbex);
         // Ibc: BI->CI
         crate::stamp_conductance(&mut sys.real, bi, ci, s * comp.dibc_dvbci);
-        // Ibep: BP->EI
-        crate::stamp_conductance(&mut sys.real, bp, ei, s * comp.dibep_dvbep);
-        // Ibcp: BP->SI
-        crate::stamp_conductance(&mut sys.real, bp, si, s * comp.dibcp_dvbcp);
+        // Ibep: BX->BP (controlled by Vbep = V(BX)-V(BP))
+        crate::stamp_conductance(&mut sys.real, bx, bp, s * comp.dibep_dvbep);
+        // Ibcp: SI->BP (controlled by Vbcp = V(SI)-V(BP))
+        crate::stamp_conductance(&mut sys.real, si, bp, s * comp.dibcp_dvbcp);
         // Irci: CX->CI
         crate::stamp_conductance(&mut sys.real, cx, ci, s * comp.dirci_dvrci);
         // Irbi: BX->BI
@@ -508,16 +509,16 @@ pub fn stamp_ac_devices(
         if comp.dibc_dvbei.abs() > 0.0 {
             stamp_vccs(&mut sys.real, bi, ci, bi, ei, s * comp.dibc_dvbei);
         }
-        // Iccp controlled by Vbep -> current bp->si
-        stamp_vccs(&mut sys.real, bp, si, bp, ei, s * comp.diccp_dvbep);
-        // Iccp controlled by Vbcp -> current bp->si
-        stamp_vccs(&mut sys.real, bp, si, bp, si, s * comp.diccp_dvbcp);
+        // Iccp controlled by Vbep -> current bx->si (Vbep = V(BX)-V(BP))
+        stamp_vccs(&mut sys.real, bx, si, bx, bp, s * comp.diccp_dvbep);
+        // Iccp controlled by Vbcp -> current bx->si (Vbcp = V(SI)-V(BP))
+        stamp_vccs(&mut sys.real, bx, si, si, bp, s * comp.diccp_dvbcp);
         // Irci cross-terms
         if comp.dirci_dvbci.abs() > 0.0 {
             stamp_vccs(&mut sys.real, cx, ci, bi, ci, s * comp.dirci_dvbci);
         }
         if comp.dirci_dvbcx.abs() > 0.0 {
-            stamp_vccs(&mut sys.real, cx, ci, bx, ci, s * comp.dirci_dvbcx);
+            stamp_vccs(&mut sys.real, cx, ci, bi, cx, s * comp.dirci_dvbcx);
         }
         // Irbi cross-terms
         if comp.dirbi_dvbei.abs() > 0.0 {
@@ -541,18 +542,62 @@ pub fn stamp_ac_devices(
             crate::stamp_conductance(&mut sys.real, vbic.subs_idx, si, s / vbic.model.rs_t);
         }
 
-        // Depletion capacitances (imaginary part)
-        if comp.cqbe > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, bi, ei, omega * s * comp.cqbe);
+        // Capacitances (imaginary part) — total charge derivatives including transit time
+        // Qbe: BI-EI (main diagonal) + BI-CI (cross-term from transit time)
+        let xqbe_vbei = omega * s * comp.cqbe_vbei;
+        if xqbe_vbei.abs() > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bi, ei, xqbe_vbei);
         }
-        if comp.cqbc > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, bi, ci, omega * s * comp.cqbc);
+        let xqbe_vbci = omega * s * comp.cqbe_vbci;
+        if xqbe_vbci.abs() > 0.0 {
+            // Cross-term: charge at BI-EI controlled by Vbci (BI-CI)
+            stamp_vccs(&mut sys.imag, bi, ei, bi, ci, xqbe_vbci);
         }
-        if comp.cqbep > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, bp, ei, omega * s * comp.cqbep);
+
+        // Qbex: BX-EI (external BE depletion)
+        let xqbex_vbex = omega * s * comp.cqbex_vbex;
+        if xqbex_vbex.abs() > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bx, ei, xqbex_vbex);
         }
-        if comp.cqbcp > 0.0 {
-            stamp_imag_conductance(&mut sys.imag, bp, si, omega * s * comp.cqbcp);
+
+        // Qbc: BI-CI
+        let xqbc_vbci = omega * s * comp.cqbc_vbci;
+        if xqbc_vbci.abs() > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bi, ci, xqbc_vbci);
+        }
+
+        // Qbcx: BI-CX (Vbcx = V(BI)-V(CX))
+        let xqbcx_vbcx = omega * s * comp.cqbcx_vbcx;
+        if xqbcx_vbcx.abs() > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bi, cx, xqbcx_vbcx);
+        }
+
+        // Qbep: BX-BP (main, Vbep = V(BX)-V(BP)) + cross from Vbci
+        let xqbep_vbep = omega * s * comp.cqbep_vbep;
+        if xqbep_vbep.abs() > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, bx, bp, xqbep_vbep);
+        }
+        let xqbep_vbci = omega * s * comp.cqbep_vbci;
+        if xqbep_vbci.abs() > 0.0 {
+            stamp_vccs(&mut sys.imag, bx, bp, bi, ci, xqbep_vbci);
+        }
+
+        // Qbcp: SI-BP (Vbcp = V(SI)-V(BP))
+        let xqbcp_vbcp = omega * s * comp.cqbcp_vbcp;
+        if xqbcp_vbcp.abs() > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, si, bp, xqbcp_vbcp);
+        }
+
+        // Overlap capacitances (external nodes)
+        // Qbeo = CBEO * Vbe (B-E external)
+        if vbic.model.cbeo > 0.0 {
+            let xqbeo = omega * s * vbic.model.cbeo;
+            stamp_imag_conductance(&mut sys.imag, vbic.base_idx, vbic.emit_idx, xqbeo);
+        }
+        // Qbco = CBCO * Vbc (B-C external)
+        if vbic.model.cbco > 0.0 {
+            let xqbco = omega * s * vbic.model.cbco;
+            stamp_imag_conductance(&mut sys.imag, vbic.base_idx, vbic.coll_idx, xqbco);
         }
     }
 }

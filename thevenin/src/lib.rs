@@ -70,7 +70,7 @@ pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
 pub use noise::simulate_noise;
 pub use pz::simulate_pz;
 pub use sens::simulate_sens;
-pub use simulate::{simulate_dc, simulate_op};
+pub use simulate::{nr_options_from_netlist, simulate_dc, simulate_op, solve_nonlinear_op};
 pub use sparse::{ComplexLinearSystem, LinearSystem, SparseMatrix, SparseMatrixError};
 pub use subckt::{SubcktError, flatten_netlist};
 pub use tf::simulate_tf;

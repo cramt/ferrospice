@@ -64,8 +64,15 @@ impl NodeMap {
     }
 
     /// Look up a node's index (returns None for ground or unknown nodes).
+    /// SPICE is case-insensitive, so this does a case-insensitive lookup.
     pub fn get(&self, node: &str) -> Option<usize> {
-        self.map.get(node).copied()
+        self.map.get(node).copied().or_else(|| {
+            let upper = node.to_uppercase();
+            self.map
+                .iter()
+                .find(|(k, _)| k.to_uppercase() == upper)
+                .map(|(_, &v)| v)
+        })
     }
 
     /// Iterate over (node_name, index) pairs.

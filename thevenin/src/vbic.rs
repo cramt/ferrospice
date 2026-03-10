@@ -58,34 +58,47 @@ pub fn depletion_charge(v: f64, cj: f64, p: f64, m: f64, aj: f64, fc: f64) -> (f
         return (0.0, 0.0);
     }
 
-    let dv0 = -p * fc;
-    // Smooth limiting of v to avoid singularity
-    let dvh = 0.5 * (v - dv0 + ((v - dv0) * (v - dv0) + 0.01).sqrt());
-    let v_limited = dv0 + dvh;
-    let mv0 = -dv0;
-    let v_clamped = v_limited + mv0;
+    // Two-piece depletion charge model matching ngspice VBIC implementation.
+    // Below FC*PE: standard power-law capacitance.
+    // Above FC*PE: polynomial extrapolation to avoid singularity at v=PE.
+    let dv0 = -p * fc; // = -(PE * FC)
+    let dvh = v + dv0; // = v - FC*PE; positive means forward-biased beyond FC limit
 
-    // Derivatives for smoothing
-    let ddvh_dv = 0.5 * (1.0 + (v - dv0) / ((v - dv0) * (v - dv0) + 0.01).sqrt());
-
-    if m == 1.0 {
-        // Special case for m=1 to avoid 0^0 issues
-        let q = -cj * p * (1.0 - v_clamped / p).ln();
-        let c = cj / (1.0 - v_clamped / p);
-        (
-            q * (1.0 + aj * dvh),
-            c * ddvh_dv * (1.0 + aj * dvh) + cj * aj * dvh / (1.0 - v_clamped / p).max(1e-20),
-        )
+    if aj <= 0.0 {
+        // Standard SPICE junction model (AJE <= 0)
+        if dvh > 0.0 {
+            // Forward bias beyond FC*PE: linear+quadratic extrapolation
+            let one_minus_fc = 1.0 - fc;
+            let pwq = one_minus_fc.powf(-1.0 - m);
+            // qlo = charge at the FC boundary (constant w.r.t. v)
+            let qlo = p * (1.0 - one_minus_fc.powf(1.0 - m)) / (1.0 - m);
+            // qhi = polynomial extrapolation beyond FC*PE
+            let qhi = dvh * (1.0 - fc + 0.5 * m * dvh / p) * pwq;
+            let qhi_dv = (1.0 - fc + m * dvh / p) * pwq;
+            (cj * (qlo + qhi), cj * qhi_dv)
+        } else {
+            // Reverse/low forward bias: standard power law
+            let one_minus_vp = (1.0 - v / p).max(1e-20);
+            let pow_1mm = one_minus_vp.powf(1.0 - m);
+            let q = p * (1.0 - pow_1mm) / (1.0 - m);
+            let c = one_minus_vp.powf(-m);
+            (cj * q, cj * c)
+        }
     } else {
-        let one_minus_vm = (1.0 - v_clamped / p).max(1e-20);
-        let pow_term = one_minus_vm.powf(1.0 - m);
-        let q = -cj * p / (1.0 - m) * (pow_term - 1.0);
-        let c = cj * one_minus_vm.powf(-m);
+        // Smooth junction model (AJE > 0) using hyperbolic smoothing
+        let mv0 = (dv0 * dv0 + 4.0 * aj * aj).sqrt();
+        let vl0 = -0.5 * (dv0 + mv0);
+        // Smoothed voltage
+        let dv = v + dv0;
+        let mv = (dv * dv + 4.0 * aj * aj).sqrt();
+        let vl = -0.5 * (dv + mv) + vl0;
+        let dvl_dv = -0.5 * (1.0 + dv / mv);
 
-        // Include smoothing factor (1 + aj*dvh)
-        let q_out = q * (1.0 + aj * dvh);
-        let c_out = c * ddvh_dv * (1.0 + aj * dvh) + q * aj * ddvh_dv;
-        (q_out, c_out)
+        let one_minus_vlp = (1.0 - vl / p).max(1e-20);
+        let pow_1mm = one_minus_vlp.powf(1.0 - m);
+        let q = p * (1.0 - pow_1mm) / (1.0 - m);
+        let c = one_minus_vlp.powf(-m) * dvl_dv;
+        (cj * q, cj * c)
     }
 }
 
@@ -555,6 +568,13 @@ impl VbicModel {
     /// Always internal: collCI, baseBI, baseBP (3 minimum).
     /// Conditional: collCX (if RCX>0), baseBX (if RBX>0), emitEI (if RE>0), subsSI (if RS>0).
     pub fn internal_node_count(&self) -> usize {
+        self.internal_node_count_with_substrate(true)
+    }
+
+    /// Count internal nodes, optionally excluding substrate internal node.
+    /// When the BJT has no substrate terminal (3-terminal device), the SI
+    /// node should not be created even if RS > 0.
+    pub fn internal_node_count_with_substrate(&self, has_substrate: bool) -> usize {
         let mut count = 3; // collCI, baseBI, baseBP always present
         if self.rcx > 0.0 {
             count += 1;
@@ -565,7 +585,7 @@ impl VbicModel {
         if self.re > 0.0 {
             count += 1;
         }
-        if self.rs > 0.0 {
+        if has_substrate && self.rs > 0.0 {
             count += 1;
         }
         count
@@ -782,17 +802,19 @@ impl VbicModel {
         // =====================================================================
         // 3. Base charge normalization (qb)
         // =====================================================================
-        let q1_term_vef = if self.vef > 0.0 { qdbe / self.vef } else { 0.0 };
-        let q1_term_ver = if self.ver > 0.0 { qdbc / self.ver } else { 0.0 };
-        let q1z = 1.0 + q1_term_vef + q1_term_ver;
+        // ngspice: q1z = 1 + qdbe*IVER + qdbc*IVEF  (IVER=1/VER, IVEF=1/VEF)
+        // So: qdbe/VER + qdbc/VEF
+        let q1_term_ver = if self.ver > 0.0 { qdbe / self.ver } else { 0.0 };
+        let q1_term_vef = if self.vef > 0.0 { qdbc / self.vef } else { 0.0 };
+        let q1z = 1.0 + q1_term_ver + q1_term_vef;
 
-        let dq1z_dvbei = if self.vef > 0.0 {
-            dqdbe_dvbei / self.vef
+        let dq1z_dvbei = if self.ver > 0.0 {
+            dqdbe_dvbei / self.ver
         } else {
             0.0
         };
-        let dq1z_dvbci = if self.ver > 0.0 {
-            dqdbc_dvbci / self.ver
+        let dq1z_dvbci = if self.vef > 0.0 {
+            dqdbc_dvbci / self.vef
         } else {
             0.0
         };
@@ -1124,7 +1146,7 @@ impl VbicModel {
         };
 
         // =====================================================================
-        // 8. Depletion charges (for future transient use, store in companion)
+        // 8. Depletion charges
         // =====================================================================
         let (qbe, cqbe) = depletion_charge(vbei, self.cje_t, self.pe_t, self.me, self.aje, self.fc);
         let (qbc, cqbc) = depletion_charge(vbci, self.cjc_t, self.pc_t, self.mc, self.ajc, self.fc);
@@ -1132,6 +1154,119 @@ impl VbicModel {
             depletion_charge(vbep, self.cjep_t, self.pe_t, self.me, self.aje, self.fc);
         let (qbcp, cqbcp) =
             depletion_charge(vbcp, self.cjcp_t, self.ps_t, self.ms, self.ajs, self.fc);
+
+        // External BE depletion charge (1-WBE fraction)
+        let (_qbex, cqbex) =
+            depletion_charge(vbex, self.cje_t, self.pe_t, self.me, self.aje, self.fc);
+
+        // =====================================================================
+        // 9. Transit time charges (TF modulation from vbicload.c lines 3830-3887)
+        // =====================================================================
+        // Forward transit time with ITF/XTF/VTF modulation:
+        //   tff = TF * (1 + QTF*q1) * (1 + XTF*exp(Vbci/(1.44*VTF)) * (slTF + mIf^2) * sgIf)
+        // where q1 = qdbe/VER + qdbc/VEF (Early charge terms)
+        //       mIf = rIf/(rIf+1), rIf = Ifi/(Ifi+IKF_t)
+        //       sgIf = sign(Ifi), slTF = 0 (simplified)
+        let (tff, dtff_dvbei, dtff_dvbci) = if self.tf > 0.0 {
+            let q1 = q1_term_vef + q1_term_ver;
+            let dq1_dvbei = dq1z_dvbei; // dq1z_dvbei excludes the base 1.0
+            let dq1_dvbci = dq1z_dvbci;
+
+            let qtf_factor = 1.0 + self.qtf * q1;
+            let dqtf_factor_dvbei = self.qtf * dq1_dvbei;
+            let dqtf_factor_dvbci = self.qtf * dq1_dvbci;
+
+            if self.xtf > 0.0 && self.itf > 0.0 {
+                // ITF/XTF modulation
+                let rif = if self.ikf_t > 0.0 {
+                    ifi / (ifi + self.ikf_t)
+                } else {
+                    0.0
+                };
+                let drif_dvbei = if self.ikf_t > 0.0 {
+                    difi_dvbei * self.ikf_t / ((ifi + self.ikf_t) * (ifi + self.ikf_t))
+                } else {
+                    0.0
+                };
+
+                let mif = rif / (rif + 1.0);
+                let dmif_drif = 1.0 / ((rif + 1.0) * (rif + 1.0));
+                let dmif_dvbei = dmif_drif * drif_dvbei;
+
+                let ivtf = if self.vtf > 0.0 { 1.0 / self.vtf } else { 0.0 };
+                let xvar1 = vbci * ivtf / 1.44;
+                let xvar2 = safe_exp(xvar1);
+                let dxvar2_dvbci = xvar2 * ivtf / 1.44;
+
+                let sgif = if ifi >= 0.0 { 1.0 } else { -1.0 };
+                let sl_tf = 0.0; // slTF simplified
+
+                let xtf_term = 1.0 + self.xtf * xvar2 * (sl_tf + mif * mif) * sgif;
+                let dxtf_dvbei = self.xtf * xvar2 * 2.0 * mif * dmif_dvbei * sgif;
+                let dxtf_dvbci = self.xtf * dxvar2_dvbci * (sl_tf + mif * mif) * sgif;
+
+                let tff_val = self.tf * qtf_factor * xtf_term;
+                let dtff_dvbei_val =
+                    self.tf * (dqtf_factor_dvbei * xtf_term + qtf_factor * dxtf_dvbei);
+                let dtff_dvbci_val =
+                    self.tf * (dqtf_factor_dvbci * xtf_term + qtf_factor * dxtf_dvbci);
+                (tff_val, dtff_dvbei_val, dtff_dvbci_val)
+            } else {
+                let tff_val = self.tf * qtf_factor;
+                let dtff_dvbei_val = self.tf * dqtf_factor_dvbei;
+                let dtff_dvbci_val = self.tf * dqtf_factor_dvbci;
+                (tff_val, dtff_dvbei_val, dtff_dvbci_val)
+            }
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+
+        // Total Qbe = CJE_t * qdbe * WBE + tff * Ifi / qb
+        let dtransit_dvbei =
+            (dtff_dvbei * ifi + tff * difi_dvbei) / qb - tff * ifi * dqb_dvbei / (qb * qb);
+        let dtransit_dvbci = dtff_dvbci * ifi / qb - tff * ifi * dqb_dvbci / (qb * qb);
+
+        let cqbe_vbei = cqbe * self.wbe + dtransit_dvbei;
+        let cqbe_vbci = dtransit_dvbci;
+
+        // External BE: Qbex = CJE_t * qdbex * (1-WBE)
+        let cqbex_vbex = cqbex * (1.0 - self.wbe);
+
+        // Total Qbc = CJC_t * qdbc + TR * Iri + QCO * Kbci
+        // Kbci from quasi-saturation model
+        let gamm_exp_bci = self.gamm_t * safe_exp(vbci / vt);
+        let kbci = (1.0 + gamm_exp_bci).sqrt();
+        let dkbci_dvbci = if kbci > 0.0 {
+            gamm_exp_bci / (vt * 2.0 * kbci)
+        } else {
+            0.0
+        };
+        let cqbc_vbci = cqbc + self.tr * diri_dvbci + self.qco * dkbci_dvbci;
+
+        // Qbcx = QCO * Kbcx
+        let gamm_exp_bcx = self.gamm_t * safe_exp(vbcx / vt);
+        let kbcx = (1.0 + gamm_exp_bcx).sqrt();
+        let dkbcx_dvbcx = if kbcx > 0.0 {
+            gamm_exp_bcx / (vt * 2.0 * kbcx)
+        } else {
+            0.0
+        };
+        let cqbcx_vbcx = self.qco * dkbcx_dvbcx;
+
+        // Qbep = CJEP_t * qdbep + TR * Ifp (parasitic forward current)
+        let (ifp_for_charge, difp_dvbep_for_charge) = if self.isp_t > 0.0 {
+            let arg = vbep / (self.nfp * vt);
+            let ef = safe_exp(arg);
+            (self.isp_t * (ef - 1.0), self.isp_t / (self.nfp * vt) * ef)
+        } else {
+            (0.0, 0.0)
+        };
+        let _ = ifp_for_charge; // Ifp value used for charge only
+        let cqbep_vbep = cqbep + self.tr * difp_dvbep_for_charge;
+        let cqbep_vbci = 0.0; // Ifp doesn't depend on Vbci in 4T model
+
+        // Qbcp = CJCP_t * qdbcp + CCSO * Vbcp
+        let cqbcp_vbcp = cqbcp + self.ccso;
 
         VbicCompanion {
             // Transport
@@ -1183,6 +1318,16 @@ impl VbicModel {
             cqbep,
             qbcp,
             cqbcp,
+
+            // Total charge derivatives for AC
+            cqbe_vbei,
+            cqbe_vbci,
+            cqbex_vbex,
+            cqbc_vbci,
+            cqbcx_vbcx,
+            cqbep_vbep,
+            cqbep_vbci,
+            cqbcp_vbcp,
 
             // Operating point info
             itzf,
@@ -1329,7 +1474,7 @@ pub struct VbicCompanion {
     pub irbp: f64,
     pub dirbp_dvrbp: f64,
 
-    // Depletion charges and capacitances
+    // Depletion charges and capacitances (raw, for reference)
     pub qbe: f64,
     pub cqbe: f64,
     pub qbc: f64,
@@ -1338,6 +1483,17 @@ pub struct VbicCompanion {
     pub cqbep: f64,
     pub qbcp: f64,
     pub cqbcp: f64,
+
+    // Total charge derivatives for AC analysis (depletion + transit time + overlap)
+    // These include transit time modulation and are the values used for AC stamps.
+    pub cqbe_vbei: f64,  // dQbe/dVbei (depletion*WBE + transit time)
+    pub cqbe_vbci: f64,  // dQbe/dVbci (transit time cross-derivative)
+    pub cqbex_vbex: f64, // dQbex/dVbex (external BE depletion * (1-WBE))
+    pub cqbc_vbci: f64,  // dQbc/dVbci (depletion + TR*dIri/dVbci + QCO*dKbci/dVbci)
+    pub cqbcx_vbcx: f64, // dQbcx/dVbcx (QCO*dKbcx/dVbcx)
+    pub cqbep_vbep: f64, // dQbep/dVbep (parasitic depletion + TR*dIfp/dVbep)
+    pub cqbep_vbci: f64, // dQbep/dVbci (parasitic transit cross-derivative)
+    pub cqbcp_vbcp: f64, // dQbcp/dVbcp (substrate depletion + CCSO)
 
     // Operating point
     pub itzf: f64,
@@ -1394,12 +1550,12 @@ impl VbicInstance {
         let vbei = sign * (v_bi - v_ei);
         let vbex = sign * (v_bx - v_ei);
         let vbci = sign * (v_bi - v_ci);
-        let vbcx = sign * (v_bx - v_ci);
-        let vbep = sign * (v_bp - v_ei);
+        let vbcx = sign * (v_bi - v_cx);
+        let vbep = sign * (v_bx - v_bp);
         let vrci = sign * (v_cx - v_ci); // across internal collector resistance
         let vrbi = sign * (v_bx - v_bi); // across internal base resistance
         let vrbp = sign * (v_bp - v_cx); // across parasitic base resistance (BP to CX)
-        let vbcp = sign * (v_bp - v_si); // parasitic B-C (substrate)
+        let vbcp = sign * (v_si - v_bp); // parasitic B-C (substrate)
 
         (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp)
     }
@@ -1545,33 +1701,35 @@ pub fn stamp_vbic_with_voltages(
     }
 
     // -----------------------------------------------------------------
-    // 5. Ibep: BP -> EI, controlled by Vbep
+    // 5. Ibep: BX -> BP, controlled by Vbep = V(BX) - V(BP)
     // -----------------------------------------------------------------
-    stamp_branch!(bp, ei, bp, ei, comp.dibep_dvbep, comp.ibep, vbep);
+    stamp_branch!(bx, bp, bx, bp, comp.dibep_dvbep, comp.ibep, vbep);
 
     // -----------------------------------------------------------------
-    // 6. Ibcp: BP -> SI, controlled by Vbcp
+    // 6. Ibcp: SI -> BP, controlled by Vbcp = V(SI) - V(BP)
     // -----------------------------------------------------------------
-    stamp_branch!(bp, si, bp, si, comp.dibcp_dvbcp, comp.ibcp, vbcp);
+    stamp_branch!(si, bp, si, bp, comp.dibcp_dvbcp, comp.ibcp, vbcp);
 
     // -----------------------------------------------------------------
-    // 7. Iccp: BP -> SI, controlled by Vbep and Vbcp (parasitic transport)
+    // 7. Iccp: BX -> SI, controlled by Vbep, Vbci, Vbcp (parasitic transport)
     // -----------------------------------------------------------------
     {
+        // Vbep = V(BX) - V(BP) control
         let g_bep = scale * comp.diccp_dvbep;
-        m_add(bp, bp, g_bep);
-        m_add(bp, ei, -g_bep);
-        m_add(si, bp, -g_bep);
-        m_add(si, ei, g_bep);
+        m_add(bx, bx, g_bep);
+        m_add(bx, bp, -g_bep);
+        m_add(si, bx, -g_bep);
+        m_add(si, bp, g_bep);
 
+        // Vbcp = V(SI) - V(BP) control
         let g_bcp = scale * comp.diccp_dvbcp;
-        m_add(bp, bp, g_bcp);
-        m_add(bp, si, -g_bcp);
-        m_add(si, bp, -g_bcp);
-        m_add(si, si, g_bcp);
+        m_add(bx, si, g_bcp);
+        m_add(bx, bp, -g_bcp);
+        m_add(si, si, -g_bcp);
+        m_add(si, bp, g_bcp);
 
         let i_eq = sign * scale * (comp.iccp - comp.diccp_dvbep * vbep - comp.diccp_dvbcp * vbcp);
-        r_add(bp, -i_eq);
+        r_add(bx, -i_eq);
         r_add(si, i_eq);
     }
 
@@ -1595,10 +1753,10 @@ pub fn stamp_vbic_with_voltages(
 
         let g_bcx = scale * comp.dirci_dvbcx;
         if g_bcx.abs() > 0.0 {
-            m_add(cx, bx, g_bcx);
-            m_add(cx, ci, -g_bcx);
-            m_add(ci, bx, -g_bcx);
-            m_add(ci, ci, g_bcx);
+            m_add(cx, bi, g_bcx);
+            m_add(cx, cx, -g_bcx);
+            m_add(ci, bi, -g_bcx);
+            m_add(ci, cx, g_bcx);
         }
 
         let i_eq = sign
@@ -1889,5 +2047,169 @@ mod tests {
         // depletion charge, so the relationship is more complex. Just verify both are positive.
         assert!(comp1.iciei > 0.0);
         assert!(comp2.iciei > 0.0);
+    }
+
+    #[test]
+    fn test_companion_pnp_gummel_low_bias() {
+        // Test the companion at the exact FG Gummel parameters at Vbe=0.2V
+        let model_def = ModelDef {
+            name: "P1".to_string(),
+            kind: "PNP".to_string(),
+            params: vec![
+                Param {
+                    name: "IS".into(),
+                    value: Expr::Num(1e-16),
+                },
+                Param {
+                    name: "IBEI".into(),
+                    value: Expr::Num(1e-18),
+                },
+                Param {
+                    name: "IBEN".into(),
+                    value: Expr::Num(5e-15),
+                },
+                Param {
+                    name: "IBCI".into(),
+                    value: Expr::Num(2e-17),
+                },
+                Param {
+                    name: "IBCN".into(),
+                    value: Expr::Num(5e-15),
+                },
+                Param {
+                    name: "ISP".into(),
+                    value: Expr::Num(1e-15),
+                },
+                Param {
+                    name: "RCX".into(),
+                    value: Expr::Num(10.0),
+                },
+                Param {
+                    name: "RCI".into(),
+                    value: Expr::Num(60.0),
+                },
+                Param {
+                    name: "RBX".into(),
+                    value: Expr::Num(10.0),
+                },
+                Param {
+                    name: "RBI".into(),
+                    value: Expr::Num(40.0),
+                },
+                Param {
+                    name: "RE".into(),
+                    value: Expr::Num(2.0),
+                },
+                Param {
+                    name: "RS".into(),
+                    value: Expr::Num(20.0),
+                },
+                Param {
+                    name: "RBP".into(),
+                    value: Expr::Num(40.0),
+                },
+                Param {
+                    name: "VEF".into(),
+                    value: Expr::Num(10.0),
+                },
+                Param {
+                    name: "VER".into(),
+                    value: Expr::Num(4.0),
+                },
+                Param {
+                    name: "IKF".into(),
+                    value: Expr::Num(2e-3),
+                },
+                Param {
+                    name: "IKR".into(),
+                    value: Expr::Num(2e-4),
+                },
+                Param {
+                    name: "IKP".into(),
+                    value: Expr::Num(2e-4),
+                },
+                Param {
+                    name: "CJE".into(),
+                    value: Expr::Num(1e-13),
+                },
+                Param {
+                    name: "CJC".into(),
+                    value: Expr::Num(2e-14),
+                },
+                Param {
+                    name: "CJEP".into(),
+                    value: Expr::Num(1e-13),
+                },
+                Param {
+                    name: "CJCP".into(),
+                    value: Expr::Num(4e-13),
+                },
+                Param {
+                    name: "VO".into(),
+                    value: Expr::Num(2.0),
+                },
+                Param {
+                    name: "GAMM".into(),
+                    value: Expr::Num(2e-11),
+                },
+                Param {
+                    name: "HRCF".into(),
+                    value: Expr::Num(2.0),
+                },
+                Param {
+                    name: "QCO".into(),
+                    value: Expr::Num(1e-12),
+                },
+                Param {
+                    name: "AVC1".into(),
+                    value: Expr::Num(2.0),
+                },
+                Param {
+                    name: "AVC2".into(),
+                    value: Expr::Num(15.0),
+                },
+                Param {
+                    name: "TF".into(),
+                    value: Expr::Num(10e-12),
+                },
+                Param {
+                    name: "TR".into(),
+                    value: Expr::Num(100e-12),
+                },
+                Param {
+                    name: "TD".into(),
+                    value: Expr::Num(2e-11),
+                },
+                Param {
+                    name: "RTH".into(),
+                    value: Expr::Num(300.0),
+                },
+            ],
+        };
+        let mut m = VbicModel::from_model_def(&model_def);
+        m.temperature_adjust(27.0);
+
+        // At Vbei=0.2V (forward bias for PNP), all other junctions at 0V
+        let comp = m.companion(0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+
+        // Expected: IS * exp(0.2/Vt) ≈ 1e-16 * 2277 ≈ 2.28e-13
+        eprintln!("iciei = {:.6e}", comp.iciei);
+        eprintln!("itzf = {:.6e}", comp.itzf);
+        eprintln!("ibe = {:.6e}", comp.ibe);
+        eprintln!("ibc = {:.6e}", comp.ibc);
+        eprintln!("ibep = {:.6e}", comp.ibep);
+        eprintln!("ibcp = {:.6e}", comp.ibcp);
+        eprintln!("iccp = {:.6e}", comp.iccp);
+        eprintln!("irci = {:.6e}", comp.irci);
+        eprintln!("irbi = {:.6e}", comp.irbi);
+        eprintln!("irbp = {:.6e}", comp.irbp);
+        eprintln!("qb = {:.6e}", comp.qb);
+
+        // Iciei should be around 2.17e-13 (ngspice reference)
+        assert!(
+            comp.iciei > 1e-14 && comp.iciei < 1e-11,
+            "iciei should be ~2e-13, got {:.6e}",
+            comp.iciei
+        );
     }
 }

@@ -6,6 +6,29 @@ use crate::expr_val;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
 use crate::newton::{NrOptions, newton_raphson_solve};
 
+/// Extract Newton-Raphson options from netlist `.OPTIONS` directives.
+pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
+    let mut opts = NrOptions::default();
+    for item in &netlist.items {
+        if let Item::Options(params) = item {
+            for p in params {
+                if let Expr::Num(v) = &p.value {
+                    match p.name.to_uppercase().as_str() {
+                        "GMIN" => opts.gmin = *v,
+                        "ABSTOL" => opts.abstol = *v,
+                        "RELTOL" => opts.reltol = *v,
+                        "VNTOL" => opts.vntol = *v,
+                        "ITL1" => opts.itl1 = *v as usize,
+                        "ITL2" => opts.itl2 = *v as usize,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    opts
+}
+
 /// Compute the DC operating point of a circuit.
 ///
 /// Assembles the MNA system from the netlist, solves it, and returns
@@ -13,6 +36,7 @@ use crate::newton::{NrOptions, newton_raphson_solve};
 /// Uses Newton-Raphson iteration when nonlinear elements (diodes) are present.
 pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
+    let nr_opts = nr_options_from_netlist(netlist);
 
     let solution_vec = if !mna.has_nonlinear() {
         // Pure linear circuit — direct solve.
@@ -33,7 +57,7 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
         values
     } else {
         // Nonlinear circuit — use Newton-Raphson.
-        solve_nonlinear_op(&mna)?
+        solve_nonlinear_op(&mna, &nr_opts)?
     };
 
     let mut vecs = Vec::new();
@@ -82,15 +106,22 @@ pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     if !mna.has_nonlinear() {
         mna.system.solve().map_err(MnaError::from)
     } else {
-        solve_nonlinear_op(mna)
+        solve_nonlinear_op(mna, &NrOptions::default())
     }
 }
 
 /// Solve a nonlinear DC operating point using Newton-Raphson.
-pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
+pub fn solve_nonlinear_op(mna: &MnaSystem, options: &NrOptions) -> Result<Vec<f64>, MnaError> {
+    solve_nonlinear_op_with_guess(mna, options, None)
+}
+
+fn solve_nonlinear_op_with_guess(
+    mna: &MnaSystem,
+    options: &NrOptions,
+    initial_guess: Option<&[f64]>,
+) -> Result<Vec<f64>, MnaError> {
     let dim = mna.system.dim();
     let num_nodes = mna.total_num_nodes();
-    let options = NrOptions::default();
 
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -110,8 +141,11 @@ pub(crate) fn solve_nonlinear_op(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> 
         dev_state.stamp_devices(solution, system, mna);
     };
 
-    let initial = vec![0.0; dim];
-    let result = newton_raphson_solve(&options, dim, num_nodes, load, &initial).map_err(|e| {
+    let initial = match initial_guess {
+        Some(guess) if guess.len() == dim => guess.to_vec(),
+        _ => vec![0.0; dim],
+    };
+    let result = newton_raphson_solve(options, dim, num_nodes, load, &initial).map_err(|e| {
         MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string()))
     })?;
 
@@ -263,6 +297,7 @@ fn get_source_dc_value(netlist: &Netlist, src_name: &str) -> f64 {
 /// Sweeps a source across a range of values, computing the DC operating point
 /// at each step. Supports single and double (nested) sweeps.
 pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let nr_opts = nr_options_from_netlist(netlist);
     // Find the .dc analysis command in the netlist.
     let (src, start, stop, step, src2) = netlist
         .items
@@ -340,6 +375,8 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         None
     };
 
+    let mut prev_solution: Option<Vec<f64>> = None;
+
     if let Some((ref sweep2, original_dc2, ref points2)) = sweep2_info {
         // Double sweep: outer loop is src2, inner loop is src1
         for &v2 in points2 {
@@ -349,7 +386,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
             for &v1 in &points1 {
                 set_source_value(&mut mna, &sweep1, v1, &rhs_after_src2, original_dc1);
                 vecs[0].real.push(v1);
-                collect_solution_into(&mna, &mut vecs[1..])?;
+                collect_solution_into(&mna, &nr_opts, &mut vecs[1..], &mut prev_solution)?;
             }
         }
     } else {
@@ -357,7 +394,7 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         for &v1 in &points1 {
             set_source_value(&mut mna, &sweep1, v1, &original_rhs, original_dc1);
             vecs[0].real.push(v1);
-            collect_solution_into(&mna, &mut vecs[1..])?;
+            collect_solution_into(&mna, &nr_opts, &mut vecs[1..], &mut prev_solution)?;
         }
     }
 
@@ -370,7 +407,12 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
 }
 
 /// Solve the MNA system and append the solution to result vectors.
-fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), MnaError> {
+fn collect_solution_into(
+    mna: &MnaSystem,
+    nr_opts: &NrOptions,
+    vecs: &mut [SimVector],
+    prev_solution: &mut Option<Vec<f64>>,
+) -> Result<(), MnaError> {
     if !mna.has_nonlinear() {
         // Linear circuit — direct solve.
         let solution = mna.solve()?;
@@ -388,31 +430,10 @@ fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), 
             idx += 1;
         }
     } else {
-        // Nonlinear circuit — use NR solver.
-        let sol = solve_nonlinear_op(mna)?;
+        // Nonlinear circuit — use NR solver with previous solution as initial guess.
+        let sol = solve_nonlinear_op_with_guess(mna, nr_opts, prev_solution.as_deref())?;
         let mut idx = 0;
-        let num_ext_nodes = mna.node_map.len();
-        let num_internal_diodes = mna
-            .diodes
-            .iter()
-            .filter(|d| d.internal_idx.is_some())
-            .count();
-        let num_internal_bjts: usize = mna.bjts.iter().map(|b| b.model.internal_node_count()).sum();
-        let num_internal_mosfets: usize = mna
-            .mosfets
-            .iter()
-            .map(|m| m.model.internal_node_count())
-            .sum();
-        let num_internal_jfets: usize = mna
-            .jfets
-            .iter()
-            .map(|j| j.model.internal_node_count())
-            .sum();
-        let num_nodes = num_ext_nodes
-            + num_internal_diodes
-            + num_internal_bjts
-            + num_internal_mosfets
-            + num_internal_jfets;
+        let num_nodes = mna.total_num_nodes();
 
         for (_name, node_idx) in mna.node_map.iter() {
             vecs[idx].real.push(sol[node_idx]);
@@ -423,6 +444,8 @@ fn collect_solution_into(mna: &MnaSystem, vecs: &mut [SimVector]) -> Result<(), 
             vecs[idx].real.push(sol[num_nodes + i]);
             idx += 1;
         }
+
+        *prev_solution = Some(sol);
     }
 
     Ok(())
