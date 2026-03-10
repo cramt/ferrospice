@@ -33,6 +33,7 @@ pub(crate) mod device_stamp;
 pub mod diode;
 pub mod jfet;
 pub mod mna;
+pub mod mos6;
 pub mod mosfet;
 pub mod newton;
 pub mod noise;
@@ -65,6 +66,7 @@ pub use mna::{
     CapacitorInstance, CurrentSourceInstance, DiodeInstance, InductorInstance, MnaError, MnaSystem,
     ResistorInstance, VoltageSourceInstance, assemble_mna, stamp_conductance,
 };
+pub use mos6::{Mos6Instance, Mos6Model, stamp_mos6};
 pub use mosfet::{MosfetInstance, MosfetModel, MosfetType, stamp_mosfet};
 pub use newton::{NrError, NrOptions, NrResult, newton_raphson_solve};
 pub use noise::simulate_noise;

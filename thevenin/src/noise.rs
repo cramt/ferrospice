@@ -389,6 +389,46 @@ fn compute_total_noise(
         }
     }
 
+    // MOS6 noise sources.
+    for mos in &mna.mos6s {
+        let (vgs, vds, vbs) = mos.terminal_voltages(op_solution);
+        let betac = mos.betac();
+        let comp = mos.model.companion(vgs, vds, vbs, betac);
+        let m = mos.m;
+
+        let dp = mos.drain_prime_idx;
+        let sp = mos.source_prime_idx;
+
+        // Channel thermal noise: (2/3) * 4kT * |gm|.
+        let gm = comp.gm.abs() * m;
+        let channel_noise = (8.0 / 3.0) * K_BOLTZ * T_NOM * gm;
+        total += channel_noise * adjoint_transfer_sq(adjoint, dp, sp);
+
+        // Drain resistance thermal noise.
+        if mos.model.rd > 0.0 {
+            let g_rd = m / mos.model.rd;
+            let rd_noise = 4.0 * K_BOLTZ * T_NOM * g_rd;
+            total += rd_noise * adjoint_transfer_sq(adjoint, mos.drain_idx, dp);
+        }
+
+        // Source resistance thermal noise.
+        if mos.model.rs > 0.0 {
+            let g_rs = m / mos.model.rs;
+            let rs_noise = 4.0 * K_BOLTZ * T_NOM * g_rs;
+            total += rs_noise * adjoint_transfer_sq(adjoint, mos.source_idx, sp);
+        }
+
+        // Flicker noise: KF * |Id|^AF / (f * Cox * L_eff²).
+        if mos.model.kf > 0.0 && freq > 0.0 {
+            let id = comp.cdrain.abs() * m;
+            let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
+            let cox = 3.9 * 8.854e-12 / mos.model.tox;
+            let cox_l_sq = cox * l_eff * l_eff;
+            let flicker = mos.model.kf * id.powf(mos.model.af) / (freq * cox_l_sq);
+            total += flicker * adjoint_transfer_sq(adjoint, dp, sp);
+        }
+    }
+
     // JFET noise sources.
     for jfet in &mna.jfets {
         let (vgs, vgd) = jfet.junction_voltages(op_solution);

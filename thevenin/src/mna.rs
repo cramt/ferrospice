@@ -247,6 +247,8 @@ pub struct MnaSystem {
     pub bjts: Vec<BjtInstance>,
     /// Resolved MOSFET instances for NR iteration.
     pub mosfets: Vec<MosfetInstance>,
+    /// Resolved MOS6 MOSFET instances for NR iteration.
+    pub mos6s: Vec<crate::mos6::Mos6Instance>,
     /// Resolved JFET instances for NR iteration.
     pub jfets: Vec<JfetInstance>,
     /// Resolved BSIM3 MOSFET instances for NR iteration.
@@ -294,6 +296,7 @@ impl MnaSystem {
         !self.diodes.is_empty()
             || !self.bjts.is_empty()
             || !self.mosfets.is_empty()
+            || !self.mos6s.is_empty()
             || !self.jfets.is_empty()
             || !self.bsim3s.is_empty()
             || !self.bsim3soi_dds.is_empty()
@@ -319,6 +322,11 @@ impl MnaSystem {
                 .sum::<usize>()
             + self
                 .mosfets
+                .iter()
+                .map(|m| m.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .mos6s
                 .iter()
                 .map(|m| m.model.internal_node_count())
                 .sum::<usize>()
@@ -678,6 +686,14 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     };
                     let (nrd, nrs) = get_nrd_nrs(params);
                     internal_node_count += bm.internal_node_count(nrd, nrs);
+                } else if level == 6 {
+                    // MOS6
+                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        crate::mos6::Mos6Model::from_model_def(mdef)
+                    } else {
+                        crate::mos6::Mos6Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+                    internal_node_count += mm.internal_node_count();
                 } else {
                     let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
                         MosfetModel::from_model_def(mdef)
@@ -761,6 +777,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut bjts = Vec::new();
     let mut vbics = Vec::new();
     let mut mosfets = Vec::new();
+    let mut mos6s = Vec::new();
     let mut jfets = Vec::new();
     let mut bsim3s = Vec::new();
     let mut bsim3soi_dds = Vec::new();
@@ -1303,6 +1320,46 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         vth0_inst,
                         nbc,
                     });
+                } else if level == 6 {
+                    // MOS6
+                    let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                        crate::mos6::Mos6Model::from_model_def(mdef)
+                    } else {
+                        crate::mos6::Mos6Model::new(crate::mosfet::MosfetType::Nmos)
+                    };
+
+                    let drain_prime_idx = if mm.rd > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        drain_idx
+                    };
+                    let source_prime_idx = if mm.rs > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        source_idx
+                    };
+
+                    mos6s.push(crate::mos6::Mos6Instance {
+                        name: element.name.clone(),
+                        drain_idx,
+                        gate_idx,
+                        source_idx,
+                        bulk_idx,
+                        drain_prime_idx,
+                        source_prime_idx,
+                        model: mm,
+                        w,
+                        l,
+                        ad,
+                        as_,
+                        pd,
+                        ps,
+                        m: m_mult,
+                    });
                 } else {
                     let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
                         MosfetModel::from_model_def(mdef)
@@ -1611,6 +1668,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         diodes,
         bjts,
         mosfets,
+        mos6s,
         jfets,
         capacitors,
         inductors,

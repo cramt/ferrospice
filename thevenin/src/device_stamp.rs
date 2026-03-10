@@ -114,6 +114,7 @@ pub(crate) struct DeviceVoltageState {
     vcrits: Vec<f64>,
     prev_bjt: RefCell<Vec<(f64, f64)>>,
     prev_mos: RefCell<Vec<(f64, f64)>>,
+    prev_mos6: RefCell<Vec<(f64, f64)>>,
     prev_jfet: RefCell<Vec<(f64, f64)>>,
     jfet_vcrits: Vec<f64>,
     prev_bsim3: RefCell<Vec<(f64, f64, f64)>>,
@@ -143,6 +144,7 @@ impl DeviceVoltageState {
             vcrits,
             prev_bjt: RefCell::new(vec![(0.0, 0.0); mna.bjts.len()]),
             prev_mos: RefCell::new(vec![(0.0, 0.0); mna.mosfets.len()]),
+            prev_mos6: RefCell::new(vec![(0.0, 0.0); mna.mos6s.len()]),
             prev_jfet: RefCell::new(vec![(0.0, 0.0); mna.jfets.len()]),
             jfet_vcrits,
             prev_bsim3: RefCell::new(vec![(0.0, 0.0, 0.0); mna.bsim3s.len()]),
@@ -193,6 +195,15 @@ impl DeviceVoltageState {
             ),
             prev_mos: RefCell::new(
                 mna.mosfets
+                    .iter()
+                    .map(|m| {
+                        let (vgs, vds, _vbs) = m.terminal_voltages(prev_solution);
+                        (vgs, vds)
+                    })
+                    .collect(),
+            ),
+            prev_mos6: RefCell::new(
+                mna.mos6s
                     .iter()
                     .map(|m| {
                         let (vgs, vds, _vbs) = m.terminal_voltages(prev_solution);
@@ -305,6 +316,21 @@ impl DeviceVoltageState {
 
                 let comp = eff_model.companion(vgs, vds, vbs);
                 stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
+            }
+        }
+
+        // MOS6 (level 6)
+        {
+            let mut prev = self.prev_mos6.borrow_mut();
+            for (mi, mos) in mna.mos6s.iter().enumerate() {
+                let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
+
+                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
+                prev[mi] = (vgs, vds);
+
+                let betac = mos.betac();
+                let comp = mos.model.companion(vgs, vds, vbs, betac);
+                crate::mos6::stamp_mos6(&mut system.matrix, &mut system.rhs, mos, &comp);
             }
         }
 

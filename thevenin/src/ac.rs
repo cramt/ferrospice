@@ -361,6 +361,91 @@ pub fn stamp_ac_devices(
         }
     }
 
+    // 5b2. Stamp MOS6 small-signal model at DC operating point.
+    for mos in &mna.mos6s {
+        let (vgs, vds, vbs) = mos.terminal_voltages(op_solution);
+        let betac = mos.betac();
+        let comp = mos.model.companion(vgs, vds, vbs, betac);
+        let m = mos.m;
+
+        let dp = mos.drain_prime_idx;
+        let g = mos.gate_idx;
+        let sp = mos.source_prime_idx;
+        let b = mos.bulk_idx;
+
+        let (xnrm, xrev) = if comp.mode > 0 {
+            (1.0, 0.0)
+        } else {
+            (0.0, 1.0)
+        };
+
+        crate::stamp_conductance(&mut sys.real, dp, sp, m * comp.gds);
+
+        let gm_scaled = m * comp.gm;
+        if let Some(d) = dp {
+            if let Some(gate) = g {
+                sys.real.add(d, gate, (xnrm - xrev) * gm_scaled);
+            }
+            if let Some(s) = sp {
+                sys.real.add(d, s, -(xnrm - xrev) * gm_scaled);
+            }
+        }
+        if let Some(s) = sp {
+            if let Some(gate) = g {
+                sys.real.add(s, gate, -(xnrm - xrev) * gm_scaled);
+            }
+            sys.real.add(s, s, (xnrm - xrev) * gm_scaled);
+        }
+
+        let gmbs_scaled = m * comp.gmbs;
+        if let Some(d) = dp {
+            if let Some(bulk) = b {
+                sys.real.add(d, bulk, (xnrm - xrev) * gmbs_scaled);
+            }
+            if let Some(s) = sp {
+                sys.real.add(d, s, -(xnrm - xrev) * gmbs_scaled);
+            }
+        }
+        if let Some(s) = sp {
+            if let Some(bulk) = b {
+                sys.real.add(s, bulk, -(xnrm - xrev) * gmbs_scaled);
+            }
+            sys.real.add(s, s, (xnrm - xrev) * gmbs_scaled);
+        }
+
+        crate::stamp_conductance(&mut sys.real, b, dp, m * comp.gbd);
+        crate::stamp_conductance(&mut sys.real, b, sp, m * comp.gbs);
+
+        if mos.model.rd > 0.0 {
+            crate::stamp_conductance(&mut sys.real, mos.drain_idx, dp, m / mos.model.rd);
+        }
+        if mos.model.rs > 0.0 {
+            crate::stamp_conductance(&mut sys.real, mos.source_idx, sp, m / mos.model.rs);
+        }
+
+        let cgso = mos.model.cgso * mos.w;
+        let cgdo = mos.model.cgdo * mos.w;
+        let l_eff = (mos.l - 2.0 * mos.model.ld).max(1e-12);
+        let cgbo = mos.model.cgbo * l_eff;
+
+        if cgso > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, g, sp, omega * m * cgso);
+        }
+        if cgdo > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, g, dp, omega * m * cgdo);
+        }
+        if cgbo > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, g, b, omega * m * cgbo);
+        }
+
+        if mos.model.cbd > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, b, dp, omega * m * mos.model.cbd);
+        }
+        if mos.model.cbs > 0.0 {
+            stamp_imag_conductance(&mut sys.imag, b, sp, omega * m * mos.model.cbs);
+        }
+    }
+
     // 5c. Stamp JFET small-signal model at DC operating point.
     for jfet in &mna.jfets {
         let (vgs, vgd) = jfet.junction_voltages(op_solution);
