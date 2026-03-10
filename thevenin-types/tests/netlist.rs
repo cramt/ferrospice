@@ -23,8 +23,7 @@ fn parse(src: &str) -> Netlist {
 }
 
 fn num(src: &str) -> f64 {
-    thevenin_types::parse::parse_spice_number(src)
-        .unwrap_or_else(|| panic!("not a number: {src}"))
+    thevenin_types::parse::parse_spice_number(src).unwrap_or_else(|| panic!("not a number: {src}"))
 }
 
 fn assert_num(expr: &Expr, expected: f64) {
