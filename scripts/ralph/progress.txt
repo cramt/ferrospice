@@ -450,3 +450,15 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 - **Test results:** 9 unit tests + 2 integration tests (simpleinv OP + transient) all passing
 - **Total tests passing:** 172 unit + integration tests
 ---
+
+## Pass 12 — implementation — US-032 MESA FET model
+- Implemented MESA FET (GaAs MESFET) device model with 3 levels (mesa1/mesa2/mesa3)
+- 55+ model parameters, DC/AC/transient stamps, frequency-dependent lambda
+- Noise sources: RD/RS thermal, channel, flicker
+- Voltage limiting: both pnjlim and fetlim for NR convergence
+- Key bugs fixed: stamp_conductance misuse for off-diagonals, ns formula C precedence, CGC denominator
+- Ported 3 integration tests from ngspice (DCFL inverter, gate leakage, level2 double sweep)
+- 11 fixture .cir/.out files from ngspice-upstream/tests/mesa/
+- All tests pass, clippy clean, fmt clean
+- Commit: ea84e7a
+---

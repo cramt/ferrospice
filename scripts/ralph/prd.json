@@ -93,6 +93,13 @@
       "summary": "Implemented MOS6 (Sakurai-Newton n-th power) MOSFET model: Mos6Model with KC/NC/KV/NV/LAMBDA0/LAMBDA1/GAMMA1/SIGMA params, n-th power companion model with cutoff/saturation/linear regions, DC/NR stamping, AC small-signal, noise analysis. 9 unit tests + 2 integration tests (simpleinv.cir OP + transient).",
       "date": "2026-03-10",
       "storyId": "US-033"
+    },
+    {
+      "pass": 12,
+      "type": "implementation",
+      "story": "US-032",
+      "summary": "MESA FET model (Ytterdal/Lee/Shur/Fjeldly GaAs MESFET) with 3 levels, 55+ params, DC/AC/transient stamps, noise, pnjlim+fetlim limiting, 3 integration tests passing",
+      "commit": "ea84e7a"
     }
   ],
   "userStories": [
@@ -745,7 +752,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 32,
-      "passes": false,
+      "passes": true,
       "notes": "MESA is a MESFET variant. Reference: ngspice mesa/ — 3,570 lines total, moderate complexity.",
       "tags": [
         "implementation"
