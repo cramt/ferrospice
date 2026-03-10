@@ -685,6 +685,144 @@ pub fn stamp_ac_devices(
             stamp_imag_conductance(&mut sys.imag, vbic.base_idx, vbic.coll_idx, xqbco);
         }
     }
+
+    // 5h. Stamp MESA FET small-signal model at DC operating point.
+    for mesa in &mna.mesas {
+        let (vgs, vgd) = mesa.junction_voltages(op_solution);
+        let comp = crate::mesa::mesa_companion(mesa, vgs, vgd, 1e-12);
+
+        let f = omega / (2.0 * PI);
+        let pre = &mesa.precomp;
+
+        // Frequency-dependent lambda
+        let lambda = if pre.delf == 0.0 {
+            pre.t_lambda
+        } else {
+            pre.t_lambda
+                + 0.5 * (pre.t_lambdahf - pre.t_lambda) * (1.0 + ((f - pre.fl) / pre.delf).tanh())
+        };
+
+        // Recompute gm/gds with frequency-dependent lambda
+        let vds = vgs - vgd;
+        let delidgch = comp.delidgch0 * (1.0 + lambda * vds);
+        let delidvds = comp.delidvds0 * (1.0 + 2.0 * lambda * vds) - comp.delidvds1;
+        let gm = (delidgch * comp.gm0 + comp.gm1) * comp.gm2;
+        let gds = delidvds + comp.gds0;
+
+        let dp = mesa.drain_prime_idx;
+        let gp = mesa.gate_prime_idx;
+        let sp = mesa.source_prime_idx;
+        let spp = mesa.source_prm_prm_idx;
+        let dpp = mesa.drain_prm_prm_idx;
+
+        // Real stamps - series resistances (individual entries)
+        if let Some(d) = mesa.drain_idx {
+            sys.real.add(d, d, pre.drain_conduct);
+        }
+        if let Some(s) = mesa.source_idx {
+            sys.real.add(s, s, pre.source_conduct);
+        }
+        if let Some(g) = mesa.gate_idx {
+            sys.real.add(g, g, pre.gate_conduct);
+        }
+        if let (Some(d), Some(di)) = (mesa.drain_idx, dp) {
+            sys.real.add(d, di, -pre.drain_conduct);
+            sys.real.add(di, d, -pre.drain_conduct);
+        }
+        if let (Some(s), Some(si)) = (mesa.source_idx, sp) {
+            sys.real.add(s, si, -pre.source_conduct);
+            sys.real.add(si, s, -pre.source_conduct);
+        }
+        if let (Some(g), Some(gi)) = (mesa.gate_idx, gp) {
+            sys.real.add(g, gi, -pre.gate_conduct);
+            sys.real.add(gi, g, -pre.gate_conduct);
+        }
+
+        // spp, dpp diagonal (Gi + ggspp, Gf + ggdpp; spp/dpp terms 0 in DC)
+        if let Some(spp_i) = spp {
+            sys.real.add(spp_i, spp_i, pre.t_gi);
+        }
+        if let Some(dpp_i) = dpp {
+            sys.real.add(dpp_i, dpp_i, pre.t_gf);
+        }
+
+        // Gate' diagonal
+        if let Some(gp_i) = gp {
+            sys.real
+                .add(gp_i, gp_i, comp.ggd + comp.ggs + pre.gate_conduct);
+        }
+        // Drain' diagonal
+        if let Some(dp_i) = dp {
+            sys.real
+                .add(dp_i, dp_i, gds + comp.ggd + pre.drain_conduct + pre.t_gf);
+        }
+        // Source' diagonal
+        if let Some(sp_i) = sp {
+            sys.real.add(
+                sp_i,
+                sp_i,
+                gds + gm + comp.ggs + pre.source_conduct + pre.t_gi,
+            );
+        }
+
+        // Off-diagonal real (individual matrix entries)
+        if let (Some(gi), Some(di)) = (gp, dp) {
+            sys.real.add(gi, di, -comp.ggd);
+        }
+        if let (Some(gi), Some(si)) = (gp, sp) {
+            sys.real.add(gi, si, -comp.ggs);
+        }
+        if let (Some(di), Some(gi)) = (dp, gp) {
+            sys.real.add(di, gi, gm - comp.ggd);
+        }
+        if let (Some(di), Some(si)) = (dp, sp) {
+            sys.real.add(di, si, -gds - gm);
+        }
+        if let (Some(si), Some(gi)) = (sp, gp) {
+            sys.real.add(si, gi, -comp.ggs - gm);
+        }
+        if let (Some(si), Some(di)) = (sp, dp) {
+            sys.real.add(si, di, -gds);
+        }
+
+        // sp <-> spp, dp <-> dpp coupling
+        if let (Some(si), Some(spi)) = (sp, spp) {
+            sys.real.add(si, spi, -pre.t_gi);
+            sys.real.add(spi, si, -pre.t_gi);
+        }
+        if let (Some(di), Some(dpi)) = (dp, dpp) {
+            sys.real.add(di, dpi, -pre.t_gf);
+            sys.real.add(dpi, di, -pre.t_gf);
+        }
+
+        // Imaginary stamps - capacitances on spp/dpp nodes
+        let xgs = comp.capgs * omega;
+        let xgd = comp.capgd * omega;
+        if xgs != 0.0 {
+            if let Some(spi) = spp {
+                sys.imag.add(spi, spi, xgs);
+            }
+            if let Some(gi) = gp {
+                sys.imag.add(gi, gi, xgs);
+            }
+            if let (Some(gi), Some(spi)) = (gp, spp) {
+                sys.imag.add(gi, spi, -xgs);
+                sys.imag.add(spi, gi, -xgs);
+            }
+        }
+        if xgd != 0.0 {
+            if let Some(dpi) = dpp {
+                sys.imag.add(dpi, dpi, xgd);
+            }
+            if let Some(gi) = gp {
+                sys.imag.add(gi, gi, xgd);
+            }
+            if let (Some(gi), Some(dpi)) = (gp, dpp) {
+                sys.imag.add(gi, dpi, -xgd);
+                sys.imag.add(dpi, gi, -xgd);
+            }
+        }
+    }
 }
 
 /// Apply AC source excitation to the complex RHS.

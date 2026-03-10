@@ -583,18 +583,28 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 params,
             }
         }
-        'J' => {
+        'J' | 'Z' => {
             let d = need!(0, "drain").to_string();
             let g = need!(1, "gate").to_string();
             let s = need!(2, "source").to_string();
             let model = need!(3, "model").to_string();
             let params: Vec<_> = rest[4..].iter().filter_map(|t| parse_kv(t)).collect();
-            ElementKind::Jfet {
-                d,
-                g,
-                s,
-                model,
-                params,
+            if letter == 'Z' {
+                ElementKind::Mesa {
+                    d,
+                    g,
+                    s,
+                    model,
+                    params,
+                }
+            } else {
+                ElementKind::Jfet {
+                    d,
+                    g,
+                    s,
+                    model,
+                    params,
+                }
             }
         }
         'K' => {

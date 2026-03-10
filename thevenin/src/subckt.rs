@@ -366,6 +366,19 @@ fn remap_element(
             model: model.clone(),
             params: resolve_params(params, param_map),
         },
+        ElementKind::Mesa {
+            d,
+            g,
+            s,
+            model,
+            params,
+        } => ElementKind::Mesa {
+            d: remap(d),
+            g: remap(g),
+            s: remap(s),
+            model: model.clone(),
+            params: resolve_params(params, param_map),
+        },
         ElementKind::MutualCoupling { l1, l2, coupling } => ElementKind::MutualCoupling {
             l1: format!("{}.{}", prefix, l1.to_lowercase()),
             l2: format!("{}.{}", prefix, l2.to_lowercase()),

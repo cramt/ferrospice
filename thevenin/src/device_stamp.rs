@@ -16,6 +16,7 @@ use crate::bsim3soi_pd::{bsim3soi_pd_companion, bsim3soi_pd_limit, stamp_bsim3so
 use crate::bsim4::{bsim4_companion, bsim4_limit, stamp_bsim4};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::jfet::{jfet_limit, stamp_jfet};
+use crate::mesa::{mesa_companion, stamp_mesa};
 use crate::mna::{MnaSystem, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::vbic::stamp_vbic_with_voltages;
@@ -123,6 +124,9 @@ pub(crate) struct DeviceVoltageState {
     prev_bsim3soi_dd: RefCell<Vec<(f64, f64, f64, f64)>>,
     prev_bsim4: RefCell<Vec<(f64, f64, f64)>>,
     prev_vbic: RefCell<Vec<(f64, f64)>>,
+    prev_mesa: RefCell<Vec<(f64, f64)>>,
+    mesa_vcrits: Vec<f64>,
+    mesa_vcritd: Vec<f64>,
 }
 
 impl DeviceVoltageState {
@@ -153,6 +157,9 @@ impl DeviceVoltageState {
             prev_bsim3soi_dd: RefCell::new(vec![(0.0, 0.0, 0.0, 0.0); mna.bsim3soi_dds.len()]),
             prev_bsim4: RefCell::new(vec![(0.0, 0.0, 0.0); mna.bsim4s.len()]),
             prev_vbic: RefCell::new(vec![(0.0, 0.0); mna.vbics.len()]),
+            prev_mesa: RefCell::new(vec![(0.0, 0.0); mna.mesas.len()]),
+            mesa_vcrits: mna.mesas.iter().map(|m| m.precomp.vcrits).collect(),
+            mesa_vcritd: mna.mesas.iter().map(|m| m.precomp.vcritd).collect(),
         }
     }
 
@@ -249,6 +256,14 @@ impl DeviceVoltageState {
                     .collect(),
             ),
             prev_vbic: RefCell::new(vec![(0.0, 0.0); mna.vbics.len()]),
+            prev_mesa: RefCell::new(
+                mna.mesas
+                    .iter()
+                    .map(|m| m.junction_voltages(prev_solution))
+                    .collect(),
+            ),
+            mesa_vcrits: mna.mesas.iter().map(|m| m.precomp.vcrits).collect(),
+            mesa_vcritd: mna.mesas.iter().map(|m| m.precomp.vcritd).collect(),
         }
     }
 
@@ -504,6 +519,24 @@ impl DeviceVoltageState {
                     vrbp,
                     vbcp,
                 );
+            }
+        }
+
+        // MESA FETs
+        {
+            let mut prev = self.prev_mesa.borrow_mut();
+            for (mi, mesa) in mna.mesas.iter().enumerate() {
+                let (raw_vgs, raw_vgd) = mesa.junction_voltages(solution);
+
+                let vt = mesa.model.n * VT_NOM;
+                let vgs = pnjlim(raw_vgs, prev[mi].0, vt, self.mesa_vcrits[mi]);
+                let vgd = pnjlim(raw_vgd, prev[mi].1, vt, self.mesa_vcritd[mi]);
+                let vgs = fetlim(vgs, prev[mi].0, mesa.precomp.t_vto);
+                let vgd = fetlim(vgd, prev[mi].1, mesa.precomp.t_vto);
+                prev[mi] = (vgs, vgd);
+
+                let comp = mesa_companion(mesa, vgs, vgd, 1e-12);
+                stamp_mesa(&comp, mesa, &mut system.matrix, &mut system.rhs);
             }
         }
     }

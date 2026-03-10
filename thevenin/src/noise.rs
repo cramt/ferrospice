@@ -727,6 +727,41 @@ fn compute_total_noise(
         }
     }
 
+    // MESA FET noise sources.
+    for mesa in &mna.mesas {
+        let (vgs, vgd) = mesa.junction_voltages(op_solution);
+        let comp = crate::mesa::mesa_companion(mesa, vgs, vgd, 1e-12);
+
+        let dp = mesa.drain_prime_idx;
+        let sp = mesa.source_prime_idx;
+        let pre = &mesa.precomp;
+
+        // RD thermal noise: 4kT * drain_conduct
+        if pre.drain_conduct > 0.0 {
+            let rd_noise = 4.0 * K_BOLTZ * T_NOM * pre.drain_conduct;
+            total += rd_noise * adjoint_transfer_sq(adjoint, mesa.drain_idx, dp);
+        }
+
+        // RS thermal noise: 4kT * source_conduct
+        if pre.source_conduct > 0.0 {
+            let rs_noise = 4.0 * K_BOLTZ * T_NOM * pre.source_conduct;
+            total += rs_noise * adjoint_transfer_sq(adjoint, mesa.source_idx, sp);
+        }
+
+        // Channel noise: 4kT * gm * 2/3
+        let id_noise = 4.0 * K_BOLTZ * T_NOM * comp.gm * 2.0 / 3.0;
+        if id_noise > 0.0 {
+            total += id_noise * adjoint_transfer_sq(adjoint, dp, sp);
+        }
+
+        // Flicker noise: KF * |Id|^AF / freq
+        if mesa.model.kf > 0.0 && freq > 0.0 {
+            let id = comp.cdrain.abs();
+            let flicker = mesa.model.kf * id.powf(mesa.model.af) / freq;
+            total += flicker * adjoint_transfer_sq(adjoint, dp, sp);
+        }
+    }
+
     total
 }
 

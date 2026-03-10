@@ -426,6 +426,14 @@ pub enum ElementKind {
         model: String,
         params: Vec<Param>,
     },
+    /// `Zname d g s model [params]` (MESA GaAs MESFET)
+    Mesa {
+        d: String,
+        g: String,
+        s: String,
+        model: String,
+        params: Vec<Param>,
+    },
     /// `Kname L1 L2 coupling`  (mutual inductance)
     MutualCoupling {
         l1: String,
@@ -563,6 +571,13 @@ impl fmt::Display for Element {
                 write_params(f, params)
             }
             ElementKind::Jfet {
+                d,
+                g,
+                s,
+                model,
+                params,
+            }
+            | ElementKind::Mesa {
                 d,
                 g,
                 s,

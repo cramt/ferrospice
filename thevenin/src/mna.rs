@@ -251,6 +251,8 @@ pub struct MnaSystem {
     pub mos6s: Vec<crate::mos6::Mos6Instance>,
     /// Resolved JFET instances for NR iteration.
     pub jfets: Vec<JfetInstance>,
+    /// Resolved MESA FET instances for NR iteration.
+    pub mesas: Vec<crate::mesa::MesaInstance>,
     /// Resolved BSIM3 MOSFET instances for NR iteration.
     pub bsim3s: Vec<Bsim3Instance>,
     /// Resolved BSIM3SOI-DD MOSFET instances for NR iteration.
@@ -304,6 +306,7 @@ impl MnaSystem {
             || !self.bsim3soi_pds.is_empty()
             || !self.bsim4s.is_empty()
             || !self.vbics.is_empty()
+            || !self.mesas.is_empty()
     }
 
     /// Total number of nodes including internal nodes created by nonlinear
@@ -404,6 +407,11 @@ impl MnaSystem {
                 .vbics
                 .iter()
                 .map(|v| v.model.internal_node_count())
+                .sum::<usize>()
+            + self
+                .mesas
+                .iter()
+                .map(|m| m.model.internal_node_count())
                 .sum::<usize>()
     }
 }
@@ -721,6 +729,24 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 };
                 internal_node_count += jm.internal_node_count();
             }
+            ElementKind::Mesa {
+                d,
+                g,
+                s,
+                model,
+                params,
+            } => {
+                node_map.index(d);
+                node_map.index(g);
+                node_map.index(s);
+                let _ = params;
+                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    crate::mesa::MesaModel::from_model_def(mdef)
+                } else {
+                    crate::mesa::MesaModel::new()
+                };
+                internal_node_count += mm.internal_node_count();
+            }
             ElementKind::Vcvs {
                 out_pos,
                 out_neg,
@@ -779,6 +805,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut mosfets = Vec::new();
     let mut mos6s = Vec::new();
     let mut jfets = Vec::new();
+    let mut mesas = Vec::new();
     let mut bsim3s = Vec::new();
     let mut bsim3soi_dds = Vec::new();
     let mut bsim3soi_pds = Vec::new();
@@ -1461,6 +1488,94 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 });
                 // JFET stamps are applied during NR iteration, not here.
             }
+            ElementKind::Mesa {
+                d,
+                g,
+                s,
+                model,
+                params,
+            } => {
+                let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    crate::mesa::MesaModel::from_model_def(mdef)
+                } else {
+                    crate::mesa::MesaModel::new()
+                };
+
+                let drain_idx = node_map.get(d);
+                let gate_idx = node_map.get(g);
+                let source_idx = node_map.get(s);
+
+                // Extract L, W from instance params
+                let mut w = 20e-6;
+                let mut l = 1e-6;
+                for p in params {
+                    if let Expr::Num(v) = &p.value {
+                        match p.name.to_uppercase().as_str() {
+                            "W" => w = *v,
+                            "L" => l = *v,
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Internal nodes for series resistances
+                let drain_prime_idx = if mm.rd > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    drain_idx
+                };
+                let source_prime_idx = if mm.rs > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    source_idx
+                };
+                let gate_prime_idx = if mm.rg > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    gate_idx
+                };
+                // Source'' node (for Ri feedback resistance)
+                let source_prm_prm_idx = if mm.ri > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    source_prime_idx
+                };
+                // Drain'' node (for Rf feedback resistance)
+                let drain_prm_prm_idx = if mm.rf > 0.0 {
+                    let idx = internal_idx;
+                    internal_idx += 1;
+                    Some(idx)
+                } else {
+                    drain_prime_idx
+                };
+
+                let pre = crate::mesa::MesaPrecomp::compute(&mm, 300.15, 300.15, 300.15, w, l);
+
+                mesas.push(crate::mesa::MesaInstance {
+                    name: element.name.clone(),
+                    model: mm,
+                    precomp: pre,
+                    w,
+                    l,
+                    drain_idx,
+                    gate_idx,
+                    source_idx,
+                    drain_prime_idx,
+                    gate_prime_idx,
+                    source_prime_idx,
+                    source_prm_prm_idx,
+                    drain_prm_prm_idx,
+                });
+                // MESA stamps are applied during NR iteration, not here.
+            }
             ElementKind::Capacitor {
                 pos,
                 neg,
@@ -1670,6 +1785,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         mosfets,
         mos6s,
         jfets,
+        mesas,
         capacitors,
         inductors,
         voltage_sources,
