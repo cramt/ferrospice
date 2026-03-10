@@ -27,7 +27,7 @@ rather than installing it on the host.
 
 Run the ralph loop for autonomous implementation:
 ```bash
-./scripts/ralph/ralph.sh --tool claude
+./scripts/ralph/ralph.sh
 ```
 
 ### Test fixtures

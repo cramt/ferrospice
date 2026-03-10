@@ -1,24 +1,15 @@
 #!/usr/bin/env bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude] [--task US-XXX] [max_iterations]
+# Usage: ./ralph.sh [--task US-XXX] [max_iterations]
 
 set -e
 
 # Parse arguments
-TOOL="amp"  # Default to amp for backwards compatibility
 MAX_ITERATIONS=10
 TASK=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --tool)
-      TOOL="$2"
-      shift 2
-      ;;
-    --tool=*)
-      TOOL="${1#*=}"
-      shift
-      ;;
     --task)
       TASK="$2"
       shift 2
@@ -36,12 +27,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-# Validate tool choice
-if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
-  echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
-  exit 1
-fi
 
 # When a specific task is given, force a single iteration
 if [ -n "$TASK" ]; then
@@ -140,15 +125,15 @@ build_pass_history() {
 }
 
 if [ -n "$TASK" ]; then
-  echo "Starting Ralph - Tool: $TOOL - Task: $TASK - Max iterations: $MAX_ITERATIONS"
+  echo "Starting Ralph - Task: $TASK - Max iterations: $MAX_ITERATIONS"
 else
-  echo "Starting Ralph - Tool: $TOOL - Max iterations: $MAX_ITERATIONS"
+  echo "Starting Ralph - Max iterations: $MAX_ITERATIONS"
 fi
 
 for i in $(seq 1 $MAX_ITERATIONS); do
   echo ""
   echo "==============================================================="
-  echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL)"
+  echo "  Ralph Iteration $i of $MAX_ITERATIONS"
   echo "==============================================================="
 
   # Build the prompt with pass history injected
@@ -172,13 +157,9 @@ for i in $(seq 1 $MAX_ITERATIONS); do
 You MUST work on story **$TASK** specifically. Do not pick a different story. This is an implementation pass targeting $TASK."
   fi
 
-  # Run the selected tool with the ralph prompt
-  if [[ "$TOOL" == "amp" ]]; then
-    OUTPUT=$(echo "$PROMPT" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
-  else
-    OUTPUT=$(echo "$PROMPT" | claude --dangerously-skip-permissions --print --verbose 2>&1 \
-      | tee /dev/stderr) || true
-  fi
+  # Run claude code with the ralph prompt
+  OUTPUT=$(echo "$PROMPT" | claude --dangerously-skip-permissions --print --verbose 2>&1 \
+    | tee /dev/stderr) || true
 
   # Check for completion signal
   if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
