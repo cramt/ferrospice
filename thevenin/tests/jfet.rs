@@ -12,7 +12,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 /// Validates drain current against ngspice reference output.
 #[test]
 fn test_jfet_2n4221_dc_sweep() {
-    let cir = include_str!("../../ngspice-upstream/tests/jfet/jfet_vds-vgs.cir");
+    let cir = include_str!("fixtures/jfet/jfet_vds-vgs.cir");
     let netlist = Netlist::parse(cir).unwrap();
     let result = simulate_dc(&netlist).unwrap();
 

@@ -11,13 +11,13 @@ use thevenin_types::{Netlist, SimResult};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
-const RES_SIMPLE_CIR: &str = include_str!("../../ngspice-upstream/tests/resistance/res_simple.cir");
-const RES_SIMPLE_OUT: &str = include_str!("../../ngspice-upstream/tests/resistance/res_simple.out");
+const RES_SIMPLE_CIR: &str = include_str!("fixtures/resistance/res_simple.cir");
+const RES_SIMPLE_OUT: &str = include_str!("fixtures/resistance/res_simple.out");
 const RES_PARTITION_CIR: &str =
-    include_str!("../../ngspice-upstream/tests/resistance/res_partition.cir");
+    include_str!("fixtures/resistance/res_partition.cir");
 const RES_PARTITION_OUT: &str =
-    include_str!("../../ngspice-upstream/tests/resistance/res_partition.out");
-const RES_ARRAY_CIR: &str = include_str!("../../ngspice-upstream/tests/resistance/res_array.cir");
+    include_str!("fixtures/resistance/res_partition.out");
+const RES_ARRAY_CIR: &str = include_str!("fixtures/resistance/res_array.cir");
 
 fn parse_cir(src: &str, name: &str) -> Netlist {
     Netlist::parse(src).unwrap_or_else(|e| panic!("cannot parse {name}: {e}"))

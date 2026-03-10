@@ -5,9 +5,9 @@
 //! implemented.
 
 const FOURBITADDER_CIR: &str =
-    include_str!("../../ngspice-upstream/tests/transient/fourbitadder.cir");
+    include_str!("fixtures/transient/fourbitadder.cir");
 const FOURBITADDER_OUT: &str =
-    include_str!("../../ngspice-upstream/tests/transient/fourbitadder.out");
+    include_str!("fixtures/transient/fourbitadder.out");
 
 #[test]
 #[ignore] // Requires BJT model (US-013) and subcircuit expansion (US-016)
