@@ -462,3 +462,14 @@ US-001 through US-020 completed on 2026-03-08. All passing.
 - All tests pass, clippy clean, fmt clean
 - Commit: ea84e7a
 ---
+
+2026-03-10 US-034 HFET+MESFET implementation pass: PASS
+  - HFET1 level=5 model with conditional internal nodes
+  - MESFET level=1 Statz/Curtice model
+  - Fixed ngspice-matching defaults (deltad, delta, junction params)
+  - Fixed Z-element routing for NMF/PMF level dispatch
+  - Fixed series resistance ground-node stamping
+  - Fixed DeviceVoltageState initialization from solution
+  - 3 tests: hfet/id_vgs PASS, mes/subth PASS, hfet/inverter IGNORED
+  - Commit: d8a59c0
+---
