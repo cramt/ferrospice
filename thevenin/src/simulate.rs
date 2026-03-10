@@ -82,16 +82,18 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
 /// Layout: [node_voltages..., internal_nodes..., branch_currents...].
 pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     if !mna.has_nonlinear() {
-        if mna.ltras.is_empty() {
+        if mna.ltras.is_empty() && mna.txls.is_empty() && mna.cpls.is_empty() {
             mna.system.solve().map_err(MnaError::from)
         } else {
-            // LTRA DC stamps are not in the base matrix; add them to a copy.
+            // LTRA/TXL DC stamps are not in the base matrix; add them to a copy.
             let mut system = LinearSystem::new(mna.system.dim());
             for triplet in mna.system.matrix.triplets() {
                 system.matrix.add(triplet.row, triplet.col, triplet.value);
             }
             system.rhs = mna.system.rhs.clone();
             mna.stamp_ltra_dc_all(&mut system);
+            mna.stamp_txl_dc_all(&mut system);
+            mna.stamp_cpl_dc_all(&mut system);
             system.solve().map_err(MnaError::from)
         }
     } else {
@@ -129,8 +131,10 @@ fn solve_nonlinear_op_with_guess(
             system.rhs[i] += val * source_factor;
         }
 
-        // 2. Stamp LTRA DC equations (not in base matrix).
+        // 2. Stamp LTRA/TXL/CPL DC equations (not in base matrix).
         mna.stamp_ltra_dc_all(system);
+        mna.stamp_txl_dc_all(system);
+        mna.stamp_cpl_dc_all(system);
 
         // 3. Stamp all nonlinear device companions.
         dev_state.stamp_devices(solution, system, mna);
@@ -328,6 +332,12 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let n = mna.total_num_nodes();
     for inst in &mna.ltras {
         crate::ltra::stamp_ltra_dc(inst, &mut mna.system, n);
+    }
+    for inst in &mna.txls {
+        crate::txl::stamp_txl_dc(inst, &mut mna.system, n);
+    }
+    for inst in &mna.cpls {
+        crate::cpl::stamp_cpl_dc(inst, &mut mna.system, n);
     }
     let original_rhs = mna.system.rhs.clone();
 

@@ -492,6 +492,26 @@ pub enum ElementKind {
         model: String,
         params: Vec<Param>,
     },
+    /// `Yname n1+ n1- n2+ n2- model [LEN=val]` (TXL single lossy line)
+    Txl {
+        pos1: String,
+        neg1: String,
+        pos2: String,
+        neg2: String,
+        model: String,
+        params: Vec<Param>,
+    },
+    /// `Pname <in_nodes...> 0 <out_nodes...> 0 model` (CPL coupled lines)
+    Cpl {
+        /// Input port nodes (one per line).
+        in_nodes: Vec<String>,
+        /// Output port nodes (one per line).
+        out_nodes: Vec<String>,
+        /// Ground reference node separating input and output groups.
+        gnd: String,
+        model: String,
+        params: Vec<Param>,
+    },
     /// Any element type not explicitly handled — stored verbatim after name.
     Raw(String),
 }
@@ -665,6 +685,35 @@ impl fmt::Display for Element {
                 params,
             } => {
                 write!(f, "{} {pos1} {neg1} {pos2} {neg2} {model}", self.name)?;
+                write_params(f, params)
+            }
+            ElementKind::Txl {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                model,
+                params,
+            } => {
+                write!(f, "{} {pos1} {neg1} {pos2} {neg2} {model}", self.name)?;
+                write_params(f, params)
+            }
+            ElementKind::Cpl {
+                in_nodes,
+                out_nodes,
+                gnd,
+                model,
+                params,
+            } => {
+                write!(f, "{}", self.name)?;
+                for n in in_nodes {
+                    write!(f, " {n}")?;
+                }
+                write!(f, " {gnd}")?;
+                for n in out_nodes {
+                    write!(f, " {n}")?;
+                }
+                write!(f, " {gnd} {model}")?;
                 write_params(f, params)
             }
             ElementKind::Raw(rest) => {

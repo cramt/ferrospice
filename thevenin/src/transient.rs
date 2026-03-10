@@ -17,6 +17,7 @@ use crate::ltra::{LtraCoeffs, LtraState};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
 use crate::newton::{NrOptions, newton_raphson_solve};
 use crate::simulate::simulate_op;
+use crate::txl::TxlTransientStamp;
 use crate::waveform::{self, TranParams};
 
 /// Integration method for transient analysis.
@@ -314,7 +315,7 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let h_max = t_max.unwrap_or_else(|| h_print.min(t_stop / 50.0));
 
     // Assemble MNA system.
-    let mna = assemble_mna(netlist)?;
+    let mut mna = assemble_mna(netlist)?;
 
     // Compute DC operating point for initial conditions.
     let op_result = simulate_op(netlist)?;
@@ -460,6 +461,36 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
     // Time points history for LTRA convolution.
     let mut ltra_time_points: Vec<f64> = if has_ltra { vec![0.0] } else { Vec::new() };
 
+    // Initialize TXL transient state from DC operating point.
+    let has_txl = !mna.txls.is_empty();
+    if has_txl {
+        for inst in &mut mna.txls {
+            let dc_v1 = inst.pos_idx.map_or(0.0, |i| solution[i]);
+            let dc_v2 = inst.neg_idx.map_or(0.0, |i| solution[i]);
+            let dc_i1 = solution[num_nodes + inst.ibr1];
+            let dc_i2 = solution[num_nodes + inst.ibr2];
+            crate::txl::init_dc_state(&mut inst.txline, dc_v1, dc_v2, dc_i1, dc_i2);
+            inst.txline2 = inst.txline.clone();
+        }
+    }
+    let mut txl_stamps: Vec<TxlTransientStamp> = Vec::new();
+
+    // Initialize CPL transient state from DC operating point.
+    let has_cpl = !mna.cpls.is_empty();
+    if has_cpl {
+        for inst in &mut mna.cpls {
+            let dc_v_in: Vec<f64> = (0..inst.no_l)
+                .map(|m| inst.pos_nodes[m].map_or(0.0, |i| solution[i]))
+                .collect();
+            let dc_v_out: Vec<f64> = (0..inst.no_l)
+                .map(|m| inst.neg_nodes[m].map_or(0.0, |i| solution[i]))
+                .collect();
+            crate::cpl::init_dc_state(&mut inst.cpline, &dc_v_in, &dc_v_out);
+            inst.cpline2 = inst.cpline.clone();
+        }
+    }
+    let mut cpl_stamps: Vec<crate::cpl::CplTransientStamp> = Vec::new();
+
     // Prepare output vectors.
     let mut time_vec = SimVector {
         name: "time".to_string(),
@@ -583,6 +614,46 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             }
         }
 
+        // Pre-compute TXL transient stamps (updates convolution state, must
+        // be called exactly once per timestep attempt).
+        if has_txl {
+            let cur_time_ps = ((t + step_h) * 1.0e12) as i64;
+            let prev_time_ps = (t * 1.0e12) as i64;
+            txl_stamps.clear();
+            for inst in &mut mna.txls {
+                // Backup state for potential step rejection
+                inst.txline2 = inst.txline.clone();
+                let stamp = crate::txl::prepare_txl_transient(
+                    inst,
+                    num_nodes,
+                    &solution,
+                    cur_time_ps,
+                    prev_time_ps,
+                    step_h, // h in seconds (poles are per-second)
+                );
+                txl_stamps.push(stamp);
+            }
+        }
+
+        // Pre-compute CPL transient stamps.
+        if has_cpl {
+            let cur_time_ps = ((t + step_h) * 1.0e12) as i64;
+            let prev_time_ps = (t * 1.0e12) as i64;
+            cpl_stamps.clear();
+            for inst in &mut mna.cpls {
+                inst.cpline2 = inst.cpline.clone();
+                let stamp = crate::cpl::prepare_cpl_transient(
+                    inst,
+                    num_nodes,
+                    &solution,
+                    cur_time_ps,
+                    prev_time_ps,
+                    step_h,
+                );
+                cpl_stamps.push(stamp);
+            }
+        }
+
         // Solve this timestep.
         let new_solution = solve_timestep(
             &mna,
@@ -604,6 +675,8 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             } else {
                 None
             },
+            if has_txl { Some(&txl_stamps) } else { None },
+            if has_cpl { Some(&cpl_stamps) } else { None },
         )?;
 
         // LTE-based timestep control (only for Trap with reactive elements).
@@ -620,6 +693,17 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
             if new_h < 0.9 * step_h {
                 // Reject step: shrink h and retry without advancing time.
+                // Restore TXL/CPL state from backup.
+                if has_txl {
+                    for inst in &mut mna.txls {
+                        inst.txline = inst.txline2.clone();
+                    }
+                }
+                if has_cpl {
+                    for inst in &mut mna.cpls {
+                        inst.cpline = inst.cpline2.clone();
+                    }
+                }
                 h = (new_h.max(step_h * MIN_SHRINK)).max(h_min);
                 continue;
             }
@@ -680,6 +764,52 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
                     node_voltage(&solution, inst.pos2_idx) - node_voltage(&solution, inst.neg2_idx);
                 let i2 = solution[num_nodes + inst.br_eq2];
                 ltra_states[li].accept(v1, i1, v2, i2);
+            }
+        }
+
+        // Update TXL histories and convolution accumulators.
+        if has_txl {
+            let time_ps = (t * 1.0e12) as i64;
+            let h_ps = step_h * 1.0e12;
+            for inst in &mut mna.txls {
+                let v_in = inst.pos_idx.map_or(0.0, |i| solution[i]);
+                let v_out = inst.neg_idx.map_or(0.0, |i| solution[i]);
+                let i_in = solution[num_nodes + inst.ibr1];
+                let i_out = solution[num_nodes + inst.ibr2];
+
+                // Update h1 convolution accumulators
+                let tx = &mut inst.txline;
+                if !tx.lsl {
+                    let prev_vi = tx.vi_history.last();
+                    let (dv_i, dv_o) = if let Some(prev) = prev_vi {
+                        let dt = time_ps - prev.time;
+                        if dt > 0 {
+                            (
+                                (v_in - prev.v_i) / dt as f64,
+                                (v_out - prev.v_o) / dt as f64,
+                            )
+                        } else {
+                            (0.0, 0.0)
+                        }
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    crate::txl::update_cnv_txl(tx, h_ps, v_in, v_out, dv_i, dv_o);
+                }
+
+                // Handle extended time step delayed convolution update
+                if tx.ext {
+                    crate::txl::update_delayed_cnv(tx, h_ps, tx.ratio);
+                }
+
+                // Record history point
+                tx.vi_history.push(crate::txl::ViEntry {
+                    time: time_ps,
+                    v_i: v_in,
+                    v_o: v_out,
+                    i_i: i_in,
+                    i_o: i_out,
+                });
             }
         }
 
@@ -754,6 +884,8 @@ fn solve_timestep(
     ltra_states: Option<&[LtraState]>,
     ltra_coeffs: Option<&[LtraCoeffs]>,
     ltra_time_points: Option<&[f64]>,
+    txl_stamps: Option<&[TxlTransientStamp]>,
+    cpl_stamps: Option<&[crate::cpl::CplTransientStamp]>,
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
@@ -807,6 +939,20 @@ fn solve_timestep(
                     time_pts,
                     time_index,
                 );
+            }
+        }
+
+        // 1d. Stamp TXL transient equations (pre-computed).
+        if let Some(stamps) = txl_stamps {
+            for stamp in stamps {
+                crate::txl::apply_txl_transient(stamp, system);
+            }
+        }
+
+        // 1e. Stamp CPL transient equations (pre-computed).
+        if let Some(stamps) = cpl_stamps {
+            for stamp in stamps {
+                crate::cpl::apply_cpl_transient(stamp, system, num_nodes);
             }
         }
 

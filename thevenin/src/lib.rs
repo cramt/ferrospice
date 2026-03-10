@@ -29,6 +29,7 @@ pub mod bsim3soi_dd;
 pub mod bsim3soi_fd;
 pub mod bsim3soi_pd;
 pub mod bsim4;
+pub mod cpl;
 pub(crate) mod device_stamp;
 pub mod diode;
 pub mod hfet;
@@ -49,6 +50,7 @@ pub mod sparse;
 pub mod subckt;
 pub mod tf;
 pub mod transient;
+pub mod txl;
 pub mod vbic;
 pub mod waveform;
 

@@ -442,6 +442,7 @@ fn parse_source(tokens: &[String]) -> Source {
 /// Bare tokens (without `=`) are treated as flag parameters with value 1.0.
 fn collect_model_params(tokens: &[String]) -> Vec<Param> {
     let mut params = Vec::new();
+    let mut current_key = String::new();
     let mut i = 0;
     while i < tokens.len() {
         let upper = tokens[i].to_uppercase();
@@ -451,6 +452,7 @@ fn collect_model_params(tokens: &[String]) -> Vec<Param> {
         }
         if tokens[i].contains('=') {
             if let Some(kv) = parse_kv(&tokens[i]) {
+                current_key = kv.name.clone();
                 params.push(kv);
             }
         } else if i + 1 < tokens.len() && tokens[i + 1].starts_with('=') {
@@ -464,12 +466,21 @@ fn collect_model_params(tokens: &[String]) -> Vec<Param> {
                 i += 1;
                 &tokens[i][1..]
             };
+            current_key = key.clone();
             params.push(Param {
                 name: key,
                 value: parse_expr(val_tok),
             });
+        } else if !current_key.is_empty() && parse_spice_number(&tokens[i]).is_some() {
+            // Bare numeric token after a keyed param — treat as continuation value
+            // (used by CPL model matrix params: R=0.3 0 0 0.3 ...)
+            params.push(Param {
+                name: current_key.clone(),
+                value: parse_expr(&tokens[i]),
+            });
         } else {
-            // Bare token — treat as flag param with value 1.0
+            // Bare non-numeric token or no prior key — treat as flag param with value 1.0
+            current_key.clear();
             params.push(Param {
                 name: tokens[i].clone(),
                 value: Expr::Num(1.0),
@@ -750,6 +761,63 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 neg1,
                 pos2,
                 neg2,
+                model,
+                params,
+            }
+        }
+        'Y' => {
+            // Y<name> n1+ n1- n2+ n2- model [LEN=val]
+            let pos1 = need!(0, "n1+").to_string();
+            let neg1 = need!(1, "n1-").to_string();
+            let pos2 = need!(2, "n2+").to_string();
+            let neg2 = need!(3, "n2-").to_string();
+            let model = need!(4, "model").to_string();
+            let params = collect_params(&rest[5..]);
+            ElementKind::Txl {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                model,
+                params,
+            }
+        }
+        'P' => {
+            // P<name> <in_nodes...> gnd <out_nodes...> gnd model
+            let positional: Vec<&str> = rest
+                .iter()
+                .filter(|t| !t.contains('='))
+                .map(|s| s.as_str())
+                .collect();
+            // Last positional token that isn't "0" is the model name
+            let model_pos = positional
+                .iter()
+                .rposition(|t| *t != "0")
+                .ok_or_else(|| syntax(lineno, "P: missing model"))?;
+            let model = positional[model_pos].to_string();
+            let node_tokens = &positional[..model_pos];
+            // Split node_tokens by the first "0" to get in_nodes and out_nodes
+            let gnd_pos = node_tokens
+                .iter()
+                .position(|t| *t == "0")
+                .ok_or_else(|| syntax(lineno, "P: missing ground separator"))?;
+            let in_nodes: Vec<String> = node_tokens[..gnd_pos]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let gnd = "0".to_string();
+            let remaining = &node_tokens[gnd_pos + 1..];
+            let out_end = remaining
+                .iter()
+                .position(|t| *t == "0")
+                .unwrap_or(remaining.len());
+            let out_nodes: Vec<String> =
+                remaining[..out_end].iter().map(|s| s.to_string()).collect();
+            let params = collect_params(rest);
+            ElementKind::Cpl {
+                in_nodes,
+                out_nodes,
+                gnd,
                 model,
                 params,
             }

@@ -456,6 +456,34 @@ fn remap_element(
             model: model.clone(),
             params: resolve_params(params, param_map),
         },
+        ElementKind::Txl {
+            pos1,
+            neg1,
+            pos2,
+            neg2,
+            model,
+            params,
+        } => ElementKind::Txl {
+            pos1: remap(pos1),
+            neg1: remap(neg1),
+            pos2: remap(pos2),
+            neg2: remap(neg2),
+            model: model.clone(),
+            params: resolve_params(params, param_map),
+        },
+        ElementKind::Cpl {
+            in_nodes,
+            out_nodes,
+            gnd,
+            model,
+            params,
+        } => ElementKind::Cpl {
+            in_nodes: in_nodes.iter().map(|n| remap(n)).collect(),
+            out_nodes: out_nodes.iter().map(|n| remap(n)).collect(),
+            gnd: gnd.clone(),
+            model: model.clone(),
+            params: resolve_params(params, param_map),
+        },
         ElementKind::Raw(s) => ElementKind::Raw(s.clone()),
     };
 

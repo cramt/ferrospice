@@ -271,6 +271,10 @@ pub struct MnaSystem {
     pub vbics: Vec<VbicInstance>,
     /// Resolved LTRA (lossy transmission line) instances.
     pub ltras: Vec<crate::ltra::LtraInstance>,
+    /// Resolved TXL (single lossy transmission line) instances.
+    pub txls: Vec<crate::txl::TxlInstance>,
+    /// Resolved CPL (coupled multiconductor transmission line) instances.
+    pub cpls: Vec<crate::cpl::CplInstance>,
     /// Resolved voltage source instances (for transient waveform evaluation).
     pub voltage_sources: Vec<VoltageSourceInstance>,
     /// Resolved current source instances (for transient waveform evaluation).
@@ -440,6 +444,21 @@ impl MnaSystem {
         let n = self.total_num_nodes();
         for inst in &self.ltras {
             crate::ltra::stamp_ltra_dc(inst, system, n);
+        }
+    }
+
+    /// Stamp TXL DC equations into the given linear system.
+    pub fn stamp_txl_dc_all(&self, system: &mut crate::LinearSystem) {
+        let n = self.total_num_nodes();
+        for inst in &self.txls {
+            crate::txl::stamp_txl_dc(inst, system, n);
+        }
+    }
+
+    pub fn stamp_cpl_dc_all(&self, system: &mut crate::LinearSystem) {
+        let n = self.total_num_nodes();
+        for inst in &self.cpls {
+            crate::cpl::stamp_cpl_dc(inst, system, n);
         }
     }
 }
@@ -846,6 +865,34 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 // LTRA adds 2 branch equations (one per port)
                 vsource_count += 2;
             }
+            ElementKind::Txl {
+                pos1,
+                neg1,
+                pos2,
+                neg2,
+                ..
+            } => {
+                node_map.index(pos1);
+                node_map.index(neg1);
+                node_map.index(pos2);
+                node_map.index(neg2);
+                // TXL adds 2 branch equations (ibr1, ibr2)
+                vsource_count += 2;
+            }
+            ElementKind::Cpl {
+                in_nodes,
+                out_nodes,
+                ..
+            } => {
+                for n in in_nodes {
+                    node_map.index(n);
+                }
+                for n in out_nodes {
+                    node_map.index(n);
+                }
+                // CPL adds 2 branch equations per line
+                vsource_count += 2 * in_nodes.len();
+            }
             _ => {}
         }
     }
@@ -871,6 +918,8 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     let mut bsim3soi_fds = Vec::new();
     let mut bsim4s = Vec::new();
     let mut ltras = Vec::new();
+    let mut txls = Vec::new();
+    let mut cpls = Vec::new();
     let mut capacitors = Vec::new();
     let mut inductors = Vec::new();
     let mut voltage_sources = Vec::new();
@@ -1980,6 +2029,137 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                 // the transient solver can use different (convolution-based) stamps.
                 ltras.push(inst);
             }
+            ElementKind::Txl {
+                pos1,
+                neg1: _,
+                pos2,
+                neg2: _,
+                model,
+                params,
+            } => {
+                let txl_model = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    crate::txl::TxlModel::from_model_def(mdef)
+                } else {
+                    return Err(MnaError::UnsupportedElement(format!(
+                        "{}: unknown TXL model '{}'",
+                        element.name, model
+                    )));
+                };
+
+                // TXL Y-element: Y name n1+ n1- n2+ n2-
+                // posNode = n1+ (input port), negNode = n2+ (output port)
+                // n1- and n2- are typically ground (ignored by TXL)
+                let pos_idx = node_map.get(pos1);
+                let neg_idx = node_map.get(pos2);
+
+                let br1 = vsource_idx;
+                let br2 = vsource_idx + 1;
+                vsource_idx += 2;
+
+                vsource_names.push(format!("{}#branch1", element.name.to_lowercase()));
+                vsource_names.push(format!("{}#branch2", element.name.to_lowercase()));
+
+                // Check for instance-level length override
+                let length = params
+                    .iter()
+                    .find(|p| {
+                        let u = p.name.to_uppercase();
+                        u == "LEN" || u == "LENGTH"
+                    })
+                    .map_or(txl_model.length, |p| {
+                        crate::expr_val_or(&p.value, txl_model.length)
+                    });
+
+                let txline = crate::txl::setup_txline(&txl_model, length);
+                let txline2 = txline.clone();
+
+                let inst = crate::txl::TxlInstance {
+                    name: element.name.clone(),
+                    pos_idx,
+                    neg_idx,
+                    ibr1: br1,
+                    ibr2: br2,
+                    model: txl_model,
+                    txline,
+                    txline2,
+                    length,
+                    dc_given: false,
+                };
+
+                // NOTE: TXL DC stamps are NOT added to the base matrix here.
+                // Like LTRA, they are added separately in DC solver paths.
+                txls.push(inst);
+            }
+            ElementKind::Cpl {
+                in_nodes,
+                out_nodes,
+                gnd: _,
+                model,
+                params,
+            } => {
+                let no_l = in_nodes.len();
+                let cpl_model = if let Some(mdef) = models.get(&model.to_uppercase()) {
+                    crate::cpl::CplModel::from_model_def(mdef, no_l)
+                } else {
+                    return Err(MnaError::UnsupportedElement(format!(
+                        "{}: unknown CPL model '{}'",
+                        element.name, model
+                    )));
+                };
+
+                let mut pos_nodes = Vec::with_capacity(no_l);
+                let mut neg_nodes = Vec::with_capacity(no_l);
+                for nd in in_nodes {
+                    pos_nodes.push(node_map.get(nd));
+                }
+                for nd in out_nodes {
+                    neg_nodes.push(node_map.get(nd));
+                }
+
+                let mut ibr1 = Vec::with_capacity(no_l);
+                let mut ibr2 = Vec::with_capacity(no_l);
+                for m in 0..no_l {
+                    ibr1.push(vsource_idx);
+                    vsource_idx += 1;
+                    vsource_names.push(format!("{}#branch1_{}", element.name.to_lowercase(), m));
+                }
+                for m in 0..no_l {
+                    ibr2.push(vsource_idx);
+                    vsource_idx += 1;
+                    vsource_names.push(format!("{}#branch2_{}", element.name.to_lowercase(), m));
+                }
+
+                // Check for instance-level length override
+                let length = params
+                    .iter()
+                    .find(|p| {
+                        let u = p.name.to_uppercase();
+                        u == "LEN" || u == "LENGTH"
+                    })
+                    .map_or(cpl_model.length, |p| {
+                        crate::expr_val_or(&p.value, cpl_model.length)
+                    });
+
+                let mut model_with_length = cpl_model.clone();
+                model_with_length.length = length;
+                let cpline = crate::cpl::setup_cpline(&model_with_length);
+                let cpline2 = cpline.clone();
+
+                let inst = crate::cpl::CplInstance {
+                    name: element.name.clone(),
+                    no_l,
+                    pos_nodes,
+                    neg_nodes,
+                    ibr1,
+                    ibr2,
+                    model: model_with_length,
+                    cpline,
+                    cpline2,
+                    dc_given: false,
+                    length,
+                };
+                cpls.push(inst);
+            }
             _ => {
                 stamp_element(
                     element,
@@ -2024,6 +2204,8 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
         bsim4s,
         vbics,
         ltras,
+        txls,
+        cpls,
     })
 }
 
