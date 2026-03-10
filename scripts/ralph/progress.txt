@@ -161,6 +161,11 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - faer supports `c64` type natively — `Mat::<c64>::zeros()` and `FullPivLu` work with complex matrices
 - `faer::Scale` is a tuple struct (capital S), not `faer::scale`
 - faer eigenvalue decomposition: `eigenvalues()` returns `Vec<Complex<f64>>`, `generalized_eigen()` for GEV
+- LTRA model: `LtraModel`, `LtraInstance`, `LtraState`, `LtraCoeffs` in thevenin::ltra
+- LTRA DC stamps are NOT in the base MNA matrix — `mna.stamp_ltra_dc_all(&mut system)` adds them explicitly
+- LTRA transient uses `stamp_ltra_transient()` with convolution coefficients and history state
+- LTRA transient integration: coefficients recomputed each timestep, history updated after accepted steps
+- LTRA requires `libm` crate for `erfc` (complementary error function)
 ---
 
 ## Completed Stories
@@ -493,4 +498,35 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Fixed DeviceVoltageState initialization from solution
   - 3 tests: hfet/id_vgs PASS, mes/subth PASS, hfet/inverter IGNORED
   - Commit: d8a59c0
+---
+
+## 2026-03-10 - US-035 (implementation)
+- Implemented LTRA (Lossy Transmission Line) model with full transient support
+- **Files created:** thevenin/src/ltra.rs (~1500 lines), thevenin/tests/ltra.rs, thevenin/tests/fixtures/transmission/
+- **Files modified:** thevenin/src/mna.rs, thevenin/src/simulate.rs, thevenin/src/transient.rs, thevenin/src/subckt.rs, thevenin/src/lib.rs, thevenin-types/src/lib.rs, thevenin-types/src/parse.rs, thevenin/Cargo.toml
+- **What was implemented:**
+  - LtraModel: R, L, G, C per-unit-length parameters, LEN, precomputed impedance/delay/attenuation
+  - LtraCase enum: LC (lossless), RLC (lossy), RC (diffusive), RG (DC-only)
+  - LtraState: history storage for port voltages/currents with init_from_dc() and accept()
+  - LtraCoeffs: convolution coefficients for h1', h2, h3' impulse responses
+  - Bessel functions I0, I1, I1/x from Numerical Recipes for RLC impulse responses
+  - RC/RLC coefficient setup with relative tolerance truncation for compact storage
+  - DC stamp: series resistance model for RC/RLC/LC, full mesh equations for RG
+  - Transient stamp: admittance-based with convolution excitation (separate from DC stamps)
+  - LTRA DC stamps separated from base MNA matrix — DC solver adds them explicitly, transient uses convolution stamps instead
+  - O-element parser support in thevenin-types
+  - Subcircuit expansion support for LTRA elements
+  - libm dependency for erfc (complementary error function)
+- **Architecture decision:** LTRA DC stamps are NOT stored in the base MNA matrix. Instead:
+  - solve_op_raw: stamps LTRA DC into a copy of the system (linear) or in NR load function (nonlinear)
+  - simulate_dc: stamps LTRA DC into base matrix at start (DC sweep only uses DC stamps)
+  - simulate_tran: stamps LTRA transient (convolution-based) in solve_timestep load function
+  - This prevents DC and transient stamps from conflicting in the shared base matrix
+- **Tests:** 5 passing (lossless step, RLC simple, DC OP, ngspice ltra1_1_line, ngspice ltra2_2_line)
+- **Learnings for future iterations:**
+  - LTRA requires different matrix stamps for DC vs transient — can't share base matrix entries
+  - Convolution coefficients need recomputation at each timestep (not just each accepted step)
+  - LTRA time_points history must include t=0 as initial point for interpolation to work
+  - ngspice ltra1_1_line test has MOSFET-driven LTRA — requires both NR and LTRA integration working
+  - The `stamp_ltra_dc_all` method on MnaSystem provides a clean API for DC contexts
 ---

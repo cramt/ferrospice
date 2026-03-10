@@ -114,6 +114,13 @@
       "summary": "Extracted shared physics constants (EPSOX, EPSSI, CHARGE_Q, KBOQ, EG300) and safe exponential functions (safe_exp, bsim_safe_exp, soi_dexp) from 11 device model files into physics.rs. Net 127 lines removed.",
       "date": "2026-03-10",
       "storyId": null
+    },
+    {
+      "iteration": 16,
+      "passType": "implementation",
+      "summary": "Implemented LTRA (lossy transmission line) model with LC/RLC/RC/RG support, convolution-based transient analysis, history storage, coefficient setup, DC/transient stamps, parser O-element support, subcircuit expansion. 5 tests passing (3 simple + 2 ngspice reference).",
+      "date": "2026-03-10",
+      "storyId": "US-035"
     }
   ],
   "userStories": [
@@ -834,7 +841,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 35,
-      "passes": false,
+      "passes": true,
       "notes": "Reference: ngspice ltra/ — 4,660 lines. Key challenge is ltramisc.c (1727 lines) with history/convolution. Most complex transmission line model.",
       "tags": [
         "implementation"
