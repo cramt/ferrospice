@@ -2,7 +2,9 @@
 name = "thevenin"
 version = "0.1.0"
 edition = "2024"
-description = "Core simulation engine types for ferrospice: sparse matrices, MNA assembly, solvers"
+description = "Core simulation engine for thevenin: sparse matrices, MNA assembly, solvers"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
 thiserror.workspace = true

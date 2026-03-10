@@ -2,7 +2,9 @@
 name = "thevenin-types"
 version = "0.1.0"
 edition = "2024"
-description = "Parser and generator for SPICE netlists (ngspice dialect)"
+description = "Types and parser for SPICE netlists (ngspice dialect)"
+license = "BSD-3-Clause"
+repository = "https://github.com/cramt/thevenin"
 
 [dependencies]
 thiserror.workspace = true
