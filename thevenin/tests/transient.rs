@@ -4,10 +4,8 @@
 //! expansion (US-016), so it is marked #[ignore] until those features are
 //! implemented.
 
-const FOURBITADDER_CIR: &str =
-    include_str!("fixtures/transient/fourbitadder.cir");
-const FOURBITADDER_OUT: &str =
-    include_str!("fixtures/transient/fourbitadder.out");
+const FOURBITADDER_CIR: &str = include_str!("fixtures/transient/fourbitadder.cir");
+const FOURBITADDER_OUT: &str = include_str!("fixtures/transient/fourbitadder.out");
 
 #[test]
 #[ignore] // Requires BJT model (US-013) and subcircuit expansion (US-016)
