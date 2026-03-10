@@ -3,8 +3,8 @@
 //! A 1V pulse drives a 1kΩ + 10µF RC network.
 //! Time constant τ = R·C = 10ms.
 
-use ferrospice_core::simulate_tran;
-use ferrospice_netlist::Netlist;
+use thevenin::simulate_tran;
+use thevenin_types::Netlist;
 
 fn main() {
     let netlist = Netlist::parse(

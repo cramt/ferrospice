@@ -5,8 +5,8 @@
 //!
 //! Expected: V(mid) = 1V * 2k/(1k+2k) ≈ 0.667V
 
-use ferrospice_core::simulate_op;
-use ferrospice_netlist::Netlist;
+use thevenin::simulate_op;
+use thevenin_types::Netlist;
 
 fn main() {
     let netlist = Netlist::parse(

@@ -1,5 +1,5 @@
 [workspace]
-members = ["ferrospice-netlist", "ferrospice-core"]
+members = ["thevenin-types", "thevenin"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -20,8 +20,8 @@ description = "A Rust rewrite of ngspice - open-source mixed-level/mixed-signal 
 license = "BSD-3-Clause"
 
 [dependencies]
-ferrospice-netlist = { path = "ferrospice-netlist" }
-ferrospice-core = { path = "ferrospice-core" }
+thevenin-types = { path = "thevenin-types" }
+thevenin = { path = "thevenin" }
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true

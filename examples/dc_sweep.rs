@@ -2,8 +2,8 @@
 //!
 //! Sweeps voltage source V1 from -0.5V to 0.8V and prints the diode current.
 
-use ferrospice_core::simulate_dc;
-use ferrospice_netlist::Netlist;
+use thevenin::simulate_dc;
+use thevenin_types::Netlist;
 
 fn main() {
     let netlist = Netlist::parse(

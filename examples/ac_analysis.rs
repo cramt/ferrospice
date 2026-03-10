@@ -3,8 +3,8 @@
 //! Circuit: V1 (AC=1) -> R1 (1kΩ) -> node "out" -> C1 (1µF) -> GND
 //! Cutoff frequency: f_c = 1/(2π·R·C) ≈ 159 Hz
 
-use ferrospice_core::simulate_ac;
-use ferrospice_netlist::Netlist;
+use thevenin::simulate_ac;
+use thevenin_types::Netlist;
 
 fn main() {
     let netlist = Netlist::parse(

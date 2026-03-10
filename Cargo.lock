@@ -436,34 +436,9 @@ name = "ferrospice"
 version = "0.1.0"
 dependencies = [
  "faer",
- "ferrospice-core",
- "ferrospice-netlist",
  "getrandom",
- "wasm-bindgen-test",
-]
-
-[[package]]
-name = "ferrospice-core"
-version = "0.1.0"
-dependencies = [
- "approx",
- "faer",
- "ferrospice-netlist",
- "getrandom",
- "thiserror 2.0.18",
- "wasm-bindgen",
- "wasm-bindgen-test",
- "web-sys",
- "web-time",
-]
-
-[[package]]
-name = "ferrospice-netlist"
-version = "0.1.0"
-dependencies = [
- "approx",
- "facet",
- "thiserror 2.0.18",
+ "thevenin",
+ "thevenin-types",
  "wasm-bindgen-test",
 ]
 
@@ -1392,6 +1367,31 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "walkdir",
+]
+
+[[package]]
+name = "thevenin"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "faer",
+ "getrandom",
+ "thevenin-types",
+ "thiserror 2.0.18",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
+name = "thevenin-types"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "facet",
+ "thiserror 2.0.18",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
