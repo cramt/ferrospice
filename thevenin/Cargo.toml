@@ -9,7 +9,7 @@ repository = "https://github.com/cramt/thevenin"
 [dependencies]
 thiserror.workspace = true
 faer.workspace = true
-thevenin-types = { path = "../thevenin-types" }
+thevenin-types = { path = "../thevenin-types", version = "0.1.0" }
 
 [dev-dependencies]
 approx = "0.5"
