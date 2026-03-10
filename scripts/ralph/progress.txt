@@ -433,3 +433,20 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - DC sweep should use previous point's solution as initial guess for convergence
   - ngspice depletion charge uses two-piece model (not smooth clamping): standard power-law below FC*PE, polynomial extrapolation (qlo + qhi) above
 ---
+
+## Pass 13 — Implementation (US-033: MOS6 MOSFET model) — 2026-03-10
+- **Story:** US-033 — MOS6 (Sakurai-Newton n-th power) MOSFET model
+- **Files created:** thevenin/src/mos6.rs (~640 lines), thevenin/tests/mos6.rs, thevenin/tests/fixtures/mos6/
+- **Files modified:** lib.rs, mna.rs, device_stamp.rs, ac.rs, noise.rs
+- **Implementation details:**
+  - Mos6Model: KC, NC, KV, NV, LAMBDA0, LAMBDA1, GAMMA1, SIGMA + shared MOSFET params
+  - N-th power companion: idsat = betac * vgon^NC, vdsat = KV * vgon^NV, lambda_eff = lambda0 - lambda1*vbs
+  - Linear region: vdst2 = (2 - vdst) * vdst scaling of idsat, gm, gds, gmbs
+  - Reuses MosfetCompanion struct from Level 1, separate stamp_mos6 function
+  - MNA routing: Level 6 creates Mos6Model/Mos6Instance (pass 1 + pass 2)
+  - NR: DeviceVoltageState tracks prev_mos6 for voltage limiting via mos_limit
+  - AC: same small-signal pattern as Level 1 (conductances + overlap/junction caps)
+  - Noise: channel thermal (8/3)*4kT*gm, RD/RS thermal, flicker KF*|Id|^AF/(f*Cox*Leff²)
+- **Test results:** 9 unit tests + 2 integration tests (simpleinv OP + transient) all passing
+- **Total tests passing:** 172 unit + integration tests
+---

@@ -86,6 +86,13 @@
       "summary": "VBIC AC/noise/charge model: fixed depletion_charge two-piece model, AC/noise OP solution (internal nodes), case-insensitive node lookup, VEF/VER swap, DC sweep continuation. 10 VBIC tests pass.",
       "date": "2026-03-10",
       "storyId": "US-031"
+    },
+    {
+      "iteration": 13,
+      "passType": "implementation",
+      "summary": "Implemented MOS6 (Sakurai-Newton n-th power) MOSFET model: Mos6Model with KC/NC/KV/NV/LAMBDA0/LAMBDA1/GAMMA1/SIGMA params, n-th power companion model with cutoff/saturation/linear regions, DC/NR stamping, AC small-signal, noise analysis. 9 unit tests + 2 integration tests (simpleinv.cir OP + transient).",
+      "date": "2026-03-10",
+      "storyId": "US-033"
     }
   ],
   "userStories": [
@@ -757,8 +764,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 33,
-      "passes": false,
-      "notes": "Reference: ngspice mos6/ — 3,594 lines. Can build on existing MOSFET level 1 infrastructure.",
+      "passes": true,
+      "notes": "Reference: ngspice mos6/ — 3,594 lines. Built on existing MOSFET level 1 infrastructure. Implemented in iteration 13.",
       "tags": [
         "implementation"
       ]
