@@ -993,6 +993,12 @@ pub enum Item {
     Include(String),
     /// `.lib "filename" [entry]`
     Lib { file: String, entry: Option<String> },
+    /// `.func name(args) body`
+    Func {
+        name: String,
+        args: Vec<String>,
+        body: String,
+    },
     /// `.global node ...`
     Global(Vec<String>),
     /// `.options key=val ...`
@@ -1023,6 +1029,9 @@ impl fmt::Display for Item {
                     write!(f, " {e}")?;
                 }
                 Ok(())
+            }
+            Item::Func { name, args, body } => {
+                write!(f, ".func {name}({}) {{{body}}}", args.join(","))
             }
             Item::Global(nodes) => {
                 write!(f, ".global")?;

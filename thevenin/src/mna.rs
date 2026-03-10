@@ -28,6 +28,8 @@ pub enum MnaError {
     SolveError(#[from] crate::SparseMatrixError),
     #[error("subcircuit expansion error: {0}")]
     SubcktError(#[from] crate::subckt::SubcktError),
+    #[error("expression error in {element}: {detail}")]
+    ExprError { element: String, detail: String },
 }
 
 /// Maps node names to matrix indices. Ground node "0" is excluded.
@@ -575,8 +577,14 @@ fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
 /// independent current sources (I), capacitors (C, open in DC),
 /// inductors (L, short in DC), and diodes (D, nonlinear).
 pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
+    // Resolve parameter expressions before flattening.
+    let mut resolved = netlist.clone();
+    crate::expr::resolve_netlist_exprs(&mut resolved).map_err(|e| MnaError::ExprError {
+        element: "netlist".to_string(),
+        detail: e.to_string(),
+    })?;
     // Flatten subcircuit calls before assembly.
-    let flat_netlist = flatten_netlist(netlist)?;
+    let flat_netlist = flatten_netlist(&resolved)?;
     assemble_mna_flat(&flat_netlist)
 }
 

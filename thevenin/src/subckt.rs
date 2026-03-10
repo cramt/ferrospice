@@ -40,7 +40,7 @@ const MAX_RECURSION_DEPTH: usize = 64;
 /// all elements are at the top level. Model definitions from subcircuits are
 /// hoisted to the top level with prefixed names.
 pub fn flatten_netlist(netlist: &Netlist) -> Result<Netlist, SubcktError> {
-    // Collect all subcircuit definitions (including nested ones).
+    // Collect only top-level subcircuit definitions.
     let mut subckt_defs: BTreeMap<String, SubcktDef> = BTreeMap::new();
     collect_subckt_defs(&netlist.items, &mut subckt_defs);
 
@@ -96,12 +96,10 @@ pub fn flatten_netlist(netlist: &Netlist) -> Result<Netlist, SubcktError> {
     })
 }
 
-/// Recursively collect subcircuit definitions from items, including nested ones.
+/// Collect subcircuit definitions from items (top-level only, not nested).
 fn collect_subckt_defs(items: &[Item], defs: &mut BTreeMap<String, SubcktDef>) {
     for item in items {
         if let Item::Subckt(subckt) = item {
-            // Collect nested definitions first
-            collect_subckt_defs(&subckt.items, defs);
             defs.insert(subckt.name.to_uppercase(), subckt.clone());
         }
     }
@@ -127,6 +125,11 @@ fn expand_subckt_call(
         .get(&subckt_name.to_uppercase())
         .ok_or_else(|| SubcktError::UndefinedSubckt(subckt_name.to_string()))?;
 
+    // Collect locally-defined subcircuits within this subcircuit definition.
+    // These take priority over the global defs for nested X calls.
+    let mut local_defs = subckt_defs.clone();
+    collect_subckt_defs(&subckt.items, &mut local_defs);
+
     if ports.len() != subckt.ports.len() {
         return Err(SubcktError::PortMismatch {
             subckt: subckt_name.to_string(),
@@ -149,8 +152,25 @@ fn expand_subckt_call(
         }
     }
     for p in instance_params {
-        if let Expr::Num(v) = &p.value {
-            param_map.insert(p.name.to_uppercase(), *v);
+        match &p.value {
+            Expr::Num(v) => {
+                param_map.insert(p.name.to_uppercase(), *v);
+            }
+            Expr::Brace(s) => {
+                // Evaluate expression in context of current params
+                let mut ctx = crate::expr::EvalContext::default();
+                for (k, &v) in &param_map {
+                    ctx.params.insert(k.clone(), v);
+                }
+                if let Ok(val) = ctx.eval_str(s) {
+                    param_map.insert(p.name.to_uppercase(), val);
+                }
+            }
+            Expr::Param(name) => {
+                if let Some(&v) = param_map.get(&name.to_uppercase()) {
+                    param_map.insert(p.name.to_uppercase(), v);
+                }
+            }
         }
     }
 
@@ -190,7 +210,7 @@ fn expand_subckt_call(
                         &remapped_ports,
                         nested_subckt,
                         &resolved_params,
-                        subckt_defs,
+                        &local_defs,
                         global_nodes,
                         output,
                         depth + 1,
@@ -504,10 +524,17 @@ fn resolve_expr(expr: &Expr, param_map: &BTreeMap<String, f64>) -> Expr {
                 expr.clone()
             }
         }
-        Expr::Brace(_) => {
-            // Brace expressions would need a full expression evaluator.
-            // For now, leave them as-is.
-            expr.clone()
+        Expr::Brace(s) => {
+            // Try to evaluate using the expression evaluator with current params.
+            let mut ctx = crate::expr::EvalContext::default();
+            for (k, &v) in param_map {
+                ctx.params.insert(k.clone(), v);
+            }
+            if let Ok(val) = ctx.eval_str(s) {
+                Expr::Num(val)
+            } else {
+                expr.clone()
+            }
         }
     }
 }

@@ -101,18 +101,32 @@ fn tokenize(line: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut depth: i32 = 0;
+    let mut in_squote = false;
+    let mut in_brace = false;
 
     for c in line.chars() {
         match c {
-            '(' => {
+            '\'' if !in_brace => {
+                in_squote = !in_squote;
+                current.push(c);
+            }
+            '{' if !in_squote => {
+                in_brace = true;
+                current.push(c);
+            }
+            '}' if in_brace => {
+                in_brace = false;
+                current.push(c);
+            }
+            '(' if !in_squote && !in_brace => {
                 depth += 1;
                 current.push(c);
             }
-            ')' => {
+            ')' if !in_squote && !in_brace => {
                 depth -= 1;
                 current.push(c);
             }
-            ' ' | '\t' if depth == 0 => {
+            ' ' | '\t' if depth == 0 && !in_squote && !in_brace => {
                 if !current.is_empty() {
                     tokens.push(current.clone());
                     current.clear();
@@ -226,10 +240,14 @@ fn parse_si_suffix(s: &str) -> f64 {
 /// Parse a token as an [`Expr`].
 ///
 /// * `{...}` → `Expr::Brace`
+/// * `'...'` → `Expr::Brace` (ngspice single-quote expressions)
 /// * starts with digit / sign / `.` → `Expr::Num`
 /// * otherwise → `Expr::Param` (a parameter name or node)
 fn parse_expr(tok: &str) -> Expr {
     if let Some(inner) = tok.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+        return Expr::Brace(inner.to_string());
+    }
+    if let Some(inner) = tok.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
         return Expr::Brace(inner.to_string());
     }
     if let Some(v) = parse_spice_number(tok) {
@@ -251,21 +269,18 @@ fn parse_kv(tok: &str) -> Option<Param> {
 /// bare `PARAMS:` / `PARAM:` keyword) is treated as a key=value pair.
 fn collect_params(tokens: &[String]) -> Vec<Param> {
     let mut params = Vec::new();
-    let mut in_params = false;
     let mut i = 0;
     while i < tokens.len() {
         let upper = tokens[i].to_uppercase();
         if upper == "PARAMS:" || upper == "PARAM:" {
-            in_params = true;
             i += 1;
             continue;
         }
         if tokens[i].contains('=') {
-            in_params = true; // first key=val also sets the flag
             if let Some(kv) = parse_kv(&tokens[i]) {
                 params.push(kv);
             }
-        } else if in_params && i + 1 < tokens.len() && tokens[i + 1].starts_with('=') {
+        } else if i + 1 < tokens.len() && tokens[i + 1].starts_with('=') {
             // Handle `key = value` split across tokens
             let key = tokens[i].clone();
             let val_tok = if tokens[i + 1] == "=" && i + 2 < tokens.len() {
@@ -832,6 +847,59 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
 }
 
 // ---------------------------------------------------------------------------
+// .func parsing
+// ---------------------------------------------------------------------------
+
+/// Parse `.func name(args) body` into `Item::Func`.
+fn parse_func_def(line: &str) -> Result<Item, ParseError> {
+    // Find function name and argument list
+    // Format: .func name(arg1[, arg2, ...]) body
+    let rest = line
+        .strip_prefix('.')
+        .and_then(|s| {
+            let s = s.trim_start();
+            s.strip_prefix("func").or_else(|| s.strip_prefix("FUNC"))
+        })
+        .map(|s| s.trim_start())
+        .unwrap_or("");
+
+    // Find the opening paren for args
+    let lparen = rest.find('(').ok_or_else(|| ParseError::Syntax {
+        line: 0,
+        msg: "expected '(' in .func definition".into(),
+    })?;
+    let name = rest[..lparen].trim().to_string();
+
+    let rparen = rest.find(')').ok_or_else(|| ParseError::Syntax {
+        line: 0,
+        msg: "expected ')' in .func definition".into(),
+    })?;
+
+    let args_str = &rest[lparen + 1..rparen];
+    let args: Vec<String> = if args_str.trim().is_empty() {
+        Vec::new()
+    } else {
+        args_str.split(',').map(|a| a.trim().to_string()).collect()
+    };
+
+    // Body is everything after the closing paren
+    let body_raw = rest[rparen + 1..].trim();
+    // Strip surrounding quotes or braces
+    let body = if let Some(inner) = body_raw.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+        inner.trim().to_string()
+    } else if let Some(inner) = body_raw
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+    {
+        inner.trim().to_string()
+    } else {
+        body_raw.to_string()
+    };
+
+    Ok(Item::Func { name, args, body })
+}
+
+// ---------------------------------------------------------------------------
 // Dot-command parsing
 // ---------------------------------------------------------------------------
 
@@ -1076,6 +1144,13 @@ fn parse_dot(
             Ok(Item::Param(params))
         }
 
+        ".FUNC" => {
+            // .func name(arg1, arg2, ...) body
+            // or .func name(arg1, arg2, ...) {body}
+            // or .func name(arg1, arg2, ...) 'body'
+            parse_func_def(line)
+        }
+
         ".INCLUDE" => {
             let file = tokens
                 .get(1)
@@ -1087,7 +1162,7 @@ fn parse_dot(
         ".LIB" => {
             let file = tokens
                 .get(1)
-                .map(|s| s.trim_matches('"').to_string())
+                .map(|s| s.trim_matches(|c| c == '"' || c == '\'').to_string())
                 .unwrap_or_default();
             let entry = tokens.get(2).cloned();
             Ok(Item::Lib { file, entry })
@@ -1108,9 +1183,31 @@ fn parse_dot(
             Ok(Item::Save(vecs))
         }
 
+        ".CONTROL" => {
+            // Skip everything until .endc
+            while let Some((_, l)) = rest_lines.peek() {
+                if l.to_uppercase().trim_start().starts_with(".ENDC") {
+                    rest_lines.next();
+                    break;
+                }
+                rest_lines.next();
+            }
+            Ok(Item::Raw(String::new()))
+        }
+
+        ".ENDL" => {
+            // Library section end marker — handled by .lib processing
+            Ok(Item::Raw(line.to_string()))
+        }
+
         ".END" => {
             // Sentinel — signals end of netlist; the caller should stop.
             Ok(Item::Raw(".end".to_string()))
+        }
+
+        ".TEMP" => {
+            // Temperature specification — store as raw for now
+            Ok(Item::Raw(line.to_string()))
         }
 
         _ => Ok(Item::Raw(line.to_string())),
