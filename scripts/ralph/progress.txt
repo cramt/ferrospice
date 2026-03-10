@@ -549,3 +549,26 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Both use txline2/cpline2 clone for state rollback on rejected timesteps
   - CPL convolution updates happen inside prepare_cpl_transient, not as a separate step
 ---
+
+## 2026-03-10 - US-037 (implementation)
+- Implemented SPICE expression evaluator (expr.rs) and .lib file processor (libproc.rs)
+- **Files created:** thevenin/src/expr.rs (~1213 lines), thevenin/src/libproc.rs (~244 lines)
+- **Files created:** thevenin/tests/regression_parser.rs, regression_func.rs, regression_lib.rs
+- **Fixture files copied:** parser/xpressn-1/2/3, bxpressn-1, minus-minus; func/func-1; lib-processing/ex1a/1b/2a/3a/scope-1/2/3 + .lib files
+- **What was implemented:**
+  - EvalContext with params/funcs maps, eval_expr() and eval_str() entry points
+  - Tokenizer: numbers (with SPICE SI suffixes T/G/MEG/K/M/U/N/P/F/A), identifiers, operators, two-char operators
+  - Recursive descent parser: ternary → || → && → == != → < <= > >= → + - → * / % → ** ^ → unary → primary
+  - Built-in functions: sin/cos/tan/asin/acos/atan/arctan/atan2, sinh/cosh/tanh/asinh/acosh/atanh, exp/log/ln/log10/sqrt/sqr, pow/pwr, abs/sgn/int/nint/floor/ceil, min/max, u/u2/uramp, eq0/ne0/gt0/lt0/ge0/le0, pwl
+  - User-defined .func support with parameter shadowing
+  - B-source (BehavioralSource) constant expression resolution to V/I voltage/current sources
+  - process_libs() for .lib file loading: file caching, section extraction, recursive processing
+  - resolve_netlist_exprs() to resolve all Expr::Param/Brace in a netlist to Expr::Num
+  - 23 passing tests: 10 parser, 6 func, 7 lib-processing
+- **Learnings for future iterations:**
+  - Edition 2024 `if let X && let Y` chains can replace nested `if let` for clippy compliance
+  - SPICE SI suffixes (M=milli, MEG=mega, MIL=25.4e-6) must be handled in the number tokenizer
+  - B-source expressions with only constants can be eagerly resolved to V/I sources at parse time
+  - .lib section extraction needs both Item-based and raw text fallback methods for robustness
+  - `expr.rs` and `libproc.rs` are new public modules — exported from lib.rs as `pub mod`
+---

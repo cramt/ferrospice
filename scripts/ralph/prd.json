@@ -128,6 +128,13 @@
       "summary": "Implemented TXL and CPL transmission line models with Pade approximation, eigendecomposition, modal analysis, DC and transient stamps, parser support for Y/P elements, and 10 new tests",
       "date": "2026-03-10",
       "storyId": "US-036"
+    },
+    {
+      "iteration": 19,
+      "passType": "implementation",
+      "summary": "Implemented SPICE expression evaluator (expr.rs), .lib file processor (libproc.rs), B-source constant expression resolution, and 23 regression tests: 10 parser (xpressn-1/2/3, bxpressn-1, minus-minus), 6 func (zero/single/multi-param, ternary, shadowing, builtins), 7 lib-processing (ex1a/1b/2a/3a, scope-1/2/3). All pass with clippy clean.",
+      "date": "2026-03-10",
+      "storyId": "US-037"
     }
   ],
   "userStories": [
@@ -886,7 +893,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 37,
-      "passes": false,
+      "passes": true,
       "notes": "These test the netlist parser, function evaluation, and .lib/.include processing. May require parser enhancements in thevenin-types.",
       "tags": [
         "testing"
