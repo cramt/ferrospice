@@ -29,6 +29,7 @@ pub mod bsim3soi_dd;
 pub mod bsim3soi_fd;
 pub mod bsim3soi_pd;
 pub mod bsim4;
+pub(crate) mod device_stamp;
 pub mod diode;
 pub mod jfet;
 pub mod mna;

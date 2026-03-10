@@ -3140,72 +3140,15 @@ pub fn bsim3_limit(
     vbs_old: f64,
     vth: f64,
 ) -> (f64, f64, f64) {
-    // Use ngspice DEVfetlim for VGS and VDS
+    use crate::device_stamp::{bsim_pnjlim, fetlim};
     let vgs = fetlim(vgs_new, vgs_old, vth);
     let vds = fetlim(vds_new, vds_old, vth);
-    // Use pnjlim for VBS
-    let vbs = pnjlim(vbs_new, vbs_old);
+    let vbs = bsim_pnjlim(vbs_new, vbs_old);
     (vgs, vds, vbs)
 }
 
-pub fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
-    let vtsthi = (2.0 * vold.abs()).max(1.0);
-    let vtstlo = vtsthi / 2.0 + 0.1;
-    let vtox = vto + 3.5;
-    let delv = vnew - vold;
-
-    if vold >= vtox {
-        if delv.abs() >= vtsthi {
-            if vold < vnew {
-                vold + vtsthi
-            } else {
-                vold - vtsthi
-            }
-        } else {
-            vnew
-        }
-    } else if vold >= 0.0 {
-        if delv.abs() >= vtstlo {
-            if vold < vnew {
-                vold + vtstlo
-            } else {
-                vold - vtstlo
-            }
-        } else {
-            vnew
-        }
-    } else {
-        // Below threshold
-        if delv.abs() >= vtsthi {
-            if vold < vnew {
-                vold + vtsthi
-            } else {
-                vold - vtsthi
-            }
-        } else {
-            vnew
-        }
-    }
-}
-
-fn pnjlim(vnew: f64, vold: f64) -> f64 {
-    let vt = KBOQ * TEMP_DEFAULT;
-    let vcrit = vt * (vt / (std::f64::consts::SQRT_2 * 1e-14)).ln();
-    if vnew > vcrit && (vnew - vold).abs() > 2.0 * vt {
-        if vold > 0.0 {
-            let arg = (vnew - vold) / vt;
-            if arg > 0.0 {
-                vold + vt * (1.0 + arg.ln())
-            } else {
-                vold - vt * (1.0 + (-arg).ln())
-            }
-        } else {
-            vt * (vnew / vt).ln()
-        }
-    } else {
-        vnew
-    }
-}
+/// Re-export fetlim for SOI models that reference `crate::bsim3::fetlim`.
+pub(crate) use crate::device_stamp::fetlim;
 
 #[cfg(test)]
 mod tests {

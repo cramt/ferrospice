@@ -11,15 +11,11 @@
 use thevenin_types::{Analysis, Item, Netlist, SimPlot, SimResult, SimVector};
 
 use crate::LinearSystem;
-use crate::bjt::stamp_bjt;
-use crate::diode::{VT_NOM, pnjlim, vcrit};
+use crate::device_stamp::{DeviceVoltageState, stamp_current_source};
 use crate::expr_val;
-use crate::jfet::{jfet_limit, stamp_jfet};
 use crate::mna::{MnaError, MnaSystem, assemble_mna, stamp_conductance};
-use crate::mosfet::{mos_limit, stamp_mosfet};
 use crate::newton::{NrOptions, newton_raphson_solve};
 use crate::simulate::simulate_op;
-use crate::vbic::stamp_vbic_with_voltages;
 use crate::waveform::{self, TranParams};
 
 /// Integration method for transient analysis.
@@ -108,16 +104,6 @@ fn inductor_companion(
             let veq = -(req * history.current + history.voltage);
             (req, veq)
         }
-    }
-}
-
-/// Stamp a current source into the RHS vector.
-fn stamp_current_source(rhs: &mut [f64], ni: Option<usize>, nj: Option<usize>, i_val: f64) {
-    if let Some(i) = ni {
-        rhs[i] -= i_val;
-    }
-    if let Some(j) = nj {
-        rhs[j] += i_val;
     }
 }
 
@@ -491,13 +477,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         );
     }
 
-    // Precompute diode vcrits for NR.
-    let vcrits: Vec<f64> = mna
-        .diodes
-        .iter()
-        .map(|d| vcrit(d.model.n * VT_NOM, d.model.is))
-        .collect();
-
     let has_nonlinear = mna.has_nonlinear();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
@@ -556,7 +535,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             method,
             &cap_histories,
             &ind_histories,
-            &vcrits,
             has_nonlinear,
             &nr_options,
             dim,
@@ -685,7 +663,6 @@ fn solve_timestep(
     method: IntegrationMethod,
     cap_histories: &[CapHistory],
     ind_histories: &[IndHistory],
-    vcrits: &[f64],
     has_nonlinear: bool,
     nr_options: &NrOptions,
     dim: usize,
@@ -693,106 +670,10 @@ fn solve_timestep(
 ) -> Result<Vec<f64>, MnaError> {
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
-    let diodes = &mna.diodes;
     let capacitors = &mna.capacitors;
     let inductors = &mna.inductors;
 
-    // Track previous junction voltages for diode pnjlim.
-    let prev_jct_voltages = std::cell::RefCell::new(
-        diodes
-            .iter()
-            .map(|d| {
-                let (ja, jc) = if d.internal_idx.is_some() {
-                    (d.internal_idx, d.cathode_idx)
-                } else {
-                    (d.anode_idx, d.cathode_idx)
-                };
-                let va = ja.map(|i| prev_solution[i]).unwrap_or(0.0);
-                let vc = jc.map(|i| prev_solution[i]).unwrap_or(0.0);
-                va - vc
-            })
-            .collect::<Vec<f64>>(),
-    );
-
-    // Track previous BJT junction voltages (vbe, vbc) for pnjlim.
-    let bjts = &mna.bjts;
-    let prev_bjt_voltages = std::cell::RefCell::new(
-        bjts.iter()
-            .map(|b| b.junction_voltages(prev_solution))
-            .collect::<Vec<(f64, f64)>>(),
-    );
-
-    // Track previous MOSFET voltages (vgs, vds) for limiting.
-    let mosfets = &mna.mosfets;
-    let prev_mos_voltages = std::cell::RefCell::new(
-        mosfets
-            .iter()
-            .map(|m| {
-                let (vgs, vds, _vbs) = m.terminal_voltages(prev_solution);
-                (vgs, vds)
-            })
-            .collect::<Vec<(f64, f64)>>(),
-    );
-
-    // Track previous JFET junction voltages (vgs, vgd) for limiting.
-    let jfets = &mna.jfets;
-    let prev_jfet_voltages = std::cell::RefCell::new(
-        jfets
-            .iter()
-            .map(|j| j.junction_voltages(prev_solution))
-            .collect::<Vec<(f64, f64)>>(),
-    );
-    let jfet_vcrits: Vec<f64> = jfets
-        .iter()
-        .map(|j| vcrit(j.model.n * VT_NOM, j.model.is))
-        .collect();
-
-    // Track previous BSIM3 voltages (vgs, vds, vbs) for limiting.
-    let bsim3s = &mna.bsim3s;
-    let prev_bsim3_voltages = std::cell::RefCell::new(
-        bsim3s
-            .iter()
-            .map(|b| b.terminal_voltages(prev_solution))
-            .collect::<Vec<(f64, f64, f64)>>(),
-    );
-
-    // Track previous BSIM3SOI-PD voltages (vgs, vds, vbs, ves) for limiting.
-    let bsim3soi_pds = &mna.bsim3soi_pds;
-    let prev_bsim3soi_pd_voltages = std::cell::RefCell::new(
-        bsim3soi_pds
-            .iter()
-            .map(|b| b.terminal_voltages(prev_solution))
-            .collect::<Vec<(f64, f64, f64, f64)>>(),
-    );
-
-    // Track previous BSIM3SOI-FD voltages (vgs, vds, vbs, ves) for limiting.
-    let bsim3soi_fds = &mna.bsim3soi_fds;
-    let prev_bsim3soi_fd_voltages = std::cell::RefCell::new(
-        bsim3soi_fds
-            .iter()
-            .map(|b| b.terminal_voltages(prev_solution))
-            .collect::<Vec<(f64, f64, f64, f64)>>(),
-    );
-
-    // Track previous BSIM3SOI-DD voltages (vgs, vds, vbs, ves) for limiting.
-    let bsim3soi_dds = &mna.bsim3soi_dds;
-    let prev_bsim3soi_dd_voltages = std::cell::RefCell::new(
-        bsim3soi_dds
-            .iter()
-            .map(|b| b.terminal_voltages(prev_solution))
-            .collect::<Vec<(f64, f64, f64, f64)>>(),
-    );
-
-    // Track previous BSIM4 voltages (vgs, vds, vbs) for limiting.
-    let bsim4s = &mna.bsim4s;
-    let prev_bsim4_voltages = std::cell::RefCell::new(
-        bsim4s
-            .iter()
-            .map(|b| b.terminal_voltages(prev_solution))
-            .collect::<Vec<(f64, f64, f64)>>(),
-    );
-    let vbics = &mna.vbics;
-    let prev_vbic_voltages = std::cell::RefCell::new(vec![(0.0, 0.0); vbics.len()]);
+    let dev_state = DeviceVoltageState::from_solution(mna, prev_solution);
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
@@ -807,14 +688,12 @@ fn solve_timestep(
         for vs in &mna.voltage_sources {
             if let Some(ref wf) = vs.waveform {
                 let v_t = waveform::evaluate(wf, t, tran_params);
-                // Replace the DC value in the branch equation RHS.
                 system.rhs[vs.branch_idx] = v_t * source_factor;
             }
         }
         for cs in &mna.current_sources {
             if let Some(ref wf) = cs.waveform {
                 let i_t = waveform::evaluate(wf, t, tran_params);
-                // Undo DC stamp and apply transient value.
                 let i_diff = i_t - cs.dc_value;
                 if let Some(ni) = cs.pos_idx {
                     system.rhs[ni] -= i_diff * source_factor;
@@ -829,273 +708,19 @@ fn solve_timestep(
         for (ci, cap) in capacitors.iter().enumerate() {
             let (geq, ieq) = capacitor_companion(cap.capacitance, h, &cap_histories[ci], method);
             stamp_conductance(&mut system.matrix, cap.pos_idx, cap.neg_idx, geq);
-            // ieq is the history current source (flows from pos to neg).
             stamp_current_source(&mut system.rhs, cap.pos_idx, cap.neg_idx, ieq);
         }
 
         // 3. Stamp inductor companion models.
         for (li, ind) in inductors.iter().enumerate() {
             let (req, veq) = inductor_companion(ind.inductance, h, &ind_histories[li], method);
-            // Add -req on the branch equation diagonal.
             system.matrix.add(ind.branch_idx, ind.branch_idx, -req);
-            // Add veq to the branch equation RHS.
             system.rhs[ind.branch_idx] += veq;
         }
 
-        // 4. Stamp diode companion models (same as DC NR).
+        // 4. Stamp all nonlinear device companions.
         if has_nonlinear {
-            let mut prev = prev_jct_voltages.borrow_mut();
-            for (di, diode) in diodes.iter().enumerate() {
-                let (jct_anode, jct_cathode) = if diode.internal_idx.is_some() {
-                    (diode.internal_idx, diode.cathode_idx)
-                } else {
-                    (diode.anode_idx, diode.cathode_idx)
-                };
-
-                let v_anode = jct_anode.map(|i| solution[i]).unwrap_or(0.0);
-                let v_cathode = jct_cathode.map(|i| solution[i]).unwrap_or(0.0);
-                let mut v_jct = v_anode - v_cathode;
-
-                v_jct = pnjlim(v_jct, prev[di], diode.model.n * VT_NOM, vcrits[di]);
-                prev[di] = v_jct;
-
-                let (g_d, i_eq) = diode.model.companion(v_jct);
-                stamp_conductance(&mut system.matrix, jct_anode, jct_cathode, g_d);
-                stamp_current_source(&mut system.rhs, jct_anode, jct_cathode, i_eq);
-
-                if let Some(int_idx) = diode.internal_idx {
-                    let g_rs = 1.0 / diode.model.rs;
-                    stamp_conductance(&mut system.matrix, diode.anode_idx, Some(int_idx), g_rs);
-                }
-            }
-
-            // 5. Stamp BJT companion models.
-            let mut prev_bjt = prev_bjt_voltages.borrow_mut();
-            for (bi, bjt) in bjts.iter().enumerate() {
-                let (raw_vbe, raw_vbc) = bjt.junction_voltages(solution);
-
-                let vbe = bjt.model.limit_vbe(raw_vbe, prev_bjt[bi].0);
-                let vbc = bjt.model.limit_vbc(raw_vbc, prev_bjt[bi].1);
-                prev_bjt[bi] = (vbe, vbc);
-
-                let comp = bjt.model.companion(vbe, vbc);
-                stamp_bjt(&mut system.matrix, &mut system.rhs, bjt, &comp);
-            }
-
-            // 6. Stamp MOSFET companion models.
-            let mut prev_mos = prev_mos_voltages.borrow_mut();
-            for (mi, mos) in mosfets.iter().enumerate() {
-                let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
-
-                let (vgs, vds) = mos_limit(
-                    raw_vgs,
-                    raw_vds,
-                    prev_mos[mi].0,
-                    prev_mos[mi].1,
-                    mos.model.vto,
-                );
-                prev_mos[mi] = (vgs, vds);
-
-                let mut eff_model = mos.model.clone();
-                eff_model.kp = mos.beta();
-
-                let comp = eff_model.companion(vgs, vds, vbs);
-                stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
-            }
-
-            // 7. Stamp JFET companion models.
-            let mut prev_jfet = prev_jfet_voltages.borrow_mut();
-            for (ji, jfet) in jfets.iter().enumerate() {
-                let (raw_vgs, raw_vgd) = jfet.junction_voltages(solution);
-
-                let vt = jfet.model.n * VT_NOM;
-                let (vgs, vgd) = jfet_limit(
-                    raw_vgs,
-                    raw_vgd,
-                    prev_jfet[ji].0,
-                    prev_jfet[ji].1,
-                    vt,
-                    jfet_vcrits[ji],
-                );
-                prev_jfet[ji] = (vgs, vgd);
-
-                let comp = jfet.model.companion(vgs, vgd);
-                stamp_jfet(&mut system.matrix, &mut system.rhs, jfet, &comp);
-            }
-
-            // 8. Stamp BSIM3 companion models.
-            let mut prev_b3 = prev_bsim3_voltages.borrow_mut();
-            for (bi, bsim) in bsim3s.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs) = crate::bsim3::bsim3_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    prev_b3[bi].0,
-                    prev_b3[bi].1,
-                    prev_b3[bi].2,
-                    bsim.vth0_inst,
-                );
-                prev_b3[bi] = (vgs, vds, vbs);
-
-                let comp =
-                    crate::bsim3::bsim3_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
-                crate::bsim3::stamp_bsim3(&mut system.matrix, &mut system.rhs, bsim, &comp);
-            }
-
-            // 9. Stamp BSIM3SOI-PD companion models.
-            let mut prev_soi = prev_bsim3soi_pd_voltages.borrow_mut();
-            for (bi, bsim) in bsim3soi_pds.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs, ves) = crate::bsim3soi_pd::bsim3soi_pd_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    raw_ves,
-                    prev_soi[bi].0,
-                    prev_soi[bi].1,
-                    prev_soi[bi].2,
-                    prev_soi[bi].3,
-                    bsim.vth0_inst,
-                );
-                prev_soi[bi] = (vgs, vds, vbs, ves);
-
-                let comp = crate::bsim3soi_pd::bsim3soi_pd_companion(
-                    vgs,
-                    vds,
-                    vbs,
-                    ves,
-                    &bsim.size_params,
-                    &bsim.model,
-                );
-                crate::bsim3soi_pd::stamp_bsim3soi_pd(
-                    &mut system.matrix,
-                    &mut system.rhs,
-                    bsim,
-                    &comp,
-                );
-            }
-
-            // 9b. Stamp BSIM3SOI-FD companion models.
-            let mut prev_soi_fd = prev_bsim3soi_fd_voltages.borrow_mut();
-            for (bi, bsim) in bsim3soi_fds.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs, ves) = crate::bsim3soi_fd::bsim3soi_fd_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    raw_ves,
-                    prev_soi_fd[bi].0,
-                    prev_soi_fd[bi].1,
-                    prev_soi_fd[bi].2,
-                    prev_soi_fd[bi].3,
-                    bsim.vth0_inst,
-                );
-                prev_soi_fd[bi] = (vgs, vds, vbs, ves);
-
-                let comp = crate::bsim3soi_fd::bsim3soi_fd_companion(
-                    vgs,
-                    vds,
-                    vbs,
-                    ves,
-                    &bsim.size_params,
-                    &bsim.model,
-                );
-                crate::bsim3soi_fd::stamp_bsim3soi_fd(
-                    &mut system.matrix,
-                    &mut system.rhs,
-                    bsim,
-                    &comp,
-                );
-            }
-
-            // 9c. Stamp BSIM3SOI-DD companion models.
-            let mut prev_soi_dd = prev_bsim3soi_dd_voltages.borrow_mut();
-            for (bi, bsim) in bsim3soi_dds.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs, raw_ves) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs, ves) = crate::bsim3soi_dd::bsim3soi_dd_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    raw_ves,
-                    prev_soi_dd[bi].0,
-                    prev_soi_dd[bi].1,
-                    prev_soi_dd[bi].2,
-                    prev_soi_dd[bi].3,
-                    bsim.vth0_inst,
-                );
-                prev_soi_dd[bi] = (vgs, vds, vbs, ves);
-
-                let comp = crate::bsim3soi_dd::bsim3soi_dd_companion(
-                    vgs,
-                    vds,
-                    vbs,
-                    ves,
-                    &bsim.size_params,
-                    &bsim.model,
-                );
-                crate::bsim3soi_dd::stamp_bsim3soi_dd(
-                    &mut system.matrix,
-                    &mut system.rhs,
-                    bsim,
-                    &comp,
-                );
-            }
-
-            // 10. Stamp BSIM4 companion models.
-            let mut prev_b4 = prev_bsim4_voltages.borrow_mut();
-            for (bi, bsim) in bsim4s.iter().enumerate() {
-                let (raw_vgs, raw_vds, raw_vbs) = bsim.terminal_voltages(solution);
-
-                let (vgs, vds, vbs) = crate::bsim4::bsim4_limit(
-                    raw_vgs,
-                    raw_vds,
-                    raw_vbs,
-                    prev_b4[bi].0,
-                    prev_b4[bi].1,
-                    prev_b4[bi].2,
-                    bsim.size_params.vth0,
-                );
-                prev_b4[bi] = (vgs, vds, vbs);
-
-                let comp =
-                    crate::bsim4::bsim4_companion(vgs, vds, vbs, &bsim.size_params, &bsim.model);
-                crate::bsim4::stamp_bsim4(&mut system.matrix, &mut system.rhs, bsim, &comp);
-            }
-
-            // 11. Stamp VBIC companion models.
-            let mut prev_vb = prev_vbic_voltages.borrow_mut();
-            for (vi, vbic) in vbics.iter().enumerate() {
-                let (raw_vbei, vbex, raw_vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
-                    vbic.junction_voltages(solution);
-
-                let vbei = vbic.model.limit_vbei(raw_vbei, prev_vb[vi].0);
-                let vbci = vbic.model.limit_vbci(raw_vbci, prev_vb[vi].1);
-                prev_vb[vi] = (vbei, vbci);
-
-                let comp = vbic
-                    .model
-                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
-                stamp_vbic_with_voltages(
-                    &mut system.matrix,
-                    &mut system.rhs,
-                    vbic,
-                    &comp,
-                    vbei,
-                    vbex,
-                    vbci,
-                    vbcx,
-                    vbep,
-                    vrci,
-                    vrbi,
-                    vrbp,
-                    vbcp,
-                );
-            }
+            dev_state.stamp_devices(solution, system, mna);
         }
     };
 
