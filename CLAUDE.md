@@ -30,6 +30,12 @@ Run the ralph loop for autonomous implementation:
 ./scripts/ralph/ralph.sh --tool claude
 ```
 
+### Test fixtures
+`ngspice-upstream/` is gitignored, so any test fixture files sourced from it (e.g. `.cir`,
+`.spice`, model files) **must be copied** into a tracked fixtures directory (e.g.
+`tests/fixtures/` or `<crate>/tests/fixtures/`) before they are referenced by tests. This
+ensures tests work on a clean clone without needing the upstream repo checked out.
+
 ## Project Goals
 
 ### Test-driven development
