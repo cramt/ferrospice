@@ -121,6 +121,13 @@
       "summary": "Implemented LTRA (lossy transmission line) model with LC/RLC/RC/RG support, convolution-based transient analysis, history storage, coefficient setup, DC/transient stamps, parser O-element support, subcircuit expansion. 5 tests passing (3 simple + 2 ngspice reference).",
       "date": "2026-03-10",
       "storyId": "US-035"
+    },
+    {
+      "iteration": null,
+      "passType": "implementation",
+      "summary": "Implemented TXL and CPL transmission line models with Pade approximation, eigendecomposition, modal analysis, DC and transient stamps, parser support for Y/P elements, and 10 new tests",
+      "date": "2026-03-10",
+      "storyId": "US-036"
     }
   ],
   "userStories": [
@@ -860,7 +867,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 36,
-      "passes": false,
+      "passes": true,
       "notes": "TXL is simpler than LTRA. CPL extends TXL to coupled lines. Can share infrastructure with LTRA from US-035.",
       "tags": [
         "implementation"

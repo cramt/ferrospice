@@ -530,3 +530,22 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - ngspice ltra1_1_line test has MOSFET-driven LTRA — requires both NR and LTRA integration working
   - The `stamp_ltra_dc_all` method on MnaSystem provides a clean API for DC contexts
 ---
+
+## Pass 15 — US-036: TXL and CPL transmission line models (2026-03-10)
+- **Story:** US-036 — TXL (single lossy) and CPL (coupled multiconductor) transmission line models
+- **Pass type:** implementation
+- **New files:** thevenin/src/txl.rs (~700 lines), thevenin/src/cpl.rs (~2000 lines)
+- **Modified:** parse.rs (Y/P element parsing, model param continuation values), mna.rs, simulate.rs, transient.rs, subckt.rs, lib.rs
+- **TXL model:** Pade approximation of transfer function, 3-pole/residue decomposition, convolution-based transient history, DC series resistance stamp
+- **CPL model:** Jacobi eigendecomposition for N coupled lines, modal analysis, polynomial fitting across 8 frequency samples, Pade approximation per mode, admittance + coupling matrices for transient stamp
+- **Parser fix:** collect_model_params now treats bare numeric tokens after key=value as continuation values (for CPL matrix params like R=0.3 0 0 0.3), while non-numeric bare tokens remain flags
+- **Bug fix:** solve_op_raw linear path only checked LTRA/TXL emptiness, not CPL — CPL DC stamps were skipped for linear circuits
+- **Tests:** 10 new tests across txl.rs and cpl.rs (DC OP + transient for both models, plus 4 ngspice fixture tests)
+- **Test fixtures:** txl1_1_line.cir, txl2_3_line.cir, cpl_ibm2.cir, cpl3_4_line.cir (ported from ngspice)
+- **Architecture:** TXL/CPL follow same pattern as LTRA — DC stamps separate from base matrix, transient stamps pre-computed per timestep and applied in load closure
+- **Codebase patterns:**
+  - TXL: prepare_txl_transient -> TxlTransientStamp -> apply_txl_transient in load closure
+  - CPL: prepare_cpl_transient -> CplTransientStamp -> apply_cpl_transient in load closure
+  - Both use txline2/cpline2 clone for state rollback on rejected timesteps
+  - CPL convolution updates happen inside prepare_cpl_transient, not as a separate step
+---
