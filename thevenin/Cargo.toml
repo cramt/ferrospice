@@ -1,6 +1,6 @@
 [package]
 name = "thevenin"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Core simulation engine for thevenin: sparse matrices, MNA assembly, solvers"
 license = "BSD-3-Clause"
@@ -9,7 +9,7 @@ repository = "https://github.com/cramt/thevenin"
 [dependencies]
 thiserror.workspace = true
 faer.workspace = true
-thevenin-types = { path = "../thevenin-types", version = "0.1.0" }
+thevenin-types = { path = "../thevenin-types", version = "0.2.0" }
 libm = "0.2"
 
 [dev-dependencies]
