@@ -9,7 +9,7 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 use approx::assert_abs_diff_eq;
 use thevenin_types::{
     AcSpec, AcVariation, Analysis, DcSweep, ElementKind, Expr, Item, Netlist, Source, Waveform,
-    format_si,
+    XspiceConnection, format_si,
 };
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -1111,4 +1111,134 @@ fn display_source_dc_and_ac() {
     let out = s.to_string();
     assert!(out.contains("DC 0"), "got: {out}");
     assert!(out.contains("AC 1 45"), "got: {out}");
+}
+
+// ---------------------------------------------------------------------------
+// XSPICE A-element tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn xspice_single_bracket_group() {
+    let n = parse("T\na_source [a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 ab] d_source1\n.end");
+    let elem = n.elements().next().unwrap();
+    assert_eq!(elem.name, "a_source");
+    if let ElementKind::Xspice { connections, model } = &elem.kind {
+        assert_eq!(model, "d_source1");
+        assert_eq!(connections.len(), 1);
+        assert_eq!(
+            connections[0],
+            XspiceConnection::Array(vec![
+                "a1".into(),
+                "a2".into(),
+                "a3".into(),
+                "a4".into(),
+                "a5".into(),
+                "a6".into(),
+                "a7".into(),
+                "a8".into(),
+                "a9".into(),
+                "a10".into(),
+                "ab".into(),
+            ])
+        );
+    } else {
+        panic!("expected Xspice, got {:?}", elem.kind);
+    }
+}
+
+#[test]
+fn xspice_multiple_brackets_and_scalars() {
+    // d_ram style: address bus, data_in bus, data_out bus, write_enable scalar, clock array
+    let n = parse("T\na1 [a0 a1 a2 a3 a4] [d0 d1 d2 d3 d4] [o0 o1 o2] we [ck] ram_model\n.end");
+    let elem = n.elements().next().unwrap();
+    if let ElementKind::Xspice { connections, model } = &elem.kind {
+        assert_eq!(model, "ram_model");
+        assert_eq!(connections.len(), 5);
+        assert_eq!(
+            connections[0],
+            XspiceConnection::Array(vec![
+                "a0".into(),
+                "a1".into(),
+                "a2".into(),
+                "a3".into(),
+                "a4".into(),
+            ])
+        );
+        assert_eq!(
+            connections[1],
+            XspiceConnection::Array(vec![
+                "d0".into(),
+                "d1".into(),
+                "d2".into(),
+                "d3".into(),
+                "d4".into(),
+            ])
+        );
+        assert_eq!(
+            connections[2],
+            XspiceConnection::Array(vec!["o0".into(), "o1".into(), "o2".into()])
+        );
+        assert_eq!(connections[3], XspiceConnection::Scalar("we".into()));
+        assert_eq!(connections[4], XspiceConnection::Array(vec!["ck".into()]));
+    } else {
+        panic!("expected Xspice, got {:?}", elem.kind);
+    }
+}
+
+#[test]
+fn xspice_mixed_ports() {
+    // d_state style: mixed scalar and array connections
+    let n = parse("T\na2 [in0 in1] clk reset [out0 out1] d_state1\n.end");
+    let elem = n.elements().next().unwrap();
+    if let ElementKind::Xspice { connections, model } = &elem.kind {
+        assert_eq!(model, "d_state1");
+        assert_eq!(connections.len(), 4);
+        assert_eq!(
+            connections[0],
+            XspiceConnection::Array(vec!["in0".into(), "in1".into()])
+        );
+        assert_eq!(connections[1], XspiceConnection::Scalar("clk".into()));
+        assert_eq!(connections[2], XspiceConnection::Scalar("reset".into()));
+        assert_eq!(
+            connections[3],
+            XspiceConnection::Array(vec!["out0".into(), "out1".into()])
+        );
+    } else {
+        panic!("expected Xspice, got {:?}", elem.kind);
+    }
+}
+
+#[test]
+fn xspice_roundtrip() {
+    let src = "T\na1 [a0 a1 a2] clk [out0 out1] mymodel\n.end";
+    let (n1, n2) = roundtrip(src);
+    let e1 = n1.elements().next().unwrap();
+    let e2 = n2.elements().next().unwrap();
+    if let (
+        ElementKind::Xspice {
+            connections: c1,
+            model: m1,
+        },
+        ElementKind::Xspice {
+            connections: c2,
+            model: m2,
+        },
+    ) = (&e1.kind, &e2.kind)
+    {
+        assert_eq!(m1, m2);
+        assert_eq!(c1, c2);
+    } else {
+        panic!("expected Xspice after roundtrip");
+    }
+}
+
+#[test]
+fn xspice_model_types_recognized() {
+    let n = parse("T\n.model d_source1 d_source (input_file = \"stimulus.txt\")\n.end");
+    if let Item::Model(m) = &n.items[0] {
+        assert_eq!(m.name, "d_source1");
+        assert_eq!(m.kind, "D_SOURCE");
+    } else {
+        panic!("expected Model, got {:?}", n.items[0]);
+    }
 }

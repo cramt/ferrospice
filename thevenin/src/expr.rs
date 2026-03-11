@@ -940,7 +940,8 @@ fn resolve_element(
         ElementKind::Cpl { params, .. } => {
             resolve_params(params, ctx);
         }
-        ElementKind::BehavioralSource { .. } | ElementKind::Raw(_) => {}
+        ElementKind::Xspice { .. } | ElementKind::BehavioralSource { .. } | ElementKind::Raw(_) => {
+        }
     }
     Ok(())
 }

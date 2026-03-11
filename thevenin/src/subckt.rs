@@ -521,6 +521,22 @@ fn remap_element(
             model: model.clone(),
             params: resolve_params(params, param_map),
         },
+        ElementKind::Xspice { connections, model } => ElementKind::Xspice {
+            connections: connections
+                .iter()
+                .map(|c| match c {
+                    thevenin_types::XspiceConnection::Scalar(s) => {
+                        thevenin_types::XspiceConnection::Scalar(remap(s))
+                    }
+                    thevenin_types::XspiceConnection::Array(ports) => {
+                        thevenin_types::XspiceConnection::Array(
+                            ports.iter().map(|p| remap(p)).collect(),
+                        )
+                    }
+                })
+                .collect(),
+            model: model.clone(),
+        },
         ElementKind::Raw(s) => ElementKind::Raw(s.clone()),
     };
 

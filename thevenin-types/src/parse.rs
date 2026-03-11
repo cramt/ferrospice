@@ -23,7 +23,7 @@
 
 use crate::{
     AcSpec, AcVariation, Analysis, DcSweep, Element, ElementKind, Expr, Item, ModelDef, Netlist,
-    Param, PwlPoint, PzAnalysisType, PzInputType, Source, SubcktDef, Waveform,
+    Param, PwlPoint, PzAnalysisType, PzInputType, Source, SubcktDef, Waveform, XspiceConnection,
 };
 
 // ---------------------------------------------------------------------------
@@ -656,6 +656,80 @@ fn collect_model_params(tokens: &[String]) -> Vec<Param> {
 }
 
 // ---------------------------------------------------------------------------
+// XSPICE connection parsing
+// ---------------------------------------------------------------------------
+
+/// Parse XSPICE connections from tokens after the element name.
+///
+/// Tokens may contain bracket groups like `[a1 a2 a3]` which become
+/// `XspiceConnection::Array`. Everything else is a scalar port. The last
+/// scalar token is the model name and is returned separately.
+fn parse_xspice_connections(
+    lineno: usize,
+    tokens: &[String],
+) -> Result<(Vec<XspiceConnection>, String), ParseError> {
+    let mut connections: Vec<XspiceConnection> = Vec::new();
+    let mut i = 0;
+
+    while i < tokens.len() {
+        let tok = &tokens[i];
+        if tok.starts_with('[') && tok.ends_with(']') && tok.len() > 2 {
+            // Single-token bracket group: [cs] or [a1 a2 a3] wouldn't be single
+            // but [port] with one element is.
+            let inner = &tok[1..tok.len() - 1];
+            let ports: Vec<String> = inner.split_whitespace().map(String::from).collect();
+            connections.push(XspiceConnection::Array(ports));
+            i += 1;
+        } else if let Some(after_bracket) = tok.strip_prefix('[') {
+            // Multi-token bracket group: collect until we find a token ending with `]`
+            let first = if !after_bracket.is_empty() {
+                vec![after_bracket.to_string()]
+            } else {
+                vec![]
+            };
+            let mut ports = first;
+            i += 1;
+            loop {
+                if i >= tokens.len() {
+                    return Err(syntax(lineno, "A: unclosed bracket in XSPICE connections"));
+                }
+                let t = &tokens[i];
+                if t.ends_with(']') {
+                    let inner = &t[..t.len() - 1];
+                    if !inner.is_empty() {
+                        ports.push(inner.to_string());
+                    }
+                    i += 1;
+                    break;
+                } else {
+                    ports.push(t.clone());
+                    i += 1;
+                }
+            }
+            connections.push(XspiceConnection::Array(ports));
+        } else {
+            // Scalar port (or model name — we'll figure out which at the end)
+            connections.push(XspiceConnection::Scalar(tok.clone()));
+            i += 1;
+        }
+    }
+
+    // The last element must be a scalar — that's the model name.
+    match connections.pop() {
+        Some(XspiceConnection::Scalar(model)) => Ok((connections, model)),
+        Some(other) => {
+            // Put it back, missing model
+            connections.push(other);
+            Err(syntax(
+                lineno,
+                "A: last XSPICE token must be scalar model name",
+            ))
+        }
+        None => Err(syntax(lineno, "A: missing XSPICE connections and model")),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Element line parsing
 // ---------------------------------------------------------------------------
 
@@ -985,6 +1059,10 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 model,
                 params,
             }
+        }
+        'A' => {
+            let (connections, model) = parse_xspice_connections(lineno, rest)?;
+            ElementKind::Xspice { connections, model }
         }
         _ => {
             // Unknown element — store everything after the name verbatim

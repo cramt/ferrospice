@@ -1470,7 +1470,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 55,
-      "passes": false,
+      "passes": true,
       "notes": "Prerequisite for US-056 (XSPICE digital models). The 'a' element syntax differs from standard SPICE: uses [] brackets for port groups. Model types like d_source, d_ram, d_state are XSPICE-specific.",
       "tags": [
         "parser"

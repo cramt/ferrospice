@@ -512,8 +512,34 @@ pub enum ElementKind {
         model: String,
         params: Vec<Param>,
     },
+    /// `Aname <connections...> model` (XSPICE code model instance)
+    Xspice {
+        connections: Vec<XspiceConnection>,
+        model: String,
+    },
     /// Any element type not explicitly handled — stored verbatim after name.
     Raw(String),
+}
+
+/// A single XSPICE connection: either a scalar port or a bracketed array of ports.
+#[derive(Debug, Clone, PartialEq, Facet)]
+#[repr(C)]
+pub enum XspiceConnection {
+    /// A single scalar port/node (e.g., `clk`, `reset`).
+    Scalar(String),
+    /// A bracketed array of ports (e.g., `[a1 a2 a3]`).
+    Array(Vec<String>),
+}
+
+impl fmt::Display for XspiceConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            XspiceConnection::Scalar(s) => write!(f, "{s}"),
+            XspiceConnection::Array(ports) => {
+                write!(f, "[{}]", ports.join(" "))
+            }
+        }
+    }
 }
 
 fn write_params(f: &mut fmt::Formatter<'_>, params: &[Param]) -> fmt::Result {
@@ -715,6 +741,13 @@ impl fmt::Display for Element {
                 }
                 write!(f, " {gnd} {model}")?;
                 write_params(f, params)
+            }
+            ElementKind::Xspice { connections, model } => {
+                write!(f, "{}", self.name)?;
+                for conn in connections {
+                    write!(f, " {conn}")?;
+                }
+                write!(f, " {model}")
             }
             ElementKind::Raw(rest) => {
                 write!(f, "{} {rest}", self.name)
