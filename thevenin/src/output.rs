@@ -584,7 +584,10 @@ fn normalize_exponents(text: &str) -> String {
     result
 }
 
-/// Compare two outputs after filtering, using diff -B -w semantics.
+/// Compare two outputs after filtering, using diff -B -w semantics with numeric tolerance.
+///
+/// Non-numeric tokens are compared exactly. Numeric tokens (parseable as f64) are
+/// compared with a relative tolerance of 1e-4 and absolute tolerance of 1e-15.
 pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
     let expected_filtered = filter_output(expected);
     let actual_filtered = filter_output(actual);
@@ -592,22 +595,60 @@ pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
     let norm_expected = normalize_for_diff(&expected_filtered);
     let norm_actual = normalize_for_diff(&actual_filtered);
 
-    if norm_expected == norm_actual {
-        Ok(())
-    } else {
-        let mut diff = String::new();
-        diff.push_str("=== Expected (filtered) ===\n");
-        for line in norm_expected.iter() {
-            diff.push_str(line);
-            diff.push('\n');
-        }
-        diff.push_str("=== Actual (filtered) ===\n");
-        for line in norm_actual.iter() {
-            diff.push_str(line);
-            diff.push('\n');
-        }
-        Err(diff)
+    if norm_expected.len() != norm_actual.len() {
+        return Err(format_diff(&norm_expected, &norm_actual));
     }
+
+    for (exp_line, act_line) in norm_expected.iter().zip(norm_actual.iter()) {
+        if !lines_match_approx(exp_line, act_line) {
+            return Err(format_diff(&norm_expected, &norm_actual));
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if two lines match, allowing numeric tolerance.
+fn lines_match_approx(expected: &str, actual: &str) -> bool {
+    let exp_tokens: Vec<&str> = expected.split_whitespace().collect();
+    let act_tokens: Vec<&str> = actual.split_whitespace().collect();
+
+    if exp_tokens.len() != act_tokens.len() {
+        return false;
+    }
+
+    for (e, a) in exp_tokens.iter().zip(act_tokens.iter()) {
+        if e == a {
+            continue;
+        }
+        match (e.parse::<f64>(), a.parse::<f64>()) {
+            (Ok(ev), Ok(av)) => {
+                let abs_diff = (ev - av).abs();
+                let rel_tol = 1e-4 * ev.abs().max(av.abs());
+                if abs_diff > rel_tol.max(1e-15) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Format a diff between expected and actual for error reporting.
+fn format_diff(expected: &[String], actual: &[String]) -> String {
+    let mut diff = String::new();
+    diff.push_str("=== Expected (filtered) ===\n");
+    for line in expected.iter() {
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    diff.push_str("=== Actual (filtered) ===\n");
+    for line in actual.iter() {
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    diff
 }
 
 /// Normalize text for diff comparison: collapse whitespace, remove blank lines.

@@ -487,11 +487,7 @@ harness_test!(
 );
 
 // === HFET ===
-harness_test!(
-    harness_hfet_id_vgs,
-    "hfet/id_vgs.cir",
-    ignore = "missing DC sweep column (US-054)"
-);
+harness_test!(harness_hfet_id_vgs, "hfet/id_vgs.cir");
 harness_test!(
     harness_hfet_inverter,
     "hfet/inverter.cir",
@@ -502,36 +498,32 @@ harness_test!(
 harness_test!(
     harness_jfet_vds_vgs,
     "jfet/jfet_vds-vgs.cir",
-    ignore = "missing DC sweep column + device info (US-054, US-061)"
+    ignore = "device info output (US-061)"
 );
 
 // === MESA ===
 harness_test!(
     harness_mesa_mesa11,
     "mesa/mesa11.cir",
-    ignore = "missing DC sweep column (US-054)"
+    ignore = "device info output (US-061)"
 );
 harness_test!(harness_mesa_mesa13, "mesa/mesa13.cir");
-harness_test!(
-    harness_mesa_mesa14,
-    "mesa/mesa14.cir",
-    ignore = "missing DC sweep column (US-054)"
-);
+harness_test!(harness_mesa_mesa14, "mesa/mesa14.cir");
 harness_test!(
     harness_mesa_mesa15,
     "mesa/mesa15.cir",
-    ignore = "missing DC sweep column (US-054)"
+    ignore = "MESA model numerical error at non-default temperature"
 );
 harness_test!(harness_mesa_mesa21, "mesa/mesa21.cir");
 harness_test!(
     harness_mesa_mesa,
     "mesa/mesa.cir",
-    ignore = "missing DC sweep column (US-054)"
+    ignore = "device info output (US-061)"
 );
 harness_test!(
     harness_mesa_mesgout,
     "mesa/mesgout.cir",
-    ignore = "missing DC sweep column (US-054)"
+    ignore = "AC complex output formatting (US-058)"
 );
 harness_test!(
     harness_mesa_mesinv,
@@ -548,7 +540,7 @@ harness_test!(
 harness_test!(
     harness_mes_subth,
     "mes/subth.cir",
-    ignore = "missing DC sweep column (US-054)"
+    ignore = "MES model numerical offset in subthreshold region"
 );
 
 // === MOS6 ===

@@ -347,7 +347,12 @@ pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let points1 = generate_sweep_points(start_val, stop_val, step_val);
 
     // Prepare sweep source vector (the independent variable).
-    let sweep_var_name = src.to_lowercase();
+    // ngspice names the sweep column "v-sweep" or "i-sweep" based on source type.
+    let sweep_var_name = if src.to_lowercase().starts_with('v') {
+        "v-sweep".to_string()
+    } else {
+        "i-sweep".to_string()
+    };
 
     // Initialize result vectors: sweep variable + node voltages + branch currents.
     let mut vecs = Vec::new();
@@ -567,7 +572,7 @@ R1 1 0 1k
         assert_eq!(result.plots.len(), 1);
         assert_eq!(result.plots[0].name, "dc1");
 
-        let v1_sweep = dc_vector(&result, "v1");
+        let v1_sweep = dc_vector(&result, "v-sweep");
         assert_eq!(v1_sweep.len(), 6);
         assert_abs_diff_eq!(v1_sweep[0], 0.0, epsilon = 1e-12);
         assert_abs_diff_eq!(v1_sweep[5], 5.0, epsilon = 1e-12);
@@ -606,7 +611,7 @@ R1 1 2 1k
 
         let result = simulate_dc(&netlist).unwrap();
 
-        let v1_sweep = dc_vector(&result, "v1");
+        let v1_sweep = dc_vector(&result, "v-sweep");
         // 3 points for V1 * 2 points for V2 = 6 total
         assert_eq!(v1_sweep.len(), 6);
 
@@ -735,7 +740,7 @@ D1 2 0 DMOD
 
         let result = simulate_dc(&netlist).unwrap();
 
-        let v1_sweep = dc_vector(&result, "v1");
+        let v1_sweep = dc_vector(&result, "v-sweep");
         assert_eq!(v1_sweep.len(), 5); // -1, -0.5, 0, 0.5, 1.0
 
         let i_v1 = dc_vector(&result, "v1#branch");
@@ -884,7 +889,7 @@ Q1 2 1 0 QMOD
         .unwrap();
 
         let result = simulate_dc(&netlist).unwrap();
-        let v_be = dc_vector(&result, "vbe");
+        let v_be = dc_vector(&result, "v-sweep");
         let i_vce = dc_vector(&result, "vce#branch");
 
         // IC should increase exponentially with VBE.
@@ -968,7 +973,7 @@ M1 3 2 0 0 NMOD W=10u L=1u
         .unwrap();
 
         let result = simulate_dc(&netlist).unwrap();
-        let vgs_sweep = dc_vector(&result, "vgs");
+        let vgs_sweep = dc_vector(&result, "v-sweep");
         let v_drain = dc_vector(&result, "v(3)");
 
         assert_eq!(vgs_sweep.len(), 11); // 0, 0.5, 1.0, ..., 5.0

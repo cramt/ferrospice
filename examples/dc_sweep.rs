@@ -21,7 +21,7 @@ D1 anode 0 DMOD
     let result = simulate_dc(&netlist).expect("simulation failed");
 
     let plot = &result.plots[0];
-    let sweep = &plot.vecs[0]; // sweep variable (v1)
+    let sweep = &plot.vecs[0]; // sweep variable (v-sweep)
     // Branch current of V1 (current through the voltage source = diode current)
     let current_vec = plot
         .vecs

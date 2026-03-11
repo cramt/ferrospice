@@ -20,8 +20,8 @@ fn test_jfet_2n4221_dc_sweep() {
     let sweep_var = plot
         .vecs
         .iter()
-        .find(|v| v.name == "vd")
-        .expect("no vd sweep variable");
+        .find(|v| v.name == "v-sweep")
+        .expect("no v-sweep variable");
     let i_vd = plot
         .vecs
         .iter()

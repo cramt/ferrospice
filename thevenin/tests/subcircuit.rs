@@ -314,7 +314,7 @@ X1 in 0 RLOAD
     let plot = &result.plots[0];
 
     // 3 data points: V=0, V=5, V=10
-    let v1_vec = plot.vecs.iter().find(|v| v.name == "v1").unwrap();
+    let v1_vec = plot.vecs.iter().find(|v| v.name == "v-sweep").unwrap();
     assert_eq!(v1_vec.real.len(), 3);
 
     let i_vec = plot.vecs.iter().find(|v| v.name == "v1#branch").unwrap();
