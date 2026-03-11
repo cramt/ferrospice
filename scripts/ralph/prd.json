@@ -1003,44 +1003,142 @@
     },
     {
       "id": "US-054",
-      "title": "Remaining regression tests (pipe, pz, sens, temper, subckt-processing)",
-      "description": "As a developer, I need the remaining regression test categories ported and passing.",
+      "title": "Fix output formatting: missing DC sweep variable column",
+      "description": "As a developer, I need the batch output formatter to include the DC sweep variable column in .print dc output so that harness tests match ngspice output.",
       "acceptanceCriteria": [
-        "Port ngspice-upstream/tests/regression/pz/ac-resistance.cir (pole-zero regression)",
-        "Port ngspice-upstream/tests/regression/sens/ (4 tests: sens-ac-1/2, sens-dc-1/2)",
-        "Port ngspice-upstream/tests/regression/temper/ (4 tests: temper-1/2/3, temper-res-1) — requires TEMPER keyword support",
-        "Port ngspice-upstream/tests/regression/subckt-processing/global-1.cir (.global directive)",
-        "Port ngspice-upstream/tests/regression/pipe/alter-1.cir (if feasible — may require .control language)",
-        "Deferred tests clearly documented with reasons",
+        "DC sweep .print output includes the sweep variable as the first data column (e.g. 'v_sweep' before measured values)",
+        "2D DC sweep (.dc V1 ... V2 ...) formats correctly with the primary sweep variable column",
+        "Fixes: hfet/id_vgs, jfet/jfet_vds-vgs, mesa/mesa11, mesa/mesa, mesa/mesa14, mesa/mesa15, mesa/mesgout, mes/subth",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": "Root cause: format_batch_output() omits the sweep variable column from .print dc tables. ngspice outputs 'Index sweep_var measured_var1 measured_var2...' but we only output 'Index measured_var1...'. Affects all DC sweep tests. Also check that the OP initial solution section and .options LIST device info are correctly formatted.",
+      "tags": [
+        "bugfix",
+        "output"
+      ]
+    },
+    {
+      "id": "US-055",
+      "title": "Fix output formatting: transient timestep interpolation",
+      "description": "As a developer, I need transient output to interpolate results at .tran TSTEP intervals (not internal adaptive timestep points) so output matches ngspice.",
+      "acceptanceCriteria": [
+        "Transient .print output uses TSTEP-spaced time points, not internal adaptive timestep points",
+        "Values at TSTEP points are linearly interpolated from surrounding internal timestep results",
+        "Fixes: resistance/res_simple, resistance/res_partition, resistance/res_array",
+        "Partially fixes: general/rc, general/mosamp, general/schmitt, general/rtlinv, general/diffpair, general/mosmem, general/rca3040, mos6/simpleinv, mos6/mos6inv, transmission/*, vbic/*",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "Root cause: thevenin outputs results at internal adaptive timestep points (variable spacing based on LTE). ngspice interpolates to fixed TSTEP intervals for .print output. The internal simulation still uses adaptive timestep but .print output should show evenly-spaced results. This is the single biggest source of test failures.",
+      "tags": [
+        "bugfix",
+        "output"
+      ]
+    },
+    {
+      "id": "US-057",
+      "title": "Fix output formatting: PZ complex pairs and sensitivity tables",
+      "description": "As a developer, I need pole-zero output to format poles/zeros as complex pairs (real, imaginary) and sensitivity output as multi-column tabular data.",
+      "acceptanceCriteria": [
+        "PZ output formats each pole/zero as 'real, imaginary' on one line (not split across lines)",
+        "PZ 'all' output includes both poles section and zeros section with proper headers",
+        "Sensitivity output formats as tabular data with multiple values per row matching ngspice column layout",
+        "Fixes: polezero/simplepz, polezero/pz2, polezero/pzt, polezero/filt_rc, polezero/filt_bridge_t, polezero/filt_multistage",
+        "Fixes: sensitivity/diffpair",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 42,
       "passes": false,
-      "notes": "Some tests may require features not yet implemented: TEMPER keyword in expressions, .global directive, .control block language. Implement what's feasible, defer the rest with clear notes.",
+      "notes": "Two distinct output formatting issues. PZ: currently outputs real and imaginary parts on separate lines; ngspice puts them as 'real, imaginary' pairs. Sensitivity: currently dumps all sensitivity values on one line; ngspice formats them in rows of ~4 values with element labels.",
       "tags": [
-        "testing"
+        "bugfix",
+        "output"
       ]
     },
     {
-      "id": "US-055",
-      "title": "General circuit tests and remaining model tests",
-      "description": "As a developer, I need the general circuit tests and remaining model-specific tests passing to validate end-to-end simulation.",
+      "id": "US-058",
+      "title": "Fix output formatting: .plot ASCII art and AC complex columns",
+      "description": "As a developer, I need .plot to produce ASCII art graphs and AC .print to format complex values as 'real, imaginary' pairs.",
       "acceptanceCriteria": [
-        "Port ngspice-upstream/tests/general/ (8 tests: diffpair, fourbitadder, mosamp, mosmem, rca3040, rc, rtlinv, schmitt)",
-        "Port ngspice-upstream/tests/filters/lowpass.cir",
-        "Port ngspice-upstream/tests/transient/fourbitadder.cir",
-        "Port ngspice-upstream/tests/polezero/ (6 tests)",
-        "Port ngspice-upstream/tests/sensitivity/diffpair.cir",
-        "All ported tests pass or are #[ignore]d with clear reasons",
+        ".plot directive produces ASCII art character plots matching ngspice format (legend, axis markers, data characters)",
+        "AC .print output includes complex value pairs (real, imaginary) not just magnitude",
+        "Fixes: general/rc (.plot tran)",
+        "Fixes: filters/lowpass (AC complex output)",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 43,
       "passes": false,
-      "notes": "These are mostly integration tests exercising existing device models and analyses. The general/ tests use BJT, simple MOSFET, and passive components which should already work. XSPICE tests (xspice/digital/) are out of scope — tracked separately.",
+      "notes": "Two distinct issues. .plot: ngspice renders ASCII art with legend (+ = var1, * = var2) and character-based graphs. AC: ngspice outputs complex values as 'real, imaginary' pairs but our formatter may only output magnitude. The .plot feature is significant work — consider whether the check.sh filter strips it (it may not survive filtering).",
       "tags": [
+        "bugfix",
+        "output"
+      ]
+    },
+    {
+      "id": "US-059",
+      "title": "Fix BSIM3SOI convergence failures",
+      "description": "As a developer, I need BSIM3SOI (DD/FD/PD) models to converge on their test circuits instead of failing with 'singular matrix / NR failed to converge'.",
+      "acceptanceCriteria": [
+        "BSIM3SOI-DD inv2.cir and RampVg2.cir converge and produce correct output",
+        "BSIM3SOI-FD inv2.cir and RampVg2.cir converge and produce correct output",
+        "BSIM3SOI-PD inv2.cir and RampVg2.cir converge and produce correct output",
+        "BSIM3SOI t3/t4/t5 tests converge (transient analysis)",
+        "Fixes all 15 bsim3soi* harness tests",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": "Root cause: Newton-Raphson fails to converge after 50 iterations on BSIM3SOI circuits. Likely issues: missing source-stepping/GMIN-stepping for initial OP, incorrect Jacobian entries, missing limiting on terminal voltages, or incorrect model parameter defaults. Reference: ngspice-upstream/src/spicelib/devices/bsim3soi_*/.",
+      "tags": [
+        "bugfix",
+        "device-model"
+      ]
+    },
+    {
+      "id": "US-060",
+      "title": "Fix VBIC and remaining transient/transmission test failures",
+      "description": "As a developer, I need VBIC model tests and transmission line tests to pass after output formatting fixes are applied.",
+      "acceptanceCriteria": [
+        "VBIC tests pass after transient timestep interpolation (US-055) is implemented: CEamp, diffamp, FG, FO, noise_scale, temp",
+        "Transmission line tests pass: cpl3_4, cpl_ibm2, ltra1_1, ltra2_2, txl1_1, txl2_3",
+        "Investigate and fix any remaining numerical accuracy issues in VBIC or transmission models",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": "These tests likely fail due to a combination of transient timestep interpolation (US-055) and possible numerical issues. After US-055 is fixed, re-run these tests to see what remains. VBIC CEamp also has a .pz analysis that depends on US-057. Transmission line tests may have model-specific issues beyond output formatting.",
+      "tags": [
+        "bugfix",
         "testing"
+      ]
+    },
+    {
+      "id": "US-061",
+      "title": "Fix .options LIST device info output",
+      "description": "As a developer, I need .op output to include device model listings and instance parameters when the netlist uses .options LIST or when ngspice batch mode includes them by default.",
+      "acceptanceCriteria": [
+        "OP output includes device model parameter tables (Capacitor models, Resistor models, etc.)",
+        "OP output includes device instance parameter tables (device name, model, parameter values)",
+        "Output matches ngspice batch format for these sections",
+        "Partially fixes: filters/lowpass, jfet/jfet_vds-vgs, mos6/simpleinv",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": "ngspice batch mode outputs detailed device model and instance information as part of .op results. Our formatter skips these sections entirely. This is a significant amount of output formatting work — each device type has its own parameter table format. May be partially filtered by check.sh but some tests depend on it.",
+      "tags": [
+        "bugfix",
+        "output"
       ]
     },
     {
