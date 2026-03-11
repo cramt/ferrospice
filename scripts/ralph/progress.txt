@@ -170,6 +170,13 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 - LTRA transient uses `stamp_ltra_transient()` with convolution coefficients and history state
 - LTRA transient integration: coefficients recomputed each timestep, history updated after accepted steps
 - LTRA requires `libm` crate for `erfc` (complementary error function)
+- Test harness: `thevenin/tests/harness.rs` — `harness_test!` macro generates per-.cir test functions
+- Batch output: `thevenin::output::format_batch_output(&Netlist, &SimResult) -> String`
+- Output filter: `thevenin::output::filter_output()` ports check.sh FILTER regex for comparison
+- Output compare: `thevenin::output::compare_filtered()` implements diff -B -w semantics
+- Scientific notation: `format_sci()` — always sign + 2-digit exponent (`1.234567e+00`, `-9.876543e-12`)
+- nextest config: `.config/nextest.toml` — 30s per-test timeout, 300s for harness_summary
+- Harness preprocessing: resolve_includes → .lib processing → process_conditionals → subcircuit flatten → eval params
 ---
 
 ## Completed Stories
@@ -622,4 +629,26 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - XSPICE deprioritized — it's a large mixed-signal extension for only 3 tests
   - Architecture/quality stories (US-049/050/051) moved before publish stories since they affect API surface
   - US-044 was redundant with US-049 which has broader, updated scope
+---
+
+## [2026-03-11] - Implementation Pass: US-039 (Test harness matching ngspice check.sh)
+- New files:
+  - `thevenin/src/output.rs` (~660 lines): Batch-mode output formatter matching ngspice `--batch` text output
+    - `format_batch_output()`: renders OP initial solution, .print tables, TF/PZ/SENS output
+    - `filter_output()`: port of check.sh FILTER regex (case-sensitive substring matching)
+    - `compare_filtered()`: diff -B -w semantics for comparing filtered output
+    - `format_sci()`: custom scientific notation with always-sign + 2-digit exponent padding
+  - `thevenin/tests/harness.rs` (~690 lines): Test harness with per-file test functions
+    - `harness_test!` macro generates individual test functions for all 113 .cir files
+    - 30s per-test timeout using mpsc channels
+    - .include resolution, .lib processing, expression evaluation, subcircuit flattening
+    - `harness_summary` test runs all tests and reports N/107 passing
+    - 45 tests #[ignore]d: BSIM1 (US-052), BSIM2 (US-053), XSPICE (US-056), .control scripting, TEMPER
+  - `.config/nextest.toml`: 30s timeout default, 300s for harness_summary
+- Modified files:
+  - `thevenin/src/lib.rs`: added `pub mod output;`
+  - `flake.nix`: added `cargo-nextest` to devShell
+- Results: 19/107 tests passing, all 465 pre-existing tests still pass
+- Known failure categories: timestep differences (transient), missing sweep variables (DC), PZ complex formatting, convergence errors (BSIM3SOI), .options LIST output, .plot ASCII art, numerical precision
+- XSPICE tests (d_ram, d_source, d_state): use event-driven mixed-signal `a` elements and `.model d_xxx` code models — require full XSPICE runtime, not just dynamic linking
 ---

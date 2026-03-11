@@ -149,6 +149,13 @@
       "summary": "Split US-039 (was too large: harness + all 113 passing). Added US-052 (BSIM1), US-053 (BSIM2), US-054 (remaining regression tests), US-055 (general/filter/pz/sens tests), US-056 (XSPICE, lowest priority). Marked US-044 obsolete (superseded by US-049). Reordered priorities: implementation/testing (39-43) before architecture/API (46-48) before polish/publish (56-60). Sequenced US-043 (docs) after US-049 (API design).",
       "date": "2026-03-11",
       "storyId": null
+    },
+    {
+      "iteration": 22,
+      "passType": "implementation",
+      "summary": "Built test harness matching ngspice check.sh: per-file test functions for all 113 .cir files via macro, batch-mode output formatter, check.sh FILTER port, 30s per-test timeout, nextest integration. 19/107 tests passing, 45 tests #[ignore]d (BSIM1/BSIM2/XSPICE/scripting). All pre-existing 465 tests still pass.",
+      "date": "2026-03-11",
+      "storyId": "US-039"
     }
   ],
   "userStories": [
@@ -948,7 +955,7 @@
         "cargo test --workspace passes"
       ],
       "priority": 39,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-039 which also required all 113 to pass. This story builds the harness and reports progress. Unimplemented features (BSIM1, BSIM2, XSPICE) are tracked separately in US-052/053/055.",
       "tags": [
         "testing"
