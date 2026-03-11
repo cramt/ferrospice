@@ -716,3 +716,17 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - filt_bridge_t fails: expected output includes device info listings (US-061)
 - Results: 26/108 harness tests passing (4 PZ un-ignored, 10 non-ignored pass)
 ---
+
+## 2026-03-11 - Project Management Pass (iteration 26)
+- Changes made:
+  - Added US-066: `.control scripting language (batch subset)` at priority 47 — unblocks ~39 regression tests that are currently ignored with "Requires .control scripting language". Only batch-mode subset needed: `run`, `print`, `echo`, `set/unset`. Needs Item::Control parser variant.
+  - Added US-067: `BJT model parameter completeness for sensitivity analysis` at priority 48 — fixes sensitivity/diffpair by adding missing BJT params (eg, fc, rbm, tnom, xti, areab, areac, temp) to sens.rs output.
+  - Updated US-060 notes: clarified that US-055 (transient interpolation) is now DONE, and remaining VBIC/transmission failures are due to numerical accuracy (different waveform shapes), not timestep differences.
+  - Reprioritized: BSIM1 moved from 47→49, BSIM2 from 48→50 to accommodate the higher-value US-066/067.
+- Rationale:
+  - US-066 (.control) is the single highest-leverage unimplemented feature: ~39/108 tests are blocked solely by this. The batch subset is much simpler than full .control (no variables, no loops, no conditionals needed — just run/print/echo).
+  - US-067 (BJT sensitivity params) is a small, targeted fix that unblocks sensitivity/diffpair.
+  - US-060 notes were stale — misleading future agents about what US-055 would fix.
+  - BSIM1/BSIM2 only unlock 2 tests total; .control/.BJT sensitivity unlock potentially 40+.
+- Codebase pattern updates: none (no code changed this pass)
+---

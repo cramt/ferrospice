@@ -44,9 +44,61 @@
       "summary": "Fixed PZ complex pair formatting (real,imag), merged pole/zero tables (2 cols/page), sensitivity pagination (4 cols/page), TF plot naming (sequential tf1/tf2), format_sci edge case, removed Index vector from sens. Un-ignored 4 PZ tests (simplepz, filt_rc, pzt, filt_multistage). Updated ignore reasons: pz2 (numerical accuracy), filt_bridge_t (US-061), sensitivity (parameter set mismatch). 26/108 harness tests now passing (10 non-ignored + 16 ignored that pass).",
       "date": "2026-03-11",
       "storyId": "US-057"
+    },
+    {
+      "iteration": 26,
+      "passType": "project-management",
+      "summary": "Added US-066 (.control scripting batch subset, priority 47) to unblock ~39 regression tests. Added US-067 (BJT sensitivity parameter completeness, priority 48) to fix sensitivity/diffpair. Updated US-060 notes: US-055 is done but VBIC/transmission still fail — actual issue is numerical accuracy not timestep interpolation. Reprioritized: BSIM1 moved from 47→49, BSIM2 from 48→50 to make room for US-066/067.",
+      "date": "2026-03-11",
+      "storyId": null
     }
   ],
   "userStories": [
+    {
+      "id": "US-066",
+      "title": ".control scripting language (batch subset)",
+      "description": "As a developer, I need the .control/.endc scripting block to be handled in batch mode so that the ~39 regression tests that use .control can run.",
+      "acceptanceCriteria": [
+        ".control/.endc blocks are parsed and not treated as errors",
+        "In batch mode, 'run' command triggers all standard analyses (equivalent to running them directly)",
+        "'print <var>' inside .control produces the same output as .print outside (batch-mode table)",
+        "'echo <text>' outputs the text string",
+        "Unsupported .control commands are silently skipped (no parse error)",
+        "Fixes: regression/misc/*, regression/model/*, regression/parser/*, regression/sens/*, regression/pz/*, regression/subckt-processing/*, regression/temper/* (subset that only use run/print/echo)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": "The .control language is a post-simulation scripting language in ngspice. For batch mode we only need a subset: 'run' (trigger analyses), 'print' (print variable values), 'echo' (output text), 'set/unset' (set options). Many regression tests that say 'Requires .control scripting language' use ONLY these commands — implementing this subset would unlock a large portion of the ~39 currently-ignored regression tests. NEEDS PARSER CHANGES: .control/.endc currently parsed as Item::Raw lines. Need Item::Control variant in thevenin-types. Reference: ngspice-upstream/src/frontend/control.c and ngspice-upstream/src/frontend/inp.c.",
+      "tags": [
+        "implementation",
+        "parser",
+        "output"
+      ]
+    },
+    {
+      "id": "US-067",
+      "title": "BJT model parameter completeness for sensitivity analysis",
+      "description": "As a developer, I need BJT model sensitivity output to include all parameters ngspice reports (eg, fc, rbm, tnom, xti, areab, areac, temp) so that sensitivity/diffpair passes.",
+      "acceptanceCriteria": [
+        "BJT model sensitivity output includes parameters: eg, fc, rbm, tnom, xti (missing from current implementation)",
+        "Area-scaling parameters areab/areac are emitted when non-default",
+        "Temp parameter reported in sensitivity output for BJT instances",
+        "Parameter ordering matches ngspice output order for sensitivity table",
+        "Fixes: sensitivity/diffpair harness test",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": "Identified in US-057 pass: sensitivity/diffpair fails because the sensitivity output has a different set of BJT parameters than ngspice. The ngspice BJT sensitivity includes: is, bf, nf, vaf, ikf, ise, ne, br, nr, var, ikr, isc, nc, rb, irb, rbm, re, rc, cje, vje, mje, tf, xtf, vtf, itf, ptf, cjc, vjc, mjc, xcjc, tr, cjs, vjs, mjs, xtb, eg, xti, fc, tnom, areab, areac, temp. Missing params need to be added to the BJT sensitivity computation in sens.rs. Reference: ngspice-upstream/src/spicelib/devices/bjt/bjtpar.c.",
+      "tags": [
+        "bugfix",
+        "device-model",
+        "output"
+      ]
+    },
     {
       "id": "US-052",
       "title": "BSIM1 MOSFET model (level 4)",
@@ -59,7 +111,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 47,
+      "priority": 49,
       "passes": false,
       "notes": "NEEDS PARSER CHANGES: requires LEVEL=4 dispatch in .model NMOS/PMOS parsing. BSIM1 is a legacy 1990s model. Reference: ngspice-upstream/src/spicelib/devices/bsim1/. Only 1 test file. Depends on US-062 (parser: BSIM1 model params).",
       "tags": [
@@ -80,7 +132,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 48,
+      "priority": 50,
       "passes": false,
       "notes": "NEEDS PARSER CHANGES: requires LEVEL=5 dispatch in .model NMOS/PMOS parsing. BSIM2 is a legacy 1990s model. Reference: ngspice-upstream/src/spicelib/devices/bsim2/. Only 1 test file. Depends on US-063 (parser: BSIM2 model params).",
       "tags": [
@@ -183,7 +235,7 @@
       ],
       "priority": 44,
       "passes": false,
-      "notes": "No parser changes needed. Depends on US-055 (transient interpolation). These tests likely fail due to a combination of transient timestep interpolation and possible numerical issues. After US-055 is fixed, re-run these tests to see what remains. VBIC CEamp also has a .pz analysis that depends on US-057.",
+      "notes": "US-055 (transient interpolation) is now DONE — interpolation-aware comparison is live. However VBIC/transmission tests still fail after US-055 was implemented, meaning the actual remaining issue is numerical accuracy differences (different waveform shapes, not just different time points). Investigate by running these tests and examining the diff: look for DC offset errors, wrong oscillation amplitudes, or incorrect decay rates. VBIC CEamp also has a .pz analysis. Transmission tests use LTRA (lossy transmission) and CPL (coupled) models.",
       "tags": [
         "bugfix",
         "testing"
