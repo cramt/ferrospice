@@ -4,7 +4,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 
 ## Codebase Patterns
 - DC sweep vector naming: "v-sweep" for voltage sources, "i-sweep" for current sources (matching ngspice). `find_sweep_vector()` in output.rs searches for these names.
-- Harness comparison uses numeric tolerance: `compare_filtered()` in output.rs uses 1e-4 relative / 1e-15 absolute tolerance via `lines_match_approx()`
+- Harness comparison uses numeric tolerance: `compare_filtered()` in output.rs uses 1e-4 relative / 1e-15 absolute tolerance via `lines_match_approx()`. Falls back to interpolation-aware comparison when line counts differ (handles different adaptive timestep sequences between thevenin and ngspice).
 - `.if/.elseif/.else/.endif` preprocessor: `process_conditionals()` in parse.rs, runs after `preprocess()`, before main parsing
 - `.temp` directive: parsed to `Item::Temp(f64)`, retrieved via `thevenin::netlist_temp(&Netlist)` (default 27.0°C)
 - Model-referenced resistors: `resolve_resistor_value()` in mna.rs checks Expr::Ident against model BTreeMap
@@ -666,4 +666,29 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Many tests marked US-054 had additional blocking issues (device info output, model accuracy) beyond just the sweep column
   - Remaining mesa/mes failures: mesa11/mesa need US-061 (device info), mesa15 has MESA model temperature error, mesgout needs AC formatting, mes/subth has MES subthreshold numerical offset
 - Results: 21/107 harness tests passing (up from 19)
+---
+
+## 2026-03-11 - US-055 (implementation)
+- Added interpolation-aware fallback to compare_filtered() in output.rs
+- When line counts differ after filtering, separates text lines from data rows
+- Data rows (index + time + values) compared via linear interpolation of actual at expected time points
+- Key functions added: is_data_row(), parse_data_row(), lerp_at(), compare_with_interpolation()
+- Root cause finding: ngspice batch mode does NOT interpolate to TSTEP intervals — it outputs at internal adaptive timestep points. The original US-055 description was incorrect.
+- Un-ignored resistance/res_simple (now passes with interpolation comparison)
+- Updated 11 harness ignore reasons from "transient timestep (US-055)" to actual root causes:
+  - general/mosamp: singular matrix during transient solve
+  - general/mosmem, rca3040, rtlinv, schmitt: device info output (US-061)
+  - hfet/inverter: device info output (US-061)
+  - mesa/mesinv: initial transient solution values wrong
+  - mesa/mesosc: output mismatch (numerical accuracy)
+  - mos6/mos6inv: singular matrix during transient solve
+  - resistance/res_array: parameter expression in resistor array not supported
+  - resistance/res_partition: device info output (US-061)
+- Files changed: output.rs (interpolation comparison), harness.rs (ignore updates)
+- **Learnings for future iterations:**
+  - ngspice initial timestep: delta = MIN(finalTime/100, tstep)/10, then further cut by breakpoint logic and firsttime /= 10
+  - ngspice does NOT use TSTEP for output spacing in batch mode — internal adaptive timesteps are output directly
+  - Most tests formerly blamed on "transient timestep" actually fail due to device info output (US-061) or simulation errors
+  - Interpolation comparison handles any timestep algorithm differences gracefully
+- Results: 22/107 harness tests passing (up from 21)
 ---
