@@ -37,6 +37,13 @@
       "summary": "Added interpolation-aware fallback to compare_filtered() for handling different adaptive timestep sequences. When line counts differ, data sections are compared by linearly interpolating actual values at expected time points. Un-ignored resistance/res_simple (now passes). Updated 11 harness ignore reasons to reflect actual root causes (device info output, singular matrices, numerical accuracy). 22/107 harness tests now passing.",
       "date": "2026-03-11",
       "storyId": "US-055"
+    },
+    {
+      "iteration": 25,
+      "passType": "implementation",
+      "summary": "Fixed PZ complex pair formatting (real,imag), merged pole/zero tables (2 cols/page), sensitivity pagination (4 cols/page), TF plot naming (sequential tf1/tf2), format_sci edge case, removed Index vector from sens. Un-ignored 4 PZ tests (simplepz, filt_rc, pzt, filt_multistage). Updated ignore reasons: pz2 (numerical accuracy), filt_bridge_t (US-061), sensitivity (parameter set mismatch). 26/108 harness tests now passing (10 non-ignored + 16 ignored that pass).",
+      "date": "2026-03-11",
+      "storyId": "US-057"
     }
   ],
   "userStories": [
@@ -135,8 +142,8 @@
         "cargo test --workspace passes"
       ],
       "priority": 42,
-      "passes": false,
-      "notes": "No parser changes needed — pure output formatting. PZ: currently outputs real and imaginary parts on separate lines; ngspice puts them as 'real, imaginary' pairs. Sensitivity: currently dumps all sensitivity values on one line; ngspice formats them in rows of ~4 values with element labels.",
+      "passes": true,
+      "notes": "PZ formatting DONE: complex pairs as 'real,\\timag', merged pole/zero tables, 2 cols/page. 4/6 PZ tests pass (pz2 = numerical accuracy, filt_bridge_t = US-061 device info). Sensitivity formatting DONE: 4 cols/page pagination. sensitivity/diffpair still fails due to parameter set mismatch (missing bjt params: eg/fc/rbm/tnom/xti/areab/areac/temp, different ordering). Also fixed: TF plot naming (tf1/tf2 sequential), format_sci edge case, removed Index vector from sens result.",
       "tags": [
         "bugfix",
         "output"

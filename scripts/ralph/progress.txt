@@ -3,6 +3,9 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- PZ output: `format_pz_table()` in output.rs merges all pz* plots, formats complex values as `re,\tim` pairs, 2 cols/page
+- Sensitivity output: always routes through `format_print_all_table()` (4 cols/page pagination), even when `.print SENS` exists
+- TF plots: named sequentially tf1, tf2, ... — `format_tf_output()` takes a single SimPlot directly
 - DC sweep vector naming: "v-sweep" for voltage sources, "i-sweep" for current sources (matching ngspice). `find_sweep_vector()` in output.rs searches for these names.
 - Harness comparison uses numeric tolerance: `compare_filtered()` in output.rs uses 1e-4 relative / 1e-15 absolute tolerance via `lines_match_approx()`. Falls back to interpolation-aware comparison when line counts differ (handles different adaptive timestep sequences between thevenin and ngspice).
 - `.if/.elseif/.else/.endif` preprocessor: `process_conditionals()` in parse.rs, runs after `preprocess()`, before main parsing
@@ -691,4 +694,25 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Most tests formerly blamed on "transient timestep" actually fail due to device info output (US-061) or simulation errors
   - Interpolation comparison handles any timestep algorithm differences gracefully
 - Results: 22/107 harness tests passing (up from 21)
+---
+
+## 2026-03-11 - US-057 (implementation)
+- Fixed PZ output formatting: complex pairs as `real,\timag` instead of magnitude
+- Created `format_pz_table` to merge pole/zero SimPlots into single table, 2 complex cols/page
+- Fixed sensitivity pagination: route SENS through `format_print_all_table` (4 cols/page) even when `.print SENS all` directive exists
+- Fixed TF plot naming: sequential tf1/tf2/... instead of all "tf1" (was causing duplicate TF output)
+- Fixed `format_sci` edge case where mantissa rounds to 10.0 (used fallback Rust formatting without zero-padded exponent)
+- Removed spurious "Index" SimVector from sensitivity SimResult
+- Removed unused `collect_analyses` and `Analysis` import from output.rs
+- Un-ignored 4 PZ tests: simplepz, filt_rc, pzt, filt_multistage
+- Files changed: thevenin/src/output.rs, thevenin/src/sens.rs, thevenin/src/tf.rs, thevenin/tests/harness.rs
+- **Learnings for future iterations:**
+  - PZ data stored as complex in SimVector (not real) — output must handle `.complex` field
+  - PZ plots are split: poles in pz1, zeros in pz2 — must merge for ngspice-compatible output
+  - format_sci mantissa rounding edge case: values like 999.999... where log10 floor = 2 but mantissa rounds to 10
+  - `.print SENS all` captures sensitivity output through format_print_table (no pagination) instead of format_print_all_table — need to route SENS specially
+  - sensitivity/diffpair still fails: parameter set mismatch (missing bjt eg/fc/rbm/tnom/xti/areab/areac/temp), wrong ordering, TF output differences
+  - pz2 fails: eigenvalue computation gives wrong results for inductor circuits (numerical accuracy)
+  - filt_bridge_t fails: expected output includes device info listings (US-061)
+- Results: 26/108 harness tests passing (4 PZ un-ignored, 10 non-ignored pass)
 ---
