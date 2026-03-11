@@ -3,6 +3,10 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- `.if/.elseif/.else/.endif` preprocessor: `process_conditionals()` in parse.rs, runs after `preprocess()`, before main parsing
+- `.temp` directive: parsed to `Item::Temp(f64)`, retrieved via `thevenin::netlist_temp(&Netlist)` (default 27.0°C)
+- Model-referenced resistors: `resolve_resistor_value()` in mna.rs checks Expr::Ident against model BTreeMap
+- Subcircuit model scoping: `remap_model_ref()` in subckt.rs prefixes model names/refs with subcircuit instance path
 - AC analysis: `simulate_ac(&Netlist) -> Result<SimResult>` in thevenin::ac
 - AC uses `ComplexLinearSystem` (separate real/imag sparse matrices) solved via faer `c64` LU decomposition
 - AC sweep modes: DEC (n pts/decade, log spacing), OCT (n pts/octave), LIN (n total points, linear)
@@ -571,4 +575,30 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - B-source expressions with only constants can be eagerly resolved to V/I sources at parse time
   - .lib section extraction needs both Item-based and raw text fallback methods for robustness
   - `expr.rs` and `libproc.rs` are new public modules — exported from lib.rs as `pub mod`
+---
+## Iteration 20 — US-038: Regression tests — models, temperature, and misc (implementation)
+- **Date:** 2026-03-11
+- **New features implemented:**
+  - `.if/.elseif/.else/.endif` conditional preprocessor in `thevenin-types/src/parse.rs`
+  - Model-referenced resistors (`r1 2 0 mymodel` with `.model mymodel r r=2k`) in `thevenin/src/mna.rs`
+  - Model name scoping in subcircuit expansion (`remap_model_ref()` in `thevenin/src/subckt.rs`)
+  - `.temp` directive parsing → `Item::Temp(f64)` variant
+  - `netlist_temp()` helper in `thevenin/src/lib.rs`
+  - `ac=VALUE` parsing for voltage sources
+- **Tests added (15 total):**
+  - `regression_misc.rs`: ac_zero_frequency, bsource_unary_operators, bsource_power_with_param, log_functions_in_voltage_params, if_elseif_nested, if_elseif_first_match, if_else_fallback, ac_resistance_op, ac_resistance_pz, temp_directive_parsing, temp_default
+  - `regression_model.rs`: special_names_diode_models, model_instance_defaults
+  - `regression_subckt.rs`: global_multiple_cards, model_scope_nested
+- **Deferred tests (missing features):**
+  - temper keyword in expressions (temper-1 through temper-4)
+  - .control language (alter-vec, dollar-1, resume-1)
+  - tc1 on B-sources (asrc-tc-1, asrc-tc-2)
+  - Resistor flicker noise kf/af (test-noise-2, test-noise-3)
+  - Model binning (binning-1)
+  - bugs-2 requires runtime B-source expression evaluation with v()/i() references
+- **Learnings:**
+  - AC results use `.complex[0].re/.im`, not `.real[0]`
+  - PZ pole vector names are `pole(1)`, `pole(2)`, etc. — use `starts_with("pole(")`
+  - Model name scoping: subcircuit model defs get prefixed (e.g., `x1.DMOD`), element model refs remap accordingly
+  - `resolve_resistor_value()` checks for Expr::Ident model references in BTreeMap<String, &ModelDef>
 ---
