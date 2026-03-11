@@ -602,3 +602,24 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - Model name scoping: subcircuit model defs get prefixed (e.g., `x1.DMOD`), element model refs remap accordingly
   - `resolve_resistor_value()` checks for Expr::Ident model references in BTreeMap<String, &ModelDef>
 ---
+
+## [2026-03-11] - Project Management Pass
+- Changes made:
+  - Split US-039 (test harness + all 113 pass) into: US-039 (build harness, report N/113) + new implementation stories
+  - Added US-052: BSIM1 model (level 4) — 1 test file
+  - Added US-053: BSIM2 model (level 5) — 1 test file
+  - Added US-054: Remaining regression tests (pipe, pz, sens, temper, subckt-processing/global)
+  - Added US-055: General circuit tests + filters + polezero + sensitivity integration tests
+  - Added US-056: XSPICE digital models (lowest priority, 3 tests, significant effort)
+  - Marked US-044 obsolete (superseded by US-049)
+  - Reordered priorities: testing/implementation (39-43) → CLI (44) → architecture/API (46-48) → docs (49) → publish (56-60) → XSPICE (55)
+  - Sequenced US-043 (API docs) after US-049 (API redesign) so documentation reflects final API
+  - Updated notes on US-039, US-040, US-043 with dependency info
+- Rationale:
+  - US-039 was impossibly large — required ALL 113 tests including unimplemented BSIM1/2/XSPICE
+  - Splitting lets progress be measured incrementally (harness reports N/113)
+  - Missing device models (BSIM1, BSIM2) and test categories needed explicit stories
+  - XSPICE deprioritized — it's a large mixed-signal extension for only 3 tests
+  - Architecture/quality stories (US-049/050/051) moved before publish stories since they affect API surface
+  - US-044 was redundant with US-049 which has broader, updated scope
+---

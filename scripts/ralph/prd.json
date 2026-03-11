@@ -142,6 +142,13 @@
       "summary": "Ported regression tests for models, subcircuit processing, temperature, and misc: implemented .if/.elseif/.else/.endif preprocessor, model-referenced resistors, model name scoping in subcircuits, .temp directive parsing, ac= source parsing. Added 15 tests across regression_misc.rs, regression_model.rs, and regression_subckt.rs. Several tests deferred due to missing features (temper keyword, .control language, tc1 on B-sources, model binning).",
       "date": "2026-03-11",
       "storyId": "US-038"
+    },
+    {
+      "iteration": 21,
+      "passType": "project-management",
+      "summary": "Split US-039 (was too large: harness + all 113 passing). Added US-052 (BSIM1), US-053 (BSIM2), US-054 (remaining regression tests), US-055 (general/filter/pz/sens tests), US-056 (XSPICE, lowest priority). Marked US-044 obsolete (superseded by US-049). Reordered priorities: implementation/testing (39-43) before architecture/API (46-48) before polish/publish (56-60). Sequenced US-043 (docs) after US-049 (API design).",
+      "date": "2026-03-11",
+      "storyId": null
     }
   ],
   "userStories": [
@@ -930,21 +937,122 @@
     {
       "id": "US-039",
       "title": "Test harness matching ngspice check.sh",
-      "description": "As a developer, I need an automated test harness that runs all 113 .cir files and compares output to .out references.",
+      "description": "As a developer, I need an automated test harness that runs all 113 .cir files and compares output to .out references, reporting how many pass.",
       "acceptanceCriteria": [
         "Rust integration test or binary that iterates ngspice-upstream/tests/**/*.cir",
         "For each .cir: parse, simulate, format output, filter, diff against .out",
         "Filtering matches check.sh rules (strip metadata, normalize floats)",
         "Summary report: N/113 tests passing",
-        "All 113 tests pass",
+        "Tests that fail due to unimplemented features (BSIM1, BSIM2, XSPICE) are tracked with #[ignore] and clear notes",
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
       "priority": 39,
       "passes": false,
-      "notes": "",
+      "notes": "Split from original US-039 which also required all 113 to pass. This story builds the harness and reports progress. Unimplemented features (BSIM1, BSIM2, XSPICE) are tracked separately in US-052/053/055.",
       "tags": [
         "testing"
+      ]
+    },
+    {
+      "id": "US-052",
+      "title": "BSIM1 MOSFET model (level 4)",
+      "description": "As a developer, I need the BSIM1 (Berkeley Short-channel IGFET Model) MOSFET model so that ngspice-upstream/tests/bsim1/test.cir passes.",
+      "acceptanceCriteria": [
+        "Bsim1Model struct with parameter parsing from .model NMOS/PMOS LEVEL=4",
+        "DC companion model with drain current and conductances",
+        "AC small-signal stamps",
+        "Integration test using ngspice-upstream/tests/bsim1/test.cir fixture",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": "BSIM1 is a legacy 1990s model. Reference: ngspice-upstream/src/spicelib/devices/bsim1/. Only 1 test file.",
+      "tags": [
+        "implementation",
+        "device-model"
+      ]
+    },
+    {
+      "id": "US-053",
+      "title": "BSIM2 MOSFET model (level 5)",
+      "description": "As a developer, I need the BSIM2 MOSFET model so that ngspice-upstream/tests/bsim2/test.cir passes.",
+      "acceptanceCriteria": [
+        "Bsim2Model struct with parameter parsing from .model NMOS/PMOS LEVEL=5",
+        "DC companion model with drain current and conductances",
+        "AC small-signal stamps",
+        "Integration test using ngspice-upstream/tests/bsim2/test.cir fixture",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "BSIM2 is a legacy 1990s model. Reference: ngspice-upstream/src/spicelib/devices/bsim2/. Only 1 test file.",
+      "tags": [
+        "implementation",
+        "device-model"
+      ]
+    },
+    {
+      "id": "US-054",
+      "title": "Remaining regression tests (pipe, pz, sens, temper, subckt-processing)",
+      "description": "As a developer, I need the remaining regression test categories ported and passing.",
+      "acceptanceCriteria": [
+        "Port ngspice-upstream/tests/regression/pz/ac-resistance.cir (pole-zero regression)",
+        "Port ngspice-upstream/tests/regression/sens/ (4 tests: sens-ac-1/2, sens-dc-1/2)",
+        "Port ngspice-upstream/tests/regression/temper/ (4 tests: temper-1/2/3, temper-res-1) — requires TEMPER keyword support",
+        "Port ngspice-upstream/tests/regression/subckt-processing/global-1.cir (.global directive)",
+        "Port ngspice-upstream/tests/regression/pipe/alter-1.cir (if feasible — may require .control language)",
+        "Deferred tests clearly documented with reasons",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": "Some tests may require features not yet implemented: TEMPER keyword in expressions, .global directive, .control block language. Implement what's feasible, defer the rest with clear notes.",
+      "tags": [
+        "testing"
+      ]
+    },
+    {
+      "id": "US-055",
+      "title": "General circuit tests and remaining model tests",
+      "description": "As a developer, I need the general circuit tests and remaining model-specific tests passing to validate end-to-end simulation.",
+      "acceptanceCriteria": [
+        "Port ngspice-upstream/tests/general/ (8 tests: diffpair, fourbitadder, mosamp, mosmem, rca3040, rc, rtlinv, schmitt)",
+        "Port ngspice-upstream/tests/filters/lowpass.cir",
+        "Port ngspice-upstream/tests/transient/fourbitadder.cir",
+        "Port ngspice-upstream/tests/polezero/ (6 tests)",
+        "Port ngspice-upstream/tests/sensitivity/diffpair.cir",
+        "All ported tests pass or are #[ignore]d with clear reasons",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": "These are mostly integration tests exercising existing device models and analyses. The general/ tests use BJT, simple MOSFET, and passive components which should already work. XSPICE tests (xspice/digital/) are out of scope — tracked separately.",
+      "tags": [
+        "testing"
+      ]
+    },
+    {
+      "id": "US-056",
+      "title": "XSPICE digital models (d_ram, d_source, d_state)",
+      "description": "As a developer, I need XSPICE code model support for the 3 digital test circuits.",
+      "acceptanceCriteria": [
+        "XSPICE code model framework (A-element parser support, code model dispatch)",
+        "d_ram, d_source, d_state digital models",
+        "Port ngspice-upstream/tests/xspice/digital/ (3 tests: d_ram, d_source, d_state)",
+        "cargo clippy --workspace -- -D warnings passes",
+        "cargo test --workspace passes"
+      ],
+      "priority": 55,
+      "passes": false,
+      "notes": "XSPICE is a significant extension to SPICE for mixed-signal simulation. This is the lowest priority implementation story — consider deferring if all other tests pass. Only 3 test files depend on it.",
+      "tags": [
+        "implementation",
+        "device-model"
       ]
     },
     {
@@ -958,9 +1066,9 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 40,
+      "priority": 44,
       "passes": false,
-      "notes": "",
+      "notes": "Depends on stable output formatting. The test harness (US-039) needs similar output formatting so these may share code. CLI needs the output module to match ngspice batch format.",
       "tags": [
         "cli"
       ]
@@ -977,7 +1085,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 41,
+      "priority": 56,
       "passes": false,
       "notes": "Currently missing: license field on subcrates, repository/homepage/keywords/categories on all crates, version constraints on path deps. thevenin-cli root uses edition 2024 (Rust 1.85+).",
       "tags": [
@@ -997,7 +1105,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 42,
+      "priority": 57,
       "passes": false,
       "notes": "No LICENSE file or README currently exists. The netlist crate has good module-level rustdoc already.",
       "tags": [
@@ -1018,32 +1126,23 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 43,
+      "priority": 49,
       "passes": false,
-      "notes": "thevenin-types has excellent docs already. thevenin has module-level docs on device models but no crate-level doc comment. Need to audit pub visibility — some internal helpers may be needlessly public.",
+      "notes": "thevenin-types has excellent docs already. thevenin has module-level docs on device models but no crate-level doc comment. Need to audit pub visibility — some internal helpers may be needlessly public. Should be done AFTER US-049 (API redesign) so docs reflect the final API.",
       "tags": [
         "crate"
       ]
     },
     {
       "id": "US-044",
-      "title": "Stable public API design",
-      "description": "As a library consumer, I need a stable, ergonomic top-level API so that basic workflows (parse → simulate → read results) are straightforward and unlikely to break.",
-      "acceptanceCriteria": [
-        "thevenin-cli root crate re-exports a curated public API (don't just pub use everything from core)",
-        "Top-level convenience functions: e.g. thevenin::simulate(netlist) that runs all analyses",
-        "SimResult types are ergonomic: named field access, iteration, indexing by node name",
-        "Error types are public, well-structured, and use thiserror — no String errors or panics in the public API",
-        "Builder or options pattern for simulation configuration (tolerances, iteration limits, etc.)",
-        "No accidental exposure of internal types (MNA matrices, device stamps, NR state) in the public API",
-        "cargo clippy --workspace -- -D warnings passes",
-        "cargo test --workspace passes"
-      ],
-      "priority": 44,
-      "passes": false,
-      "notes": "Currently the root crate is just a Hello World main.rs. Need to design what thevenin as a library actually exports. Consider: should users depend on thevenin-cli (umbrella) or thevenin directly?",
+      "title": "OBSOLETE — Stable public API design (superseded by US-049)",
+      "description": "Superseded by US-049 which has broader scope and updated criteria.",
+      "acceptanceCriteria": [],
+      "priority": 99,
+      "passes": true,
+      "notes": "Marked obsolete in PM pass iteration 21. US-049 covers all of this and more.",
       "tags": [
-        "crate"
+        "obsolete"
       ]
     },
     {
@@ -1081,7 +1180,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 46,
+      "priority": 58,
       "passes": false,
       "notes": "No CI exists yet. The project uses nix develop for reproducible dev environments — CI should leverage this.",
       "tags": [
@@ -1100,7 +1199,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 47,
+      "priority": 59,
       "passes": false,
       "notes": "Publishing order matters: thevenin-types first (no internal deps), then thevenin, then thevenin-cli.",
       "tags": [
@@ -1121,7 +1220,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 48,
+      "priority": 60,
       "passes": false,
       "notes": "ngspice-upstream/ is ~100MB+ of C source — must be excluded. The scripts/ralph/ directory with prd.json should also be excluded.",
       "tags": [
@@ -1143,7 +1242,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 49,
+      "priority": 46,
       "passes": false,
       "notes": "Supersedes US-044. Current state: root crate has examples/ but API was designed incrementally as features were added. Needs a holistic pass to make it feel like a designed library rather than exposed internals. Consider looking at similar Rust libraries (e.g. nalgebra, petgraph) for API inspiration.",
       "tags": [
@@ -1166,7 +1265,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 50,
+      "priority": 47,
       "passes": false,
       "notes": "This is a core project principle from CLAUDE.md. The codebase was built incrementally with many device models ported from C, so there are likely places where C-style patterns (raw numbers, boolean flags, stringly-typed config) leaked through. Focus on high-impact areas: public API types, device model configuration, analysis parameters.",
       "tags": [
@@ -1187,7 +1286,7 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 51,
+      "priority": 48,
       "passes": false,
       "notes": "Companion to US-050 (make incorrect states unrepresentable). Together they ensure: US-050 prevents invalid states at compile time, US-051 ensures runtime failures are always recoverable. The codebase was ported from C which uses assert/abort patterns — these need to become Result returns.",
       "tags": [
