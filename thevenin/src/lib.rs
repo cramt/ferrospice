@@ -44,6 +44,7 @@ pub mod mos6;
 pub mod mosfet;
 pub mod newton;
 pub mod noise;
+pub mod output;
 pub(crate) mod physics;
 pub mod pz;
 pub mod sens;

@@ -1,0 +1,8 @@
+[profile.default]
+# 30-second timeout per test to prevent hanging on long simulations
+slow-timeout = { period = "30s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+# The summary test runs all 113 tests sequentially — give it more time
+filter = "test(harness_summary)"
+slow-timeout = { period = "300s", terminate-after = 1 }

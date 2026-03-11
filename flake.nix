@@ -110,6 +110,7 @@
             nodejs
             chromium
             chromedriver
+            cargo-nextest
           ];
 
           shellHook = ''
