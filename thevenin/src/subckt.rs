@@ -188,6 +188,20 @@ fn expand_subckt_call(
     // Instance prefix for unique naming (lowercase, matching ngspice convention)
     let prefix = instance_name.to_lowercase();
 
+    // Collect local model names for this subcircuit scope so we can
+    // prefix them to avoid collisions with same-named models in other scopes.
+    let local_model_names: std::collections::HashSet<String> = subckt
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let Item::Model(m) = item {
+                Some(m.name.to_uppercase())
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Process each item in the subcircuit body
     for item in &subckt.items {
         match item {
@@ -216,16 +230,19 @@ fn expand_subckt_call(
                         depth + 1,
                     )?;
                 } else {
-                    // Remap element nodes and name
-                    let new_elem =
+                    // Remap element nodes and name, including model references
+                    let mut new_elem =
                         remap_element(elem, &prefix, &node_map, global_nodes, &param_map);
+                    remap_model_ref(&mut new_elem.kind, &prefix, &local_model_names);
                     output.push(Item::Element(new_elem));
                 }
             }
             Item::Model(model_def) => {
-                // Hoist model definitions to top level (don't prefix model name —
-                // elements inside the subcircuit reference them by original name)
-                output.push(Item::Model(model_def.clone()));
+                // Hoist model definitions to top level with prefixed name
+                // to maintain proper scoping
+                let mut prefixed_model = model_def.clone();
+                prefixed_model.name = format!("{}.{}", prefix, model_def.name);
+                output.push(Item::Model(prefixed_model));
             }
             Item::Subckt(_) => {
                 // Nested subcircuit definitions are already collected globally
@@ -510,6 +527,36 @@ fn remap_element(
     Element {
         name: new_name,
         kind: new_kind,
+    }
+}
+
+/// Remap model references in an element if they match a locally-scoped model.
+fn remap_model_ref(
+    kind: &mut ElementKind,
+    prefix: &str,
+    local_model_names: &std::collections::HashSet<String>,
+) {
+    let remap = |model: &mut String| {
+        if local_model_names.contains(&model.to_uppercase()) {
+            *model = format!("{}.{}", prefix, model);
+        }
+    };
+
+    match kind {
+        ElementKind::Diode { model, .. } => remap(model),
+        ElementKind::Bjt { model, .. } => remap(model),
+        ElementKind::Mosfet { model, .. } => remap(model),
+        ElementKind::Jfet { model, .. } => remap(model),
+        ElementKind::Mesa { model, .. } => remap(model),
+        // For resistors with model-referenced values (Expr::Param), prefix the param name
+        ElementKind::Resistor { value, .. } => {
+            if let Expr::Param(name) = value
+                && local_model_names.contains(&name.to_uppercase())
+            {
+                *value = Expr::Param(format!("{}.{}", prefix, name));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -838,7 +885,7 @@ X1 1 0 DCLAMP
             })
             .collect();
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].name, "DMOD");
+        assert_eq!(models[0].name, "x1.DMOD");
 
         // Check diode element was expanded
         let elements: Vec<&Element> = flat
@@ -854,9 +901,16 @@ X1 1 0 DCLAMP
             .collect();
         assert_eq!(elements.len(), 2); // V1 + x1.d1
 
-        if let ElementKind::Diode { anode, cathode, .. } = &elements[1].kind {
+        if let ElementKind::Diode {
+            anode,
+            cathode,
+            model,
+            ..
+        } = &elements[1].kind
+        {
             assert_eq!(anode, "1"); // port "a" -> "1"
             assert_eq!(cathode, "0"); // port "k" -> "0"
+            assert_eq!(model, "x1.DMOD"); // model name prefixed with instance path
         } else {
             panic!("expected diode");
         }

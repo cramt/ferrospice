@@ -1005,6 +1005,8 @@ pub enum Item {
     Options(Vec<Param>),
     /// `.save vec ...`
     Save(Vec<String>),
+    /// `.temp value` — circuit simulation temperature in °C.
+    Temp(f64),
     /// A full-line comment (`* ...`).
     Comment(String),
     /// Anything not recognised — stored verbatim for lossless round-trip.
@@ -1051,6 +1053,7 @@ impl fmt::Display for Item {
                 }
                 Ok(())
             }
+            Item::Temp(t) => write!(f, ".temp {t}"),
             Item::Comment(s) => write!(f, "* {s}"),
             Item::Raw(s) => write!(f, "{s}"),
         }

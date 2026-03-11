@@ -56,6 +56,23 @@ pub mod txl;
 pub mod vbic;
 pub mod waveform;
 
+/// Extract simulation temperature from a netlist (from `.temp` directive).
+/// Returns 27.0°C (room temperature) as default.
+pub fn netlist_temp(netlist: &thevenin_types::Netlist) -> f64 {
+    netlist
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let thevenin_types::Item::Temp(t) = item {
+                Some(*t)
+            } else {
+                None
+            }
+        })
+        .next_back()
+        .unwrap_or(27.0)
+}
+
 pub use ac::simulate_ac;
 pub use bjt::{BjtInstance, BjtModel, BjtType, stamp_bjt};
 pub use bsim3::{Bsim3Companion, Bsim3Instance, Bsim3Model, stamp_bsim3};

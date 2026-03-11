@@ -91,6 +91,151 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
     out
 }
 
+/// Evaluate a simple numeric condition used in `.if` / `.elseif` directives.
+///
+/// Supports: `(expr == expr)`, `(expr != expr)`, `(expr > expr)`, etc.
+/// where each expr is either a numeric literal or a parameter name.
+fn eval_condition(cond: &str, params: &std::collections::HashMap<String, f64>) -> bool {
+    let cond = cond.trim();
+    // Strip outer parentheses
+    let cond = if cond.starts_with('(') && cond.ends_with(')') {
+        &cond[1..cond.len() - 1]
+    } else {
+        cond
+    };
+    let cond = cond.trim();
+
+    // Find comparison operator
+    let (lhs, op, rhs) = if let Some(i) = cond.find("==") {
+        (&cond[..i], "==", &cond[i + 2..])
+    } else if let Some(i) = cond.find("!=") {
+        (&cond[..i], "!=", &cond[i + 2..])
+    } else if let Some(i) = cond.find(">=") {
+        (&cond[..i], ">=", &cond[i + 2..])
+    } else if let Some(i) = cond.find("<=") {
+        (&cond[..i], "<=", &cond[i + 2..])
+    } else if let Some(i) = cond.find('>') {
+        (&cond[..i], ">", &cond[i + 1..])
+    } else if let Some(i) = cond.find('<') {
+        (&cond[..i], "<", &cond[i + 1..])
+    } else if let Some(i) = cond.find('=') {
+        // Single = also treated as == (ngspice compat)
+        (&cond[..i], "==", &cond[i + 1..])
+    } else {
+        // If no operator, treat as truthy: non-zero = true
+        let val = resolve_param_val(cond.trim(), params);
+        return val != 0.0;
+    };
+
+    let l = resolve_param_val(lhs.trim(), params);
+    let r = resolve_param_val(rhs.trim(), params);
+
+    match op {
+        "==" => (l - r).abs() < 1e-15,
+        "!=" => (l - r).abs() >= 1e-15,
+        ">" => l > r,
+        "<" => l < r,
+        ">=" => l >= r,
+        "<=" => l <= r,
+        _ => false,
+    }
+}
+
+fn resolve_param_val(tok: &str, params: &std::collections::HashMap<String, f64>) -> f64 {
+    if let Some(v) = parse_spice_number(tok) {
+        v
+    } else if let Some(&v) = params.get(&tok.to_lowercase()) {
+        v
+    } else {
+        0.0
+    }
+}
+
+/// Process `.if` / `.elseif` / `.else` / `.endif` conditional blocks.
+///
+/// This runs on preprocessed logical lines, collecting `.param` definitions
+/// as it goes, then evaluating conditions to include/exclude lines.
+fn process_conditionals(lines: Vec<(usize, String)>) -> Vec<(usize, String)> {
+    let mut params: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut result = Vec::new();
+
+    // Stack of (branch_taken, any_branch_taken) for nested .if blocks
+    let mut stack: Vec<(bool, bool)> = Vec::new();
+
+    for (lineno, line) in lines {
+        let upper = line.trim().to_uppercase();
+        let tokens: Vec<&str> = upper.split_whitespace().collect();
+
+        if tokens.is_empty() {
+            continue;
+        }
+
+        match tokens[0] {
+            ".IF" => {
+                let cond_str = line.trim()[3..].trim();
+                let active = stack.iter().all(|(taken, _)| *taken);
+                let cond_result = if active {
+                    eval_condition(cond_str, &params)
+                } else {
+                    false
+                };
+                stack.push((active && cond_result, active && cond_result));
+            }
+            ".ELSEIF" => {
+                let parent_active =
+                    stack.len() <= 1 || stack[..stack.len() - 1].iter().all(|(t, _)| *t);
+                if let Some((taken, any_taken)) = stack.last_mut() {
+                    if parent_active && !*any_taken {
+                        let cond_str = line.trim()[7..].trim();
+                        let cond_result = eval_condition(cond_str, &params);
+                        *taken = cond_result;
+                        if cond_result {
+                            *any_taken = true;
+                        }
+                    } else {
+                        *taken = false;
+                    }
+                }
+            }
+            ".ELSE" => {
+                let parent_active =
+                    stack.len() <= 1 || stack[..stack.len() - 1].iter().all(|(t, _)| *t);
+                if let Some((taken, any_taken)) = stack.last_mut() {
+                    if parent_active && !*any_taken {
+                        *taken = true;
+                        *any_taken = true;
+                    } else {
+                        *taken = false;
+                    }
+                }
+            }
+            ".ENDIF" => {
+                stack.pop();
+            }
+            _ => {
+                let active = stack.is_empty() || stack.iter().all(|(taken, _)| *taken);
+                if active {
+                    // Collect .param definitions for future condition evaluation
+                    if tokens[0] == ".PARAM" || tokens[0] == ".PARAMETERS" {
+                        for tok in line.split_whitespace().skip(1) {
+                            if let Some((k, v)) = tok.split_once('=') {
+                                let k = k.trim().to_lowercase();
+                                let v = v.trim();
+                                if let Some(val) = parse_spice_number(v) {
+                                    params.insert(k, val);
+                                }
+                            }
+                        }
+                    }
+                    result.push((lineno, line));
+                }
+            }
+        }
+    }
+
+    result
+}
+
 // ---------------------------------------------------------------------------
 // Tokeniser
 // ---------------------------------------------------------------------------
@@ -434,6 +579,10 @@ fn parse_source(tokens: &[String]) -> Source {
                     } else {
                         src.dc = Some(parse_expr(val_str));
                     }
+                } else if upper.starts_with("AC=") {
+                    let val_str = &tokens[i][3..]; // skip "ac=" or "AC="
+                    let mag = parse_expr(val_str);
+                    src.ac = Some(AcSpec { mag, phase: None });
                 } else if let Some(w) = parse_waveform(&tokens[i]) {
                     // Try as a waveform
                     src.waveform = Some(w);
@@ -1206,8 +1355,12 @@ fn parse_dot(
         }
 
         ".TEMP" => {
-            // Temperature specification — store as raw for now
-            Ok(Item::Raw(line.to_string()))
+            // Temperature specification: .temp <value_in_celsius>
+            let val = tokens
+                .get(1)
+                .and_then(|t| parse_spice_number(t))
+                .unwrap_or(27.0);
+            Ok(Item::Temp(val))
         }
 
         _ => Ok(Item::Raw(line.to_string())),
@@ -1271,6 +1424,7 @@ fn parse_line(
 
 pub fn parse(input: &str) -> Result<Netlist, ParseError> {
     let logical = preprocess(input);
+    let logical = process_conditionals(logical);
     let mut iter = logical.into_iter().peekable();
 
     // First logical line is always the title

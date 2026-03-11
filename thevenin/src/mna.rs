@@ -503,6 +503,44 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
     }
 }
 
+/// Resolve a resistor value, supporting model-referenced resistors.
+///
+/// When the value is a model name (e.g. `r1 2 0 my` where `.model my r r=2k`),
+/// look up the model definition and extract the `r=` or `resistance=` parameter.
+fn resolve_resistor_value(
+    value: &Expr,
+    element_name: &str,
+    models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
+) -> Result<f64, MnaError> {
+    match value {
+        Expr::Num(v) => Ok(*v),
+        Expr::Param(name) => {
+            // Try to look up as a resistor model
+            if let Some(mdef) = models.get(&name.to_uppercase())
+                && mdef.kind.eq_ignore_ascii_case("r")
+            {
+                // Look for r= or resistance= parameter
+                for p in &mdef.params {
+                    if p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance")
+                    {
+                        return expr_value(&p.value, element_name);
+                    }
+                }
+                // Default resistance if model exists but no r= param
+                return Err(MnaError::NonNumericValue {
+                    element: element_name.to_string(),
+                });
+            }
+            Err(MnaError::NonNumericValue {
+                element: element_name.to_string(),
+            })
+        }
+        _ => Err(MnaError::NonNumericValue {
+            element: element_name.to_string(),
+        }),
+    }
+}
+
 /// Extract the BJT LEVEL parameter from model definition and instance params.
 /// Default is 1 (Gummel-Poon). LEVEL=4 is VBIC.
 fn get_bjt_level(
@@ -1004,7 +1042,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     } else {
                         VbicModel::new(crate::vbic::VbicType::Npn)
                     };
-                    vm.temperature_adjust(27.0); // TODO: use simulation TEMP option
+                    vm.temperature_adjust(crate::netlist_temp(netlist));
 
                     let coll_idx = node_map.get(c);
                     let base_idx = node_map.get(b);
@@ -2179,6 +2217,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     &mut voltage_sources,
                     &mut current_sources,
                     &mut resistors,
+                    &models,
                 )?;
             }
         }
@@ -2229,6 +2268,7 @@ fn stamp_element(
     voltage_sources: &mut Vec<VoltageSourceInstance>,
     current_sources: &mut Vec<CurrentSourceInstance>,
     resistors: &mut Vec<ResistorInstance>,
+    models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
 ) -> Result<(), MnaError> {
     match &element.kind {
         ElementKind::Resistor {
@@ -2237,7 +2277,7 @@ fn stamp_element(
             value,
             params,
         } => {
-            let r = expr_value(value, &element.name)?;
+            let r = resolve_resistor_value(value, &element.name, models)?;
             let g = 1.0 / r;
             let ni = node_map.get(pos);
             let nj = node_map.get(neg);
