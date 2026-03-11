@@ -21,6 +21,10 @@ const DELTA_4: f64 = 0.02;
 const DELT_VBS0EFF: f64 = 0.02;
 const DELT_VBSMOS: f64 = 0.005;
 const DELT_VBSEFF: f64 = 0.005;
+/// Smoothing delta for Vbsdio clamp (from ngspice #define DELT_Vbsdio)
+const DELT_VBSDIO: f64 = 0.01;
+/// Offset for Vbsdio clamp floor (from ngspice #define OFF_Vbsdio)
+const OFF_VBSDIO: f64 = 0.02;
 
 const TEMP_DEFAULT: f64 = 300.15;
 
@@ -631,8 +635,16 @@ impl Bsim3SoiDdModel {
         set!(cdscb, "CDSCB");
         set!(cdscd, "CDSCD");
         set!(cit, "CIT");
+        // NCH and NPEAK are aliases (ngspice maps "nch" -> B3SOIDDnpeak).
+        // Whichever the model card uses, copy to both fields so precompute() sees it.
         set!(nch, "NCH");
         set!(npeak, "NPEAK");
+        // If NCH was given but NPEAK was not (or vice versa), synchronise.
+        if m.nch != 1.7e17 && m.npeak == 1.7e17 {
+            m.npeak = m.nch;
+        } else if m.npeak != 1.7e17 && m.nch == 1.7e17 {
+            m.nch = m.npeak;
+        }
         set!(ngate, "NGATE");
         set!(nsub, "NSUB");
         set!(u0, "U0");
@@ -769,8 +781,10 @@ impl Bsim3SoiDdModel {
         }
         self.sqrt_phi = self.phi.sqrt();
 
-        self.vbi_default = self.vtm * (npeak * 1e10 / (self.ni * self.ni)).ln();
-        self.factor1 = (EPSSI / (EPSOX * self.tox)).sqrt();
+        // Built-in potential: vbi = Vt * ln(ND * NA / ni²)
+        // ND = 1e20 /cm³ (n+ S/D), NA = npeak /cm³, ni in /cm³ → dimensionless ratio.
+        self.vbi_default = self.vtm * (1e20 * npeak / (self.ni * self.ni)).ln();
+        self.factor1 = (EPSSI / EPSOX * self.tox).sqrt();
 
         // DD-specific precomputed (same as FD)
         self.cbox = EPSOX / self.tbox;
@@ -780,7 +794,7 @@ impl Bsim3SoiDdModel {
         } else {
             self.nsub
         };
-        self.qsi = CHARGE_Q * npeak * self.tsi;
+        self.qsi = CHARGE_Q * npeak * 1e6 * self.tsi;
         // csieff and qsieff use surface potential-corrected values
         self.csieff = self.csi;
         self.qsieff = self.qsi.max(1e-20);
@@ -871,7 +885,8 @@ impl Bsim3SoiDdModel {
             * (temp / 300.15)
             * (temp / 300.15).sqrt()
             * (21.5565981 - eg / (2.0 * vtm)).exp();
-        let vbi = vtm * (npeak * 1e6 / (ni_temp * ni_temp)).abs().ln();
+        // vbi = Vt * ln(1e20 * npeak / ni²), matching ngspice b3soiddtemp.c line ~654.
+        let vbi = vtm * (1e20 * npeak / (ni_temp * ni_temp)).abs().ln();
 
         // SOI junction parameters
         let t0 = (eg / (2.0 * KBOQ * tnom_k)).exp();
@@ -1070,11 +1085,11 @@ pub fn bsim3soi_dd_companion(
     ves: f64,
     sp: &Bsim3SoiDdSizeParam,
     model: &Bsim3SoiDdModel,
+    gmin: f64,
 ) -> Bsim3SoiDdCompanion {
     let sign = model.mos_type.sign();
     let cox = model.cox;
     let vtm = KBOQ * TEMP_DEFAULT;
-    let gmin = 1e-12;
     let phi = sp.phi;
     let sqrt_phi = sp.sqrt_phi;
 
@@ -1217,7 +1232,15 @@ pub fn bsim3soi_dd_companion(
     let nfb = 1.0 / t6_nfb;
 
     let vbs0eff_dd = vbs0 - nfb * 0.5 * (t1_eff + t2_eff);
-    let vbsdio = vbs0eff_dd;
+
+    // Vbsdio = smooth_max(vbs_i, vbs0eff_dd + OFF_VBSDIO)
+    // Clamps effective body-source voltage from below at the device physics floor.
+    // When body is above floor (normal operation): vbsdio ≈ vbs_i.
+    // When body is below floor (unphysical): vbsdio ≈ vbs0eff_dd + OFF_VBSDIO.
+    let t1_vbsdio = vbs_i - (vbs0eff_dd + OFF_VBSDIO) - DELT_VBSDIO;
+    let t2_vbsdio = (t1_vbsdio * t1_vbsdio + DELT_VBSDIO * DELT_VBSDIO).sqrt();
+    let dvbsdio_dvb = 0.5 * (1.0 + t1_vbsdio / t2_vbsdio);
+    let vbsdio = vbs0eff_dd + OFF_VBSDIO + 0.5 * (t1_vbsdio + t2_vbsdio);
 
     // Vbsmos
     let t1_bsmos = vbs0teff - vbsdio - DELT_VBSMOS;
@@ -1343,8 +1366,10 @@ pub fn bsim3soi_dd_companion(
     let vgst_nvt = vgst / t10;
     let exp_arg = (2.0 * sp.voff - vgst) / t10;
 
-    // Use dvbseff_dvb = 1 for DD (body voltage is self-consistent)
-    let dvbseff_dvb = 1.0;
+    // dvbseff_dvb: derivative of effective body voltage w.r.t. body node.
+    // When body is above the vbs0eff floor, vbsdio ≈ vbs_i so dvbsdio_dvb ≈ 1.
+    // Use dvbsdio_dvb directly (from the smooth-max clamp).
+    let dvbseff_dvb = dvbsdio_dvb;
 
     let (vgsteff, dvgsteff_dvg, dvgsteff_dvd, dvgsteff_dvb) = if vgst_nvt > EXPL_THRESHOLD {
         (vgst, dvgs_eff_dvg, -dvth_dvd, -dvth_dvb * dvbseff_dvb)
@@ -1611,7 +1636,12 @@ pub fn bsim3soi_dd_companion(
         dvdsat_dvd - 0.5 * (dvdsat_dvd - 1.0 + t0 * (dvdsat_dvd - 1.0) + t3 * dvdsat_dvd);
     let dvdseff_dvb = dvdsat_dvb - 0.5 * (dvdsat_dvb + t0 * dvdsat_dvb + t3 * dvdsat_dvb);
 
-    let vdseff = if vdseff > vds_i { vds_i } else { vdseff };
+    let (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb) = if vdseff > vds_i {
+        // Clamped to vds_i: derivatives follow vds_i (dvd/dvd=1, rest=0)
+        (vds_i, 0.0_f64, 1.0_f64, 0.0_f64)
+    } else {
+        (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb)
+    };
     let diff_vds = vds_i - vdseff;
 
     // VA (Early voltage)
@@ -1869,6 +1899,7 @@ pub fn bsim3soi_dd_companion(
         0.0
     };
 
+
     Bsim3SoiDdCompanion {
         ids: ids / sp.nseg,
         gm: gm / sp.nseg,
@@ -1909,6 +1940,9 @@ pub fn bsim3soi_dd_companion(
 }
 
 /// Stamp BSIM3SOI-DD companion model into the MNA matrix and RHS.
+///
+/// Uses direct matrix.add() for asymmetric VCCS elements (gm, gmbs) and
+/// stamp_conductance() for symmetric two-terminal elements (gbd, gbs, series R).
 pub fn stamp_bsim3soi_dd(
     matrix: &mut crate::SparseMatrix,
     rhs: &mut [f64],
@@ -1917,7 +1951,7 @@ pub fn stamp_bsim3soi_dd(
 ) {
     let dp = inst.drain_eff_idx();
     let g = inst.gate_idx;
-    let sp_idx = inst.source_eff_idx();
+    let sp = inst.source_eff_idx();
     let b = inst.body_int_idx;
 
     let sign = inst.model.mos_type.sign();
@@ -1929,47 +1963,82 @@ pub fn stamp_bsim3soi_dd(
         (0.0, 1.0)
     };
 
-    let gm = m * comp.gm;
-    let gds = m * comp.gds;
-    let gmbs = m * comp.gmbs;
+    // Mode-adjusted transconductances (swap gm/gds in reverse mode).
+    let gm_eff = m * (comp.gm * xnrm + comp.gds * xrev);
+    let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
+    let gmbs_eff = m * comp.gmbs;
     let gbd = m * comp.gbd_jct;
     let gbs = m * comp.gbs_jct;
 
-    let gm_eff = gm * xnrm + comp.gds * xrev * m;
-    let gds_eff = gds * xnrm + comp.gm * xrev * m;
-    let gmbs_eff = gmbs;
+    // --- Channel current (asymmetric VCCS stamps) ---
+    // Ids = gm_eff*(Vg-Vsp) + gds_eff*(Vdp-Vsp) + gmbs_eff*(Vb-Vsp)
+    // D' row: dIds/d* contributions
+    if let Some(d) = dp {
+        matrix.add(d, d, gds_eff);
+        if let Some(gate) = g {
+            matrix.add(d, gate, gm_eff);
+        }
+        if let Some(s) = sp {
+            matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff));
+        }
+        if let Some(bulk) = b {
+            matrix.add(d, bulk, gmbs_eff);
+        }
+    }
+    // S' row: -dIds/d* contributions
+    if let Some(s) = sp {
+        if let Some(d) = dp {
+            matrix.add(s, d, -gds_eff);
+        }
+        if let Some(gate) = g {
+            // Forward: -gm_eff; Reverse: handled by gm_eff sign flip via xnrm/xrev
+            matrix.add(s, gate, -gm_eff);
+        }
+        matrix.add(s, s, gm_eff + gds_eff + gmbs_eff);
+        if let Some(bulk) = b {
+            matrix.add(s, bulk, -gmbs_eff);
+        }
+    }
 
-    // D' row
-    crate::stamp_conductance(matrix, dp, dp, gds_eff + gbd);
-    crate::stamp_conductance(matrix, dp, g, gm_eff);
-    crate::stamp_conductance(matrix, dp, sp_idx, -(gm_eff + gds_eff + gmbs_eff));
-    crate::stamp_conductance(matrix, dp, b, gmbs_eff - gbd);
+    // --- Junction conductances (symmetric two-terminal stamps) ---
+    // BD junction: gbd between body and drain-prime
+    crate::stamp_conductance(matrix, b, dp, gbd);
+    // BS junction: gbs between body and source-prime
+    crate::stamp_conductance(matrix, b, sp, gbs);
 
-    // S' row
-    crate::stamp_conductance(matrix, sp_idx, dp, -(gm_eff + gds_eff));
-    crate::stamp_conductance(matrix, sp_idx, g, -gm_eff * xnrm + gds * xrev * m);
-    crate::stamp_conductance(matrix, sp_idx, sp_idx, gm_eff + gds_eff + gmbs_eff + gbs);
-    crate::stamp_conductance(matrix, sp_idx, b, -gmbs_eff - gbs);
+    // Minimum body conductance for floating-body numerical stability.
+    // Body junction conductances at zero bias are ~4e-17 S → nearly-zero body diagonal
+    // → FullPivLU gives garbage. 1e-12 S clamps body to a solvable range.
+    // At realistic operating points junction cond >> 1e-12 S, so physics is unaffected.
+    if inst.body_idx.is_none() && let Some(bi) = b {
+        matrix.add(bi, bi, 1e-12);
+    }
 
-    // B row
-    crate::stamp_conductance(matrix, b, dp, -gbd);
-    crate::stamp_conductance(matrix, b, sp_idx, -gbs);
-    crate::stamp_conductance(matrix, b, b, gbd + gbs);
-
-    // Impact ionization
+    // --- Impact ionization (current flows drain→body, asymmetric) ---
     if comp.iii != 0.0 {
         let gii_d = m * comp.gii_d;
         let gii_g = m * comp.gii_g;
         let gii_b = m * comp.gii_b;
-        crate::stamp_conductance(matrix, dp, dp, -gii_d);
-        crate::stamp_conductance(matrix, dp, g, -gii_g);
-        crate::stamp_conductance(matrix, dp, b, -gii_b);
-        crate::stamp_conductance(matrix, b, dp, gii_d);
-        crate::stamp_conductance(matrix, b, g, gii_g);
-        crate::stamp_conductance(matrix, b, b, gii_b);
+        // KCL at B: +Iii; KCL at D': -Iii
+        if let (Some(d), Some(bi)) = (dp, b) {
+            matrix.add(bi, d, gii_d);
+            matrix.add(d, d, -gii_d);
+        }
+        if let (Some(gate), Some(bi)) = (g, b) {
+            matrix.add(bi, gate, gii_g);
+            if let Some(d) = dp {
+                matrix.add(d, gate, -gii_g);
+            }
+        }
+        if let Some(bi) = b {
+            matrix.add(bi, bi, gii_b);
+            if let Some(d) = dp {
+                matrix.add(d, bi, -gii_b);
+            }
+        }
     }
 
-    // RHS stamps
+    // --- RHS current source stamps ---
     let ceq_d = sign * m * comp.ceq_d;
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
@@ -1977,54 +2046,31 @@ pub fn stamp_bsim3soi_dd(
     if let Some(d) = dp {
         rhs[d] -= ceq_d + ceq_bd;
     }
-    if let Some(s) = sp_idx {
+    if let Some(s) = sp {
         rhs[s] += ceq_d + ceq_bs;
     }
     if let Some(bulk) = b {
         rhs[bulk] -= ceq_bs + ceq_bd;
     }
 
-    // DD body feedback: drive internal body node towards DD-computed Vbs.
-    // DD has junction currents (unlike FD), but floating body still needs feedback
-    // to establish the body potential from the self-consistent surface potential chain.
-    if inst.body_idx.is_none() {
-        // Floating body: use feedback conductance
-        let gbody_fb = m * 1.0; // 1 S feedback conductance
-        crate::stamp_conductance(matrix, b, sp_idx, gbody_fb);
-        let i_fb = gbody_fb * comp.vbs_dd * sign;
-        if let Some(bi) = b {
-            rhs[bi] += i_fb;
-        }
-        if let Some(si) = sp_idx {
-            rhs[si] -= i_fb;
-        }
-    }
-
-    // Body resistance to external body contact (if present)
+    // --- Body resistance to external body contact (if present) ---
     if let (Some(b_int), Some(b_ext)) = (inst.body_int_idx, inst.body_idx) {
         let gbody = if inst.model.rbody > 0.0 {
             m / inst.model.rbody
         } else {
             m * 1e3
         };
-        crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), -gbody);
-        crate::stamp_conductance(matrix, Some(b_ext), Some(b_int), -gbody);
-        crate::stamp_conductance(matrix, Some(b_int), Some(b_int), gbody);
-        crate::stamp_conductance(matrix, Some(b_ext), Some(b_ext), gbody);
+        crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), gbody);
     }
 
-    // Series resistance: D<->D', S<->S'
+    // --- Series resistance: D<->D', S<->S' ---
     if inst.drain_prime_idx.is_some() && inst.drain_prime_idx != inst.drain_idx {
         let rd = if inst.nrd > 0.0 && inst.model.rbsh > 0.0 {
             inst.model.rbsh * inst.nrd
         } else {
             0.01
         };
-        let grd = m / rd;
-        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_idx, grd);
-        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_prime_idx, -grd);
-        crate::stamp_conductance(matrix, inst.drain_prime_idx, inst.drain_idx, -grd);
-        crate::stamp_conductance(matrix, inst.drain_prime_idx, inst.drain_prime_idx, grd);
+        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_prime_idx, m / rd);
     }
     if inst.source_prime_idx.is_some() && inst.source_prime_idx != inst.source_idx {
         let rs = if inst.nrs > 0.0 && inst.model.rbsh > 0.0 {
@@ -2032,11 +2078,7 @@ pub fn stamp_bsim3soi_dd(
         } else {
             0.01
         };
-        let grs = m / rs;
-        crate::stamp_conductance(matrix, inst.source_idx, inst.source_idx, grs);
-        crate::stamp_conductance(matrix, inst.source_idx, inst.source_prime_idx, -grs);
-        crate::stamp_conductance(matrix, inst.source_prime_idx, inst.source_idx, -grs);
-        crate::stamp_conductance(matrix, inst.source_prime_idx, inst.source_prime_idx, grs);
+        crate::stamp_conductance(matrix, inst.source_idx, inst.source_prime_idx, m / rs);
     }
 }
 
@@ -2051,24 +2093,30 @@ pub fn bsim3soi_dd_limit(
     vbs_old: f64,
     ves_old: f64,
     vth: f64,
+    floating_body: bool,
 ) -> (f64, f64, f64, f64) {
     let vgs = crate::bsim3::fetlim(vgs_new, vgs_old, vth);
     let vds = crate::bsim3::fetlim(vds_new, vds_old, vth);
-    let limit = 5.0;
-    let vbs = if (vbs_new - vbs_old).abs() > limit {
+    // Body voltage limiting: ±0.2V per iteration (matching ngspice B3SOIDDlimit)
+    let limit_b = 0.2;
+    let vbs = if (vbs_new - vbs_old).abs() > limit_b {
         if vbs_new > vbs_old {
-            vbs_old + limit
+            vbs_old + limit_b
         } else {
-            vbs_old - limit
+            vbs_old - limit_b
         }
     } else {
         vbs_new
     };
-    let ves = if (ves_new - ves_old).abs() > limit {
+    // SmartVbs: for floating body in DC, Vbs cannot be negative.
+    // Prevents body from going below source which would cause oscillation.
+    let vbs = if floating_body { vbs.max(0.0) } else { vbs };
+    let limit_e = 3.0;
+    let ves = if (ves_new - ves_old).abs() > limit_e {
         if ves_new > ves_old {
-            ves_old + limit
+            ves_old + limit_e
         } else {
-            ves_old - limit
+            ves_old - limit_e
         }
     } else {
         ves_new
@@ -2113,7 +2161,7 @@ mod tests {
     fn test_dd_companion_zero_bias() {
         let model = Bsim3SoiDdModel::new(MosfetType::Nmos);
         let sp = model.size_dep_param(10e-6, 0.25e-6, TEMP_DEFAULT);
-        let comp = bsim3soi_dd_companion(0.0, 0.0, 0.0, 0.0, &sp, &model);
+        let comp = bsim3soi_dd_companion(0.0, 0.0, 0.0, 0.0, &sp, &model, 1e-12);
         // At zero bias, Ids should be very small (subthreshold)
         assert!(comp.ids.abs() < 1e-3);
         assert!(comp.gm.is_finite());
@@ -2124,7 +2172,7 @@ mod tests {
     fn test_dd_companion_on_state() {
         let model = Bsim3SoiDdModel::new(MosfetType::Nmos);
         let sp = model.size_dep_param(10e-6, 0.25e-6, TEMP_DEFAULT);
-        let comp = bsim3soi_dd_companion(1.5, 1.0, 0.0, 0.0, &sp, &model);
+        let comp = bsim3soi_dd_companion(1.5, 1.0, 0.0, 0.0, &sp, &model, 1e-12);
         // In strong inversion with positive Vds, should have meaningful current
         assert!(comp.ids > 0.0);
         assert!(comp.gm > 0.0);
@@ -2135,7 +2183,7 @@ mod tests {
     fn test_dd_companion_reverse() {
         let model = Bsim3SoiDdModel::new(MosfetType::Nmos);
         let sp = model.size_dep_param(10e-6, 0.25e-6, TEMP_DEFAULT);
-        let comp = bsim3soi_dd_companion(1.5, -0.5, 0.0, 0.0, &sp, &model);
+        let comp = bsim3soi_dd_companion(1.5, -0.5, 0.0, 0.0, &sp, &model, 1e-12);
         assert_eq!(comp.mode, -1);
         assert!(comp.ids.is_finite());
     }
@@ -2143,7 +2191,7 @@ mod tests {
     #[test]
     fn test_dd_voltage_limiting() {
         let (vgs, vds, vbs, ves) =
-            bsim3soi_dd_limit(10.0, 10.0, 10.0, 10.0, 0.5, 0.5, 0.0, 0.0, 0.7);
+            bsim3soi_dd_limit(10.0, 10.0, 10.0, 10.0, 0.5, 0.5, 0.0, 0.0, 0.7, false);
         // VGS and VDS should be limited
         assert!(vgs < 10.0);
         assert!(vds < 10.0);

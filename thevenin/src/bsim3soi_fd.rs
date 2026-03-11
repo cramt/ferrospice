@@ -21,6 +21,10 @@ const DELT_VBS0EFF: f64 = 0.02;
 const DELT_VBSMOS: f64 = 0.005;
 const DELT_VBSEFF: f64 = 0.005;
 const DELT_VBS0DIO: f64 = 1e-7;
+/// Smoothing delta for Vbsdio clamp (from ngspice #define DELT_Vbsdio)
+const DELT_VBSDIO: f64 = 0.01;
+/// Offset for Vbsdio clamp floor (from ngspice #define OFF_Vbsdio)
+const OFF_VBSDIO: f64 = 0.02;
 
 const TEMP_DEFAULT: f64 = 300.15;
 
@@ -590,8 +594,14 @@ impl Bsim3SoiFdModel {
         set!(cdscb, "CDSCB");
         set!(cdscd, "CDSCD");
         set!(cit, "CIT");
+        // NCH and NPEAK are aliases in ngspice (IOP "nch" -> B3SOIFD_MOD_NPEAK).
         set!(nch, "NCH");
         set!(npeak, "NPEAK");
+        if m.nch != 1.7e17 && m.npeak == 1.7e17 {
+            m.npeak = m.nch;
+        } else if m.npeak != 1.7e17 && m.nch == 1.7e17 {
+            m.nch = m.npeak;
+        }
         set!(ngate, "NGATE");
         set!(nsub, "NSUB");
         set!(u0, "U0");
@@ -713,8 +723,9 @@ impl Bsim3SoiFdModel {
         }
         self.sqrt_phi = self.phi.sqrt();
 
-        self.vbi_default = self.vtm * (npeak * 1e10 / (self.ni * self.ni)).ln();
-        self.factor1 = (EPSSI / (EPSOX * self.tox)).sqrt();
+        // vbi = Vt * ln(ND * NA / ni²), ND = 1e20 /cm³ (n+ S/D), NA = npeak /cm³.
+        self.vbi_default = self.vtm * (1e20 * npeak / (self.ni * self.ni)).ln();
+        self.factor1 = (EPSSI / EPSOX * self.tox).sqrt();
 
         // FD-specific: box and silicon capacitances
         self.cbox = EPSOX / self.tbox;
@@ -1016,11 +1027,11 @@ pub fn bsim3soi_fd_companion(
     ves: f64,
     sp: &Bsim3SoiFdSizeParam,
     model: &Bsim3SoiFdModel,
+    gmin: f64,
 ) -> Bsim3SoiFdCompanion {
     let sign = model.mos_type.sign();
     let cox = model.cox;
     let vtm = KBOQ * TEMP_DEFAULT;
-    let gmin = 1e-12;
     let phi = sp.phi;
     let sqrt_phi = sp.sqrt_phi;
 
@@ -1170,8 +1181,14 @@ pub fn bsim3soi_fd_companion(
 
     let vbs0eff_fd = vbs0 - nfb * 0.5 * (t1_eff + t2_eff);
 
-    // Prepare Vbsdio = Vbs0eff (in FD, Vbs is computed, not an external voltage)
-    let vbsdio = vbs0eff_fd;
+    // Vbsdio: smooth-max(vbs_i, vbs0eff_fd + OFF_VBSDIO)
+    // NOTE: ngspice FD actually uses Vbs = Vbsdio = Vbs0eff (dVbsdio/dVb = 0), but correctly
+    // implementing that requires not creating a floating body node in the MNA (bNode = ground in
+    // ngspice FD). That architectural change is tracked as a follow-up.  For now we use the
+    // smooth-max form (same as DD) which keeps the body node well-conditioned.
+    let t1_vbsdio = vbs_i - (vbs0eff_fd + OFF_VBSDIO) - DELT_VBSDIO;
+    let t2_vbsdio = (t1_vbsdio * t1_vbsdio + DELT_VBSDIO * DELT_VBSDIO).sqrt();
+    let vbsdio = vbs0eff_fd + OFF_VBSDIO + 0.5 * (t1_vbsdio + t2_vbsdio);
 
     // Prepare Vbsmos (account for silicon capacitance correction)
     let t1_bsmos = vbs0teff - vbsdio - DELT_VBSMOS;
@@ -1550,7 +1567,11 @@ pub fn bsim3soi_fd_companion(
         dvdsat_dvd - 0.5 * (dvdsat_dvd - 1.0 + t0 * (dvdsat_dvd - 1.0) + t3 * dvdsat_dvd);
     let dvdseff_dvb = dvdsat_dvb - 0.5 * (dvdsat_dvb + t0 * dvdsat_dvb + t3 * dvdsat_dvb);
 
-    let vdseff = if vdseff > vds_i { vds_i } else { vdseff };
+    let (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb) = if vdseff > vds_i {
+        (vds_i, 0.0_f64, 1.0_f64, 0.0_f64)
+    } else {
+        (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb)
+    };
     let diff_vds = vds_i - vdseff;
 
     // VA (Early voltage: VACLM || VADIBL)
@@ -1722,108 +1743,79 @@ pub fn stamp_bsim3soi_fd(
 ) {
     let dp = inst.drain_eff_idx();
     let g = inst.gate_idx;
-    let sp_idx = inst.source_eff_idx();
+    let sp = inst.source_eff_idx();
     let b = inst.body_int_idx;
 
     let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
-    let (xnrm, xrev) = if comp.mode > 0 {
-        (1.0, 0.0)
-    } else {
-        (0.0, 1.0)
-    };
+    let (xnrm, xrev) = if comp.mode > 0 { (1.0, 0.0) } else { (0.0, 1.0) };
 
-    let gm = m * comp.gm;
-    let gds = m * comp.gds;
-    let gmbs = m * comp.gmbs;
+    let gm_eff = m * (comp.gm * xnrm + comp.gds * xrev);
+    let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
+    let gmbs_eff = m * comp.gmbs;
     let gbd = m * comp.gbd_jct;
     let gbs = m * comp.gbs_jct;
 
-    let gm_eff = gm * xnrm + comp.gds * xrev * m;
-    let gds_eff = gds * xnrm + comp.gm * xrev * m;
-    let gmbs_eff = gmbs;
+    // Channel current: asymmetric VCCS stamps (must use matrix.add, not stamp_conductance)
+    if let Some(d) = dp {
+        matrix.add(d, d, gds_eff);
+        if let Some(gate) = g { matrix.add(d, gate, gm_eff); }
+        if let Some(s) = sp { matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff)); }
+        if let Some(bulk) = b { matrix.add(d, bulk, gmbs_eff); }
+    }
+    if let Some(s) = sp {
+        if let Some(d) = dp { matrix.add(s, d, -gds_eff); }
+        if let Some(gate) = g { matrix.add(s, gate, -gm_eff); }
+        matrix.add(s, s, gm_eff + gds_eff + gmbs_eff);
+        if let Some(bulk) = b { matrix.add(s, bulk, -gmbs_eff); }
+    }
 
-    // D' row
-    crate::stamp_conductance(matrix, dp, dp, gds_eff + gbd);
-    crate::stamp_conductance(matrix, dp, g, gm_eff);
-    crate::stamp_conductance(matrix, dp, sp_idx, -(gm_eff + gds_eff + gmbs_eff));
-    crate::stamp_conductance(matrix, dp, b, gmbs_eff - gbd);
+    // BD/BS junctions: symmetric two-terminal stamps (correct use of stamp_conductance)
+    crate::stamp_conductance(matrix, b, dp, gbd);
+    crate::stamp_conductance(matrix, b, sp, gbs);
 
-    // S' row
-    crate::stamp_conductance(matrix, sp_idx, dp, -(gm_eff + gds_eff));
-    crate::stamp_conductance(matrix, sp_idx, g, -gm_eff * xnrm + gds * xrev * m);
-    crate::stamp_conductance(matrix, sp_idx, sp_idx, gm_eff + gds_eff + gmbs_eff + gbs);
-    crate::stamp_conductance(matrix, sp_idx, b, -gmbs_eff - gbs);
+    // Minimum body conductance for floating-body stability (direct add; stamp_conductance(b,b,x) = no-op)
+    if inst.body_idx.is_none() && let Some(bi) = b { matrix.add(bi, bi, 1e-12); }
 
-    // B row (body KCL)
-    crate::stamp_conductance(matrix, b, dp, -gbd);
-    crate::stamp_conductance(matrix, b, sp_idx, -gbs);
-    crate::stamp_conductance(matrix, b, b, gbd + gbs);
-
-    // Impact ionization
+    // Impact ionization: asymmetric current from D' into B
     if comp.iii != 0.0 {
         let gii_d = m * comp.gii_d;
         let gii_g = m * comp.gii_g;
         let gii_b = m * comp.gii_b;
-        crate::stamp_conductance(matrix, dp, dp, -gii_d);
-        crate::stamp_conductance(matrix, dp, g, -gii_g);
-        crate::stamp_conductance(matrix, dp, b, -gii_b);
-        crate::stamp_conductance(matrix, b, dp, gii_d);
-        crate::stamp_conductance(matrix, b, g, gii_g);
-        crate::stamp_conductance(matrix, b, b, gii_b);
-    }
-
-    // RHS stamps
-    let ceq_d = sign * m * comp.ceq_d;
-
-    if let Some(d) = dp {
-        rhs[d] -= ceq_d;
-    }
-    if let Some(s) = sp_idx {
-        rhs[s] += ceq_d;
-    }
-
-    // FD body feedback: drive internal body node to the FD-computed Vbs.
-    // In FD SOI, Vbs is self-consistently computed (not a free variable), so we
-    // use a feedback conductance to enforce V(body) - V(source') = vbs_fd.
-    {
-        let gbody_fb = m * 1.0; // 1 S feedback conductance
-        crate::stamp_conductance(matrix, b, sp_idx, gbody_fb);
-        let i_fb = gbody_fb * comp.vbs_fd * sign;
+        if let (Some(d), Some(bi)) = (dp, b) {
+            matrix.add(bi, d, gii_d);
+            matrix.add(d, d, -gii_d);
+        }
+        if let (Some(gate), Some(bi)) = (g, b) {
+            matrix.add(bi, gate, gii_g);
+            if let Some(d) = dp { matrix.add(d, gate, -gii_g); }
+        }
         if let Some(bi) = b {
-            rhs[bi] += i_fb;
-        }
-        if let Some(si) = sp_idx {
-            rhs[si] -= i_fb;
+            matrix.add(bi, bi, gii_b);
+            if let Some(d) = dp { matrix.add(d, bi, -gii_b); }
         }
     }
 
-    // Body resistance to external body contact (if present)
+    // RHS
+    let ceq_d = sign * m * comp.ceq_d;
+    if let Some(d) = dp { rhs[d] -= ceq_d; }
+    if let Some(s) = sp { rhs[s] += ceq_d; }
+
+    // Body resistance to external body contact
     if let (Some(b_int), Some(b_ext)) = (inst.body_int_idx, inst.body_idx) {
-        let gbody = if inst.model.rbody > 0.0 {
-            m / inst.model.rbody
-        } else {
-            m * 1e3
-        };
-        crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), -gbody);
-        crate::stamp_conductance(matrix, Some(b_ext), Some(b_int), -gbody);
-        crate::stamp_conductance(matrix, Some(b_int), Some(b_int), gbody);
-        crate::stamp_conductance(matrix, Some(b_ext), Some(b_ext), gbody);
+        let gbody = if inst.model.rbody > 0.0 { m / inst.model.rbody } else { m * 1e3 };
+        crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), gbody);
     }
 
-    // Series resistance: D<->D', S<->S'
+    // Series resistance: single stamp_conductance per resistor
     if inst.drain_prime_idx.is_some() && inst.drain_prime_idx != inst.drain_idx {
         let rd = if inst.nrd > 0.0 && inst.model.rbsh > 0.0 {
             inst.model.rbsh * inst.nrd
         } else {
             0.01
         };
-        let grd = m / rd;
-        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_idx, grd);
-        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_prime_idx, -grd);
-        crate::stamp_conductance(matrix, inst.drain_prime_idx, inst.drain_idx, -grd);
-        crate::stamp_conductance(matrix, inst.drain_prime_idx, inst.drain_prime_idx, grd);
+        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_prime_idx, m / rd);
     }
     if inst.source_prime_idx.is_some() && inst.source_prime_idx != inst.source_idx {
         let rs = if inst.nrs > 0.0 && inst.model.rbsh > 0.0 {
@@ -1831,11 +1823,7 @@ pub fn stamp_bsim3soi_fd(
         } else {
             0.01
         };
-        let grs = m / rs;
-        crate::stamp_conductance(matrix, inst.source_idx, inst.source_idx, grs);
-        crate::stamp_conductance(matrix, inst.source_idx, inst.source_prime_idx, -grs);
-        crate::stamp_conductance(matrix, inst.source_prime_idx, inst.source_idx, -grs);
-        crate::stamp_conductance(matrix, inst.source_prime_idx, inst.source_prime_idx, grs);
+        crate::stamp_conductance(matrix, inst.source_idx, inst.source_prime_idx, m / rs);
     }
 }
 

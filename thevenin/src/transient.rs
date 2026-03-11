@@ -972,7 +972,7 @@ fn solve_timestep(
 
         // 4. Stamp all nonlinear device companions.
         if has_nonlinear {
-            dev_state.stamp_devices(solution, system, mna);
+            dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
         }
     };
 

@@ -313,6 +313,9 @@ fn collect_cir_files(dir: &Path, out: &mut Vec<PathBuf>) {
 // ============================================================
 
 macro_rules! harness_test {
+    ($name:ident, $path:expr,) => {
+        harness_test!($name, $path);
+    };
     ($name:ident, $path:expr) => {
         #[test]
         fn $name() {
@@ -359,82 +362,67 @@ harness_test!(
 // === BSIM3SOI-DD ===
 harness_test!(
     harness_bsim3soidd_inv2,
-    "bsim3soidd/inv2.cir",
-    ignore = "NR convergence failure (US-059)"
+    "bsim3soidd/inv2.cir"
 );
 harness_test!(
     harness_bsim3soidd_rampvg2,
     "bsim3soidd/RampVg2.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soidd_t3,
     "bsim3soidd/t3.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soidd_t4,
     "bsim3soidd/t4.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soidd_t5,
     "bsim3soidd/t5.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 
 // === BSIM3SOI-FD ===
 harness_test!(
     harness_bsim3soifd_inv2,
     "bsim3soifd/inv2.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soifd_rampvg2,
     "bsim3soifd/RampVg2.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soifd_t3,
     "bsim3soifd/t3.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soifd_t4,
     "bsim3soifd/t4.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soifd_t5,
     "bsim3soifd/t5.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 
 // === BSIM3SOI-PD ===
 harness_test!(
     harness_bsim3soipd_inv2,
     "bsim3soipd/inv2.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soipd_rampvg2,
     "bsim3soipd/RampVg2.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soipd_t3,
     "bsim3soipd/t3.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soipd_t4,
     "bsim3soipd/t4.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 harness_test!(
     harness_bsim3soipd_t5,
     "bsim3soipd/t5.cir",
-    ignore = "NR convergence failure (US-059)"
 );
 
 // === Filters ===

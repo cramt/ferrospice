@@ -137,7 +137,7 @@ fn solve_nonlinear_op_with_guess(
         mna.stamp_cpl_dc_all(system);
 
         // 3. Stamp all nonlinear device companions.
-        dev_state.stamp_devices(solution, system, mna);
+        dev_state.stamp_devices(solution, system, mna, options.gmin);
     };
 
     let initial = match initial_guess {

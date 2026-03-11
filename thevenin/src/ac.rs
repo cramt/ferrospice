@@ -511,6 +511,7 @@ pub fn stamp_ac_devices(
             ves,
             &bsim.size_params,
             &bsim.model,
+            1e-12,
         );
         stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }
@@ -525,6 +526,7 @@ pub fn stamp_ac_devices(
             ves,
             &bsim.size_params,
             &bsim.model,
+            1e-12,
         );
         stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }
@@ -539,6 +541,7 @@ pub fn stamp_ac_devices(
             ves,
             &bsim.size_params,
             &bsim.model,
+            1e-12,
         );
         stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }

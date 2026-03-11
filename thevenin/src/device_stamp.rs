@@ -293,7 +293,13 @@ impl DeviceVoltageState {
     /// transient analysis. For each device type: extract terminal voltages from
     /// the current solution, apply voltage limiting, compute the companion model,
     /// and stamp it into the linear system.
-    pub fn stamp_devices(&self, solution: &[f64], system: &mut LinearSystem, mna: &MnaSystem) {
+    pub fn stamp_devices(
+        &self,
+        solution: &[f64],
+        system: &mut LinearSystem,
+        mna: &MnaSystem,
+        gmin: f64,
+    ) {
         // Diodes
         {
             let mut prev = self.prev_jct.borrow_mut();
@@ -433,7 +439,7 @@ impl DeviceVoltageState {
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp =
-                    bsim3soi_pd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model);
+                    bsim3soi_pd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model, gmin);
                 stamp_bsim3soi_pd(&mut system.matrix, &mut system.rhs, bsim, &comp);
             }
         }
@@ -458,8 +464,9 @@ impl DeviceVoltageState {
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp =
-                    bsim3soi_fd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model);
+                    bsim3soi_fd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model, gmin);
                 stamp_bsim3soi_fd(&mut system.matrix, &mut system.rhs, bsim, &comp);
+
             }
         }
 
@@ -479,12 +486,14 @@ impl DeviceVoltageState {
                     prev[bi].2,
                     prev[bi].3,
                     bsim.vth0_inst,
+                    bsim.body_idx.is_none(),
                 );
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp =
-                    bsim3soi_dd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model);
+                    bsim3soi_dd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model, gmin);
                 stamp_bsim3soi_dd(&mut system.matrix, &mut system.rhs, bsim, &comp);
+
             }
         }
 

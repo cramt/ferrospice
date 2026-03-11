@@ -589,8 +589,14 @@ impl Bsim3SoiPdModel {
         set!(cdscb, "CDSCB");
         set!(cdscd, "CDSCD");
         set!(cit, "CIT");
+        // NCH and NPEAK are aliases in ngspice (IOP "nch" -> B3SOIPD_MOD_NPEAK).
         set!(nch, "NCH");
         set!(npeak, "NPEAK");
+        if m.nch != 1.7e17 && m.npeak == 1.7e17 {
+            m.npeak = m.nch;
+        } else if m.npeak != 1.7e17 && m.nch == 1.7e17 {
+            m.nch = m.npeak;
+        }
         set!(ngate, "NGATE");
         set!(nsub, "NSUB");
         set!(xj, "XJ");
@@ -722,8 +728,9 @@ impl Bsim3SoiPdModel {
         }
         self.sqrt_phi = self.phi.sqrt();
 
-        self.vbi_default = self.vtm * (npeak * 1e10 / (self.ni * self.ni)).ln();
-        self.factor1 = (EPSSI / (EPSOX * self.tox)).sqrt();
+        // vbi = Vt * ln(ND * NA / ni²), ND = 1e20 /cm³ (n+ S/D), NA = npeak /cm³.
+        self.vbi_default = self.vtm * (1e20 * npeak / (self.ni * self.ni)).ln();
+        self.factor1 = (EPSSI / EPSOX * self.tox).sqrt();
     }
 
     /// Number of internal nodes this model creates.
@@ -816,7 +823,7 @@ impl Bsim3SoiPdModel {
             * (temp / 300.15)
             * (temp / 300.15).sqrt()
             * (21.5565981 - eg / (2.0 * vtm)).exp();
-        let vbi = vtm * (self.npeak * 1e6 / (ni_temp * ni_temp)).abs().ln();
+        let vbi = vtm * (1e20 * self.npeak / (ni_temp * ni_temp)).abs().ln();
 
         // SOI junction parameters
         let t0 = (eg / (2.0 * KBOQ * tnom_k)).exp();
@@ -1015,11 +1022,11 @@ pub fn bsim3soi_pd_companion(
     _ves: f64,
     sp: &Bsim3SoiPdSizeParam,
     model: &Bsim3SoiPdModel,
+    gmin: f64,
 ) -> Bsim3SoiPdCompanion {
     let sign = model.mos_type.sign();
     let cox = model.cox;
     let vtm = KBOQ * TEMP_DEFAULT;
-    let gmin = 1e-12;
     let phi = sp.phi;
     let sqrt_phi = sp.sqrt_phi;
 
@@ -1479,7 +1486,12 @@ pub fn bsim3soi_pd_companion(
         dvdsat_dvd - 0.5 * (dvdsat_dvd - 1.0 + t0 * (dvdsat_dvd - 1.0) + t3 * dvdsat_dvd);
     let dvdseff_dvb = dvdsat_dvb - 0.5 * (dvdsat_dvb + t0 * dvdsat_dvb + t3 * dvdsat_dvb);
 
-    let vdseff = if vdseff > vds_i { vds_i } else { vdseff };
+    let (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb) = if vdseff > vds_i {
+        // Clamped to vds_i: derivatives follow vds_i (dvd/dvd=1, rest=0)
+        (vds_i, 0.0_f64, 1.0_f64, 0.0_f64)
+    } else {
+        (vdseff, dvdseff_dvg, dvdseff_dvd, dvdseff_dvb)
+    };
     let diff_vds = vds_i - vdseff;
 
     // VA (Early voltage: VACLM || VADIBL)
@@ -1795,101 +1807,82 @@ pub fn stamp_bsim3soi_pd(
 ) {
     let dp = inst.drain_eff_idx();
     let g = inst.gate_idx;
-    let sp_idx = inst.source_eff_idx();
+    let sp = inst.source_eff_idx();
     let b = inst.body_int_idx;
 
     let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
-    let (xnrm, xrev) = if comp.mode > 0 {
-        (1.0, 0.0)
-    } else {
-        (0.0, 1.0)
-    };
+    let (xnrm, xrev) = if comp.mode > 0 { (1.0, 0.0) } else { (0.0, 1.0) };
 
-    let gm = m * comp.gm;
-    let gds = m * comp.gds;
-    let gmbs = m * comp.gmbs;
+    let gm_eff = m * (comp.gm * xnrm + comp.gds * xrev);
+    let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
+    let gmbs_eff = m * comp.gmbs;
     let gbd = m * comp.gbd_jct;
     let gbs = m * comp.gbs_jct;
 
-    // Channel current conductances
-    let gm_eff = gm * xnrm + comp.gds * xrev * m;
-    let gds_eff = gds * xnrm + comp.gm * xrev * m;
-    let gmbs_eff = gmbs;
+    // Channel current: asymmetric VCCS stamps (must use matrix.add, not stamp_conductance)
+    if let Some(d) = dp {
+        matrix.add(d, d, gds_eff);
+        if let Some(gate) = g { matrix.add(d, gate, gm_eff); }
+        if let Some(s) = sp { matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff)); }
+        if let Some(bulk) = b { matrix.add(d, bulk, gmbs_eff); }
+    }
+    if let Some(s) = sp {
+        if let Some(d) = dp { matrix.add(s, d, -gds_eff); }
+        if let Some(gate) = g { matrix.add(s, gate, -gm_eff); }
+        matrix.add(s, s, gm_eff + gds_eff + gmbs_eff);
+        if let Some(bulk) = b { matrix.add(s, bulk, -gmbs_eff); }
+    }
 
-    // Stamp channel conductances: D'->G, D'->S', D'->B, G->D', etc.
-    // D' row
-    crate::stamp_conductance(matrix, dp, dp, gds_eff + gbd);
-    crate::stamp_conductance(matrix, dp, g, gm_eff);
-    crate::stamp_conductance(matrix, dp, sp_idx, -(gm_eff + gds_eff + gmbs_eff));
-    crate::stamp_conductance(matrix, dp, b, gmbs_eff - gbd);
+    // BD/BS junctions: symmetric two-terminal stamps (correct use of stamp_conductance)
+    crate::stamp_conductance(matrix, b, dp, gbd);
+    crate::stamp_conductance(matrix, b, sp, gbs);
 
-    // S' row (KCL: current out of S' = -(current into D') for channel)
-    crate::stamp_conductance(matrix, sp_idx, dp, -(gm_eff + gds_eff));
-    crate::stamp_conductance(matrix, sp_idx, g, -gm_eff * xnrm + gds * xrev * m);
-    crate::stamp_conductance(matrix, sp_idx, sp_idx, gm_eff + gds_eff + gmbs_eff + gbs);
-    crate::stamp_conductance(matrix, sp_idx, b, -gmbs_eff - gbs);
+    // Minimum body conductance for floating-body stability (direct add; stamp_conductance(b,b,x) = no-op)
+    if inst.body_idx.is_none() && let Some(bi) = b { matrix.add(bi, bi, 1e-12); }
 
-    // B row (body KCL: junction currents)
-    crate::stamp_conductance(matrix, b, dp, -gbd);
-    crate::stamp_conductance(matrix, b, sp_idx, -gbs);
-    crate::stamp_conductance(matrix, b, b, gbd + gbs);
-
-    // Impact ionization: flows from D' into B
+    // Impact ionization: asymmetric current from D' into B
     if comp.iii != 0.0 {
         let gii_d = m * comp.gii_d;
         let gii_g = m * comp.gii_g;
         let gii_b = m * comp.gii_b;
-        crate::stamp_conductance(matrix, dp, dp, -gii_d);
-        crate::stamp_conductance(matrix, dp, g, -gii_g);
-        crate::stamp_conductance(matrix, dp, b, -gii_b);
-        crate::stamp_conductance(matrix, b, dp, gii_d);
-        crate::stamp_conductance(matrix, b, g, gii_g);
-        crate::stamp_conductance(matrix, b, b, gii_b);
+        if let (Some(d), Some(bi)) = (dp, b) {
+            matrix.add(bi, d, gii_d);
+            matrix.add(d, d, -gii_d);
+        }
+        if let (Some(gate), Some(bi)) = (g, b) {
+            matrix.add(bi, gate, gii_g);
+            if let Some(d) = dp { matrix.add(d, gate, -gii_g); }
+        }
+        if let Some(bi) = b {
+            matrix.add(bi, bi, gii_b);
+            if let Some(d) = dp { matrix.add(d, bi, -gii_b); }
+        }
     }
 
-    // RHS stamps
+    // RHS
     let ceq_d = sign * m * comp.ceq_d;
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
-    // Impact ionization is already included in body KCL through companion linearization
+    if let Some(d) = dp { rhs[d] -= ceq_d + ceq_bd; }
+    if let Some(s) = sp { rhs[s] += ceq_d + ceq_bs; }
+    if let Some(bulk) = b { rhs[bulk] -= ceq_bs + ceq_bd; }
 
-    if let Some(d) = dp {
-        rhs[d] -= ceq_d + ceq_bd;
-    }
-    if let Some(s) = sp_idx {
-        rhs[s] += ceq_d + ceq_bs;
-    }
-    if let Some(bulk) = b {
-        rhs[bulk] -= ceq_bs + ceq_bd;
-    }
-
-    // Body resistance to external body contact (if present)
+    // Body resistance to external body contact
     if let (Some(b_int), Some(b_ext)) = (inst.body_int_idx, inst.body_idx) {
-        let gbody = if inst.model.rbody > 0.0 {
-            m / inst.model.rbody
-        } else {
-            m * 1e3 // High conductance if rbody=0 (effectively shorted)
-        };
-        crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), -gbody);
-        crate::stamp_conductance(matrix, Some(b_ext), Some(b_int), -gbody);
-        crate::stamp_conductance(matrix, Some(b_int), Some(b_int), gbody);
-        crate::stamp_conductance(matrix, Some(b_ext), Some(b_ext), gbody);
+        let gbody = if inst.model.rbody > 0.0 { m / inst.model.rbody } else { m * 1e3 };
+        crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), gbody);
     }
 
-    // Series resistance: D<->D', S<->S'
+    // Series resistance: single stamp_conductance per resistor
     if inst.drain_prime_idx.is_some() && inst.drain_prime_idx != inst.drain_idx {
         let rd = if inst.nrd > 0.0 && inst.model.rbsh > 0.0 {
             inst.model.rbsh * inst.nrd
         } else {
-            0.01 // Small default resistance
+            0.01
         };
-        let grd = m / rd;
-        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_idx, grd);
-        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_prime_idx, -grd);
-        crate::stamp_conductance(matrix, inst.drain_prime_idx, inst.drain_idx, -grd);
-        crate::stamp_conductance(matrix, inst.drain_prime_idx, inst.drain_prime_idx, grd);
+        crate::stamp_conductance(matrix, inst.drain_idx, inst.drain_prime_idx, m / rd);
     }
     if inst.source_prime_idx.is_some() && inst.source_prime_idx != inst.source_idx {
         let rs = if inst.nrs > 0.0 && inst.model.rbsh > 0.0 {
@@ -1897,11 +1890,7 @@ pub fn stamp_bsim3soi_pd(
         } else {
             0.01
         };
-        let grs = m / rs;
-        crate::stamp_conductance(matrix, inst.source_idx, inst.source_idx, grs);
-        crate::stamp_conductance(matrix, inst.source_idx, inst.source_prime_idx, -grs);
-        crate::stamp_conductance(matrix, inst.source_prime_idx, inst.source_idx, -grs);
-        crate::stamp_conductance(matrix, inst.source_prime_idx, inst.source_prime_idx, grs);
+        crate::stamp_conductance(matrix, inst.source_idx, inst.source_prime_idx, m / rs);
     }
 }
 
@@ -1919,22 +1908,23 @@ pub fn bsim3soi_pd_limit(
 ) -> (f64, f64, f64, f64) {
     let vgs = crate::bsim3::fetlim(vgs_new, vgs_old, vth);
     let vds = crate::bsim3::fetlim(vds_new, vds_old, vth);
-    // Body voltage limiting: simple clamp
-    let limit = 5.0;
-    let vbs = if (vbs_new - vbs_old).abs() > limit {
+    // Body voltage limiting: ±0.2V per iteration (matching ngspice B3SOIDDlimit)
+    let limit_b = 0.2;
+    let vbs = if (vbs_new - vbs_old).abs() > limit_b {
         if vbs_new > vbs_old {
-            vbs_old + limit
+            vbs_old + limit_b
         } else {
-            vbs_old - limit
+            vbs_old - limit_b
         }
     } else {
         vbs_new
     };
-    let ves = if (ves_new - ves_old).abs() > limit {
+    let limit_e = 3.0;
+    let ves = if (ves_new - ves_old).abs() > limit_e {
         if ves_new > ves_old {
-            ves_old + limit
+            ves_old + limit_e
         } else {
-            ves_old - limit
+            ves_old - limit_e
         }
     } else {
         ves_new

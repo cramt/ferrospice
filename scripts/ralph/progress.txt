@@ -730,3 +730,18 @@ US-001 through US-020 completed on 2026-03-08. All passing.
   - BSIM1/BSIM2 only unlock 2 tests total; .control/.BJT sensitivity unlock potentially 40+.
 - Codebase pattern updates: none (no code changed this pass)
 ---
+---
+
+## 2026-03-11 - BSIM3SOI partial fixes (iteration 27)
+- Changes made:
+  - Fixed NCH/NPEAK alias in all 3 BSIM3SOI models (DD/FD/PD): in ngspice 'nch' is an IOP alias for 'npeak' (same field). Our code had them as separate fields; model files set NCH=3.3e17 but npeak stayed at default 1.7e17. Fix: sync nch→npeak (or npeak→nch) after parameter parsing if one is at default and the other isn't.
+  - Fixed vbi formula in all 3 models: used `npeak * 1e10 / ni²` but correct is `1e20 * npeak / ni²` (1e20 = n+ S/D doping ND). Reference: b3soiddtemp.c `log(1.0e20 * npeak / (ni*ni))`. Applied to both precompute() and size_dep_param() in DD and PD; precompute() only in FD.
+  - Removed temporary debug prints (DD_DEBUG, FD_DEBUG env-var guards).
+  - Fixed clippy::collapsible_if in all 3 models (floating body stability conductance block).
+- Results: Still 15/15 bsim3soi harness tests failing; 10 other tests still passing (no regressions).
+- Key findings from investigation:
+  1. DD t3: 5.97µA vs 3.63µA (64% high). Root cause: vbseff=0.41V even when Vb=0 due to smooth-max(vbs_i, vbs0eff_dd+0.02) giving vbsdio≈vbs0eff_dd+0.02 when vbs_i < vbs0eff_dd+0.02. This is correct DD architecture but there may be another formula error in the vbs0eff chain.
+  2. FD t3: 3.67µA vs 3.40µA (8% high). Better after our fixes. Root cause: FD should use vbsdio=vbs0eff_fd (NOT smooth-max with actual body voltage), but implementing this correctly requires NOT creating an internal body node for floating body devices. Attempted fix was reverted because it introduced a new failure (1.85e-4A at Vd=0) — the MNA matrix became near-singular with only 3e-12 S total conductance at the body node.
+  3. PD: all 5 tests not yet deeply investigated.
+  4. inv2/RampVg2: NR convergence failures not yet investigated.
+- Recommendation: Split US-059 into 4 sub-stories (US-059a through US-059d). See updated notes in prd.json for US-059 for full details. This task is too large for a single Ralph pass — each sub-story is ~2-3 hours of work.

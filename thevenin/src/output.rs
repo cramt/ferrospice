@@ -786,26 +786,51 @@ fn compare_with_interpolation(
     let exp_x: Vec<f64> = exp_data.iter().map(|(_, x, _)| *x).collect();
     let act_x: Vec<f64> = act_data.iter().map(|(_, x, _)| *x).collect();
 
-    // For each dependent column, build actual arrays and interpolate at expected points.
-    for col in 0..n_deps {
-        let act_y: Vec<f64> = act_data.iter().map(|(_, _, deps)| deps[col]).collect();
+    // If both datasets have the same number of data rows, compare row-by-row.
+    // This handles non-monotone x values (e.g., double DC sweeps where v-sweep repeats).
+    // Only fall back to interpolation when row counts differ (e.g., different timesteps).
+    if exp_data.len() == act_data.len() {
+        for col in 0..n_deps {
+            for (i, (exp_row, act_row)) in exp_data.iter().zip(act_data.iter()).enumerate() {
+                let exp_val = exp_row.2[col];
+                let act_val = act_row.2[col];
+                let abs_diff = (exp_val - act_val).abs();
+                let rel_tol = 1e-4 * exp_val.abs().max(act_val.abs());
+                if abs_diff > rel_tol.max(1e-15) {
+                    return Err(format!(
+                        "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
+                        exp_x[i],
+                        col,
+                        exp_val,
+                        act_val,
+                        abs_diff,
+                        format_diff(norm_expected, norm_actual),
+                    ));
+                }
+            }
+        }
+    } else {
+        // For each dependent column, build actual arrays and interpolate at expected points.
+        for col in 0..n_deps {
+            let act_y: Vec<f64> = act_data.iter().map(|(_, _, deps)| deps[col]).collect();
 
-        for (i, exp_row) in exp_data.iter().enumerate() {
-            let exp_val = exp_row.2[col];
-            let interp_val = lerp_at(exp_x[i], &act_x, &act_y);
+            for (i, exp_row) in exp_data.iter().enumerate() {
+                let exp_val = exp_row.2[col];
+                let interp_val = lerp_at(exp_x[i], &act_x, &act_y);
 
-            let abs_diff = (exp_val - interp_val).abs();
-            let rel_tol = 1e-4 * exp_val.abs().max(interp_val.abs());
-            if abs_diff > rel_tol.max(1e-15) {
-                return Err(format!(
-                    "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
-                    exp_x[i],
-                    col,
-                    exp_val,
-                    interp_val,
-                    abs_diff,
-                    format_diff(norm_expected, norm_actual),
-                ));
+                let abs_diff = (exp_val - interp_val).abs();
+                let rel_tol = 1e-4 * exp_val.abs().max(interp_val.abs());
+                if abs_diff > rel_tol.max(1e-15) {
+                    return Err(format!(
+                        "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
+                        exp_x[i],
+                        col,
+                        exp_val,
+                        interp_val,
+                        abs_diff,
+                        format_diff(norm_expected, norm_actual),
+                    ));
+                }
             }
         }
     }
