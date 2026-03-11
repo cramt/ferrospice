@@ -588,6 +588,10 @@ fn normalize_exponents(text: &str) -> String {
 ///
 /// Non-numeric tokens are compared exactly. Numeric tokens (parseable as f64) are
 /// compared with a relative tolerance of 1e-4 and absolute tolerance of 1e-15.
+///
+/// When line counts differ, falls back to interpolation-aware comparison for
+/// time-series data sections (transient, DC sweep, etc.), linearly interpolating
+/// the actual data at the expected data's independent variable points.
 pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
     let expected_filtered = filter_output(expected);
     let actual_filtered = filter_output(actual);
@@ -595,13 +599,155 @@ pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
     let norm_expected = normalize_for_diff(&expected_filtered);
     let norm_actual = normalize_for_diff(&actual_filtered);
 
-    if norm_expected.len() != norm_actual.len() {
-        return Err(format_diff(&norm_expected, &norm_actual));
+    // Try exact line-by-line comparison first.
+    if norm_expected.len() == norm_actual.len() {
+        let all_match = norm_expected
+            .iter()
+            .zip(norm_actual.iter())
+            .all(|(e, a)| lines_match_approx(e, a));
+        if all_match {
+            return Ok(());
+        }
     }
 
-    for (exp_line, act_line) in norm_expected.iter().zip(norm_actual.iter()) {
-        if !lines_match_approx(exp_line, act_line) {
-            return Err(format_diff(&norm_expected, &norm_actual));
+    // Fall back to interpolation-aware comparison.
+    compare_with_interpolation(&norm_expected, &norm_actual)
+}
+
+/// Check if a normalized line looks like a data row: starts with an integer index
+/// followed by numeric values (e.g. "5 1.234e-09 -2.000e+00").
+fn is_data_row(line: &str) -> bool {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return false;
+    }
+    // First token must be a non-negative integer (row index).
+    if tokens[0].parse::<u64>().is_err() {
+        return false;
+    }
+    // Second token must be a float (time/sweep variable).
+    tokens[1].parse::<f64>().is_ok()
+}
+
+/// Parse a data row into (index, independent_var, dependent_values).
+fn parse_data_row(line: &str) -> Option<(u64, f64, Vec<f64>)> {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return None;
+    }
+    let idx = tokens[0].parse::<u64>().ok()?;
+    let indep = tokens[1].parse::<f64>().ok()?;
+    let deps: Vec<f64> = tokens[2..]
+        .iter()
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect();
+    if deps.len() + 2 != tokens.len() {
+        return None; // Some token wasn't numeric.
+    }
+    Some((idx, indep, deps))
+}
+
+/// Linearly interpolate value at `x` given sorted data points `xs` and `ys`.
+fn lerp_at(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
+    debug_assert_eq!(xs.len(), ys.len());
+    if xs.is_empty() {
+        return 0.0;
+    }
+    if x <= xs[0] {
+        return ys[0];
+    }
+    if x >= xs[xs.len() - 1] {
+        return ys[ys.len() - 1];
+    }
+    // Binary search for the interval.
+    let i = match xs.binary_search_by(|v| v.partial_cmp(&x).unwrap()) {
+        Ok(i) => return ys[i], // Exact match.
+        Err(i) => i,
+    };
+    let x0 = xs[i - 1];
+    let x1 = xs[i];
+    let y0 = ys[i - 1];
+    let y1 = ys[i];
+    let frac = (x - x0) / (x1 - x0);
+    y0 + frac * (y1 - y0)
+}
+
+/// Compare with interpolation: separate text and data lines, compare text exactly,
+/// interpolate data for comparison.
+fn compare_with_interpolation(
+    norm_expected: &[String],
+    norm_actual: &[String],
+) -> Result<(), String> {
+    // Separate text lines and data rows.
+    let exp_text: Vec<&str> = norm_expected
+        .iter()
+        .filter(|l| !is_data_row(l))
+        .map(|s| s.as_str())
+        .collect();
+    let act_text: Vec<&str> = norm_actual
+        .iter()
+        .filter(|l| !is_data_row(l))
+        .map(|s| s.as_str())
+        .collect();
+
+    // Compare text lines.
+    if exp_text.len() != act_text.len() {
+        return Err(format_diff(norm_expected, norm_actual));
+    }
+    for (e, a) in exp_text.iter().zip(act_text.iter()) {
+        if !lines_match_approx(e, a) {
+            return Err(format_diff(norm_expected, norm_actual));
+        }
+    }
+
+    // Parse data rows.
+    let exp_data: Vec<(u64, f64, Vec<f64>)> = norm_expected
+        .iter()
+        .filter_map(|l| parse_data_row(l))
+        .collect();
+    let act_data: Vec<(u64, f64, Vec<f64>)> = norm_actual
+        .iter()
+        .filter_map(|l| parse_data_row(l))
+        .collect();
+
+    if exp_data.is_empty() && act_data.is_empty() {
+        return Ok(());
+    }
+    if exp_data.is_empty() || act_data.is_empty() {
+        return Err(format_diff(norm_expected, norm_actual));
+    }
+
+    // Check that both have the same number of dependent columns.
+    let n_deps = exp_data[0].2.len();
+    if act_data[0].2.len() != n_deps {
+        return Err(format_diff(norm_expected, norm_actual));
+    }
+
+    // Extract independent variable arrays.
+    let exp_x: Vec<f64> = exp_data.iter().map(|(_, x, _)| *x).collect();
+    let act_x: Vec<f64> = act_data.iter().map(|(_, x, _)| *x).collect();
+
+    // For each dependent column, build actual arrays and interpolate at expected points.
+    for col in 0..n_deps {
+        let act_y: Vec<f64> = act_data.iter().map(|(_, _, deps)| deps[col]).collect();
+
+        for (i, exp_row) in exp_data.iter().enumerate() {
+            let exp_val = exp_row.2[col];
+            let interp_val = lerp_at(exp_x[i], &act_x, &act_y);
+
+            let abs_diff = (exp_val - interp_val).abs();
+            let rel_tol = 1e-4 * exp_val.abs().max(interp_val.abs());
+            if abs_diff > rel_tol.max(1e-15) {
+                return Err(format!(
+                    "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
+                    exp_x[i],
+                    col,
+                    exp_val,
+                    interp_val,
+                    abs_diff,
+                    format_diff(norm_expected, norm_actual),
+                ));
+            }
         }
     }
 

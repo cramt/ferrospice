@@ -458,17 +458,17 @@ harness_test!(
 harness_test!(
     harness_general_mosamp,
     "general/mosamp.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "tran: singular matrix during transient solve"
 );
 harness_test!(
     harness_general_mosmem,
     "general/mosmem.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "device info output (US-061)"
 );
 harness_test!(
     harness_general_rca3040,
     "general/rca3040.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "device info output (US-061)"
 );
 harness_test!(
     harness_general_rc,
@@ -478,12 +478,12 @@ harness_test!(
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "device info output (US-061)"
 );
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "device info output (US-061)"
 );
 
 // === HFET ===
@@ -491,7 +491,7 @@ harness_test!(harness_hfet_id_vgs, "hfet/id_vgs.cir");
 harness_test!(
     harness_hfet_inverter,
     "hfet/inverter.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "device info output (US-061)"
 );
 
 // === JFET ===
@@ -528,12 +528,12 @@ harness_test!(
 harness_test!(
     harness_mesa_mesinv,
     "mesa/mesinv.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "tran: initial transient solution values wrong"
 );
 harness_test!(
     harness_mesa_mesosc,
     "mesa/mesosc.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "tran: output mismatch (numerical accuracy)"
 );
 
 // === MES (MESFET) ===
@@ -547,7 +547,7 @@ harness_test!(
 harness_test!(
     harness_mos6_mos6inv,
     "mos6/mos6inv.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "tran: singular matrix during transient solve"
 );
 harness_test!(
     harness_mos6_simpleinv,
@@ -809,18 +809,14 @@ harness_test!(
 harness_test!(
     harness_resistance_res_array,
     "resistance/res_array.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "parameter expression in resistor array not supported"
 );
 harness_test!(
     harness_resistance_res_partition,
     "resistance/res_partition.cir",
-    ignore = "transient timestep (US-055)"
+    ignore = "device info output (US-061)"
 );
-harness_test!(
-    harness_resistance_res_simple,
-    "resistance/res_simple.cir",
-    ignore = "transient timestep (US-055)"
-);
+harness_test!(harness_resistance_res_simple, "resistance/res_simple.cir");
 
 // === Sensitivity ===
 harness_test!(
