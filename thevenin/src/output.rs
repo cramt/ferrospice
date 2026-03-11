@@ -3,7 +3,7 @@
 //! Produces text output that, after filtering with the check.sh FILTER regex,
 //! matches the reference `.out` files from `ngspice-upstream/tests/`.
 
-use thevenin_types::{Analysis, Expr, Item, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{Expr, Item, Netlist, SimPlot, SimResult, SimVector};
 
 /// Parsed `.print` directive: analysis type keyword + list of output variable names.
 #[derive(Debug, Clone)]
@@ -26,25 +26,40 @@ pub fn format_batch_output(netlist: &Netlist, result: &SimResult) -> String {
     ));
 
     let prints = parse_print_directives(netlist);
-    let analyses = collect_analyses(netlist);
 
     // Initial transient solution (for .tran analyses)
-    let has_tran = analyses.iter().any(|a| matches!(a, Analysis::Tran { .. }));
+    let has_tran = result
+        .plots
+        .iter()
+        .any(|p| plot_analysis_type(&p.name) == "tran");
     if has_tran {
         format_initial_tran_solution(&mut out, result);
     }
 
     // Transfer function output (for .tf)
-    for analysis in &analyses {
-        if let Analysis::Tf { output, input } = analysis {
-            format_tf_output(&mut out, result, output, input);
-        }
+    let tf_plots: Vec<&SimPlot> = result
+        .plots
+        .iter()
+        .filter(|p| plot_analysis_type(&p.name) == "tf")
+        .collect();
+    for tf_plot in &tf_plots {
+        format_tf_output(&mut out, tf_plot);
     }
 
     // Data tables for each plot (skip OP plots - they're only used for initial solution)
+    // For PZ, merge all pz plots (poles + zeros) into one table.
+    let pz_plots: Vec<&SimPlot> = result
+        .plots
+        .iter()
+        .filter(|p| plot_analysis_type(&p.name) == "pz")
+        .collect();
+    if !pz_plots.is_empty() {
+        format_pz_table(&mut out, title, &pz_plots);
+    }
+
     for plot in &result.plots {
         let plot_type = plot_analysis_type(&plot.name);
-        if plot_type == "op" {
+        if plot_type == "op" || plot_type == "pz" {
             continue;
         }
 
@@ -53,12 +68,13 @@ pub fn format_batch_output(netlist: &Netlist, result: &SimResult) -> String {
             .filter(|p| p.analysis.eq_ignore_ascii_case(&plot_type))
             .collect();
 
-        if !matching_prints.is_empty() {
+        if plot_type == "sens" {
+            // Sensitivity always uses paginated all-vectors table (4 cols/page)
+            format_print_all_table(&mut out, title, plot, &plot_type);
+        } else if !matching_prints.is_empty() {
             for p in &matching_prints {
                 format_print_table(&mut out, title, plot, p);
             }
-        } else if plot_type == "pz" || plot_type == "sens" {
-            format_print_all_table(&mut out, title, plot, &plot_type);
         }
     }
 
@@ -130,21 +146,6 @@ fn parse_single_print(line: &str) -> Option<PrintDirective> {
     Some(PrintDirective { analysis, vars })
 }
 
-/// Collect all Analysis items from the netlist.
-fn collect_analyses(netlist: &Netlist) -> Vec<Analysis> {
-    netlist
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let Item::Analysis(a) = item {
-                Some(a.clone())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 /// Determine the analysis type from a plot name like "op1", "tran1", "ac1", "dc1".
 fn plot_analysis_type(name: &str) -> String {
     name.trim_end_matches(|c: char| c.is_ascii_digit())
@@ -208,11 +209,12 @@ fn format_sci(val: f64) -> String {
     let mantissa = val / 10.0_f64.powi(exp);
 
     // Handle edge case where mantissa rounds to 10.0
-    if mantissa.abs() >= 9.9999995 {
+    let (mantissa, exp) = if mantissa.abs() >= 9.9999995 {
         let exp = exp + 1;
-        let mantissa = val / 10.0_f64.powi(exp);
-        return format!("{:.6e}", mantissa * 10.0_f64.powi(exp)).replace(|_: char| false, ""); // fallback
-    }
+        (val / 10.0_f64.powi(exp), exp)
+    } else {
+        (mantissa, exp)
+    };
 
     let sign = if exp >= 0 { '+' } else { '-' };
     let exp_abs = exp.unsigned_abs();
@@ -220,18 +222,15 @@ fn format_sci(val: f64) -> String {
 }
 
 /// Format transfer function output.
-fn format_tf_output(out: &mut String, result: &SimResult, _output: &str, _input: &str) {
-    let tf_plot = result.plots.iter().find(|p| p.name.starts_with("tf"));
-    if let Some(plot) = tf_plot {
-        out.push_str("Transfer function information:\n");
-        for vec in &plot.vecs {
-            if !vec.real.is_empty() {
-                let val = vec.real[0];
-                out.push_str(&format!("{} = {}\n", vec.name, format_sci(val)));
-            }
+fn format_tf_output(out: &mut String, plot: &SimPlot) {
+    out.push_str("Transfer function information:\n");
+    for vec in &plot.vecs {
+        if !vec.real.is_empty() {
+            let val = vec.real[0];
+            out.push_str(&format!("{} = {}\n", vec.name, format_sci(val)));
         }
-        out.push('\n');
     }
+    out.push('\n');
 }
 
 /// Format a .print data table.
@@ -288,8 +287,8 @@ fn format_table_header(out: &mut String, vars: &[(String, Vec<f64>)]) {
     out.push('\n');
 }
 
-/// Format a table with all vectors (for pz/sens "all").
-fn format_print_all_table(out: &mut String, title: &str, plot: &SimPlot, _plot_type: &str) {
+/// Format a table with all vectors (for sens "all").
+fn format_print_all_table(out: &mut String, title: &str, plot: &SimPlot, plot_type: &str) {
     let vecs_with_data: Vec<(&str, &[f64])> = plot
         .vecs
         .iter()
@@ -312,6 +311,11 @@ fn format_print_all_table(out: &mut String, title: &str, plot: &SimPlot, _plot_t
         out.push_str(&title_padded);
         out.push('\n');
 
+        // Sensitivity gets a subtitle line matching ngspice format
+        if plot_type == "sens" {
+            out.push_str(&format!("{:^80}\n", "Sensitivity Analysis"));
+        }
+
         out.push_str(&"-".repeat(80));
         out.push('\n');
         out.push_str("Index\t");
@@ -327,6 +331,61 @@ fn format_print_all_table(out: &mut String, title: &str, plot: &SimPlot, _plot_t
             for (_, values) in chunk {
                 if i < values.len() {
                     out.push_str(&format!("{}\t", format_sci(values[i])));
+                }
+            }
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+}
+
+/// Format a PZ (pole-zero) table with complex pairs.
+///
+/// Merges all PZ plots (poles and zeros) into a single table. Each complex
+/// value is formatted as `real,\timag` (comma after real, tab before imaginary).
+/// 2 complex columns per page (each takes 2 tab positions).
+fn format_pz_table(out: &mut String, title: &str, pz_plots: &[&SimPlot]) {
+    // Collect all complex vectors across all PZ plots.
+    let all_vecs: Vec<&SimVector> = pz_plots
+        .iter()
+        .flat_map(|p| p.vecs.iter())
+        .filter(|v| !v.complex.is_empty())
+        .collect();
+
+    if all_vecs.is_empty() {
+        return;
+    }
+
+    let n_rows = all_vecs[0].complex.len();
+    let cols_per_page = 2; // 2 complex columns per page
+
+    out.push_str(&format!("\nNo. of Data Rows : {n_rows}\n"));
+
+    for chunk_start in (0..all_vecs.len()).step_by(cols_per_page) {
+        let chunk_end = (chunk_start + cols_per_page).min(all_vecs.len());
+        let chunk = &all_vecs[chunk_start..chunk_end];
+
+        let title_padded = format!("{:^80}", title);
+        out.push_str(&title_padded);
+        out.push('\n');
+
+        // Header with wide column names (32 chars each for complex pairs)
+        out.push_str(&"-".repeat(80));
+        out.push('\n');
+        out.push_str("Index\t");
+        for vec in chunk {
+            out.push_str(&format!("{:<32}", vec.name));
+        }
+        out.push('\n');
+        out.push_str(&"-".repeat(80));
+        out.push('\n');
+
+        for i in 0..n_rows {
+            out.push_str(&format!("{i}\t"));
+            for vec in chunk {
+                if i < vec.complex.len() {
+                    let c = &vec.complex[i];
+                    out.push_str(&format!("{},\t{}\t", format_sci(c.re), format_sci(c.im)));
                 }
             }
             out.push('\n');

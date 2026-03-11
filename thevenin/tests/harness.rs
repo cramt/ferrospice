@@ -559,33 +559,17 @@ harness_test!(
 harness_test!(
     harness_pz_filt_bridge_t,
     "polezero/filt_bridge_t.cir",
-    ignore = "PZ complex pair format (US-057)"
+    ignore = "device info output (US-061)"
 );
-harness_test!(
-    harness_pz_filt_multistage,
-    "polezero/filt_multistage.cir",
-    ignore = "PZ complex pair format (US-057)"
-);
-harness_test!(
-    harness_pz_filt_rc,
-    "polezero/filt_rc.cir",
-    ignore = "PZ complex pair format (US-057)"
-);
+harness_test!(harness_pz_filt_multistage, "polezero/filt_multistage.cir");
+harness_test!(harness_pz_filt_rc, "polezero/filt_rc.cir");
 harness_test!(
     harness_pz_pz2,
     "polezero/pz2.cir",
-    ignore = "PZ complex pair format (US-057)"
+    ignore = "PZ numerical accuracy: eigenvalue computation off for inductors"
 );
-harness_test!(
-    harness_pz_pzt,
-    "polezero/pzt.cir",
-    ignore = "PZ complex pair format (US-057)"
-);
-harness_test!(
-    harness_pz_simplepz,
-    "polezero/simplepz.cir",
-    ignore = "PZ complex pair format (US-057)"
-);
+harness_test!(harness_pz_pzt, "polezero/pzt.cir");
+harness_test!(harness_pz_simplepz, "polezero/simplepz.cir");
 
 // === Regression: func ===
 harness_test!(
@@ -822,7 +806,7 @@ harness_test!(harness_resistance_res_simple, "resistance/res_simple.cir");
 harness_test!(
     harness_sensitivity_diffpair,
     "sensitivity/diffpair.cir",
-    ignore = "sensitivity table format (US-057)"
+    ignore = "sensitivity parameter set mismatch: missing bjt eg/fc/rbm/tnom/xti/areab/areac/temp params, different ordering"
 );
 
 // === Transient ===
@@ -868,7 +852,7 @@ harness_test!(
 harness_test!(
     harness_vbic_ceamp,
     "vbic/CEamp.cir",
-    ignore = "transient timestep + PZ format (US-055, US-057, US-060)"
+    ignore = "transient timestep (US-055, US-060)"
 );
 harness_test!(
     harness_vbic_diffamp,

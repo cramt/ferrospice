@@ -437,7 +437,7 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
     }
 
     // Build result: one data row with all sensitivities
-    let mut vecs: Vec<SimVector> = sens_names
+    let vecs: Vec<SimVector> = sens_names
         .into_iter()
         .zip(sens_values)
         .map(|(name, value)| SimVector {
@@ -446,16 +446,6 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
             complex: vec![],
         })
         .collect();
-
-    // Add index vector at the beginning
-    vecs.insert(
-        0,
-        SimVector {
-            name: "Index".to_string(),
-            real: vec![0.0],
-            complex: vec![],
-        },
-    );
 
     Ok(SimResult {
         plots: vec![SimPlot {

@@ -307,7 +307,7 @@ pub fn simulate_tf(netlist: &Netlist) -> Result<SimResult, MnaError> {
         ];
 
         plots.push(SimPlot {
-            name: "tf1".to_string(),
+            name: format!("tf{}", plots.len() + 1),
             vecs,
         });
     }
