@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--task US-XXX] [max_iterations]
+# Usage: ./ralph.sh [-i|--interactive] [--task US-XXX] [max_iterations]
 
 set -e
 
@@ -8,8 +8,14 @@ set -e
 MAX_ITERATIONS=10
 TASK=""
 
+INTERACTIVE=false
+
 while [[ $# -gt 0 ]]; do
   case $1 in
+    -i|--interactive)
+      INTERACTIVE=true
+      shift
+      ;;
     --task)
       TASK="$2"
       shift 2
@@ -158,8 +164,14 @@ You MUST work on story **$TASK** specifically. Do not pick a different story. Th
   fi
 
   # Run claude code with the ralph prompt
-  OUTPUT=$(echo "$PROMPT" | claude --dangerously-skip-permissions --print --verbose 2>&1 \
-    | tee /dev/stderr) || true
+  if [ "$INTERACTIVE" = true ]; then
+    # Interactive mode: spawn a normal claude code instance you can watch/interact with
+    echo "$PROMPT" | claude --dangerously-skip-permissions --verbose
+    OUTPUT=""
+  else
+    OUTPUT=$(echo "$PROMPT" | claude --dangerously-skip-permissions --print --verbose 2>&1 \
+      | tee /dev/stderr) || true
+  fi
 
   # Check for completion signal
   if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
