@@ -480,11 +480,7 @@ harness_test!(
 );
 
 // === MES (MESFET) ===
-harness_test!(
-    harness_mes_subth,
-    "mes/subth.cir",
-    ignore = "MES model numerical offset in subthreshold region"
-);
+harness_test!(harness_mes_subth, "mes/subth.cir");
 
 // === MOS6 ===
 harness_test!(

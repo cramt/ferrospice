@@ -300,7 +300,12 @@ fn get_source_dc_value(netlist: &Netlist, src_name: &str) -> f64 {
 /// Sweeps a source across a range of values, computing the DC operating point
 /// at each step. Supports single and double (nested) sweeps.
 pub fn simulate_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
-    let nr_opts = nr_options_from_netlist(netlist);
+    let mut nr_opts = nr_options_from_netlist(netlist);
+    // Match ngspice: CKTdiagGmin starts at 0 for DC analysis (cktop.c).
+    // Device models already include options.gmin in their junction
+    // conductances; an additional diagonal Gmin is only added during the
+    // Gmin-stepping fallback inside newton_raphson_solve.
+    nr_opts.diag_gmin = 0.0;
     // Find the .dc analysis command in the netlist.
     let (src, start, stop, step, src2) = netlist
         .items

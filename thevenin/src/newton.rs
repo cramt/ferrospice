@@ -25,7 +25,16 @@ pub struct NrOptions {
     /// Maximum iterations per step during Gmin/source stepping (ngspice ITL2, default 50).
     pub itl2: usize,
     /// Minimum conductance from each node to ground (ngspice GMIN, default 1e-12).
+    /// Used by device models in junction conductance computations.
     pub gmin: f64,
+    /// Diagonal Gmin added from every node to ground by the solver
+    /// (ngspice `CKTdiagGmin`).  In ngspice this starts at 0 and is only
+    /// elevated during Gmin stepping.  We default to `gmin` for backward
+    /// compatibility; the DC sweep code sets it to 0 so that the only Gmin
+    /// on device nodes comes from the device model equations (matching
+    /// ngspice behaviour where `CKTdiagGmin` stays 0 when the initial
+    /// NIiter converges).
+    pub diag_gmin: f64,
 }
 
 impl Default for NrOptions {
@@ -37,6 +46,7 @@ impl Default for NrOptions {
             itl1: 100,
             itl2: 100,
             gmin: 1e-12,
+            diag_gmin: 1e-12,
         }
     }
 }
@@ -248,8 +258,11 @@ where
     F: Fn(&[f64], &mut LinearSystem, f64, f64),
 {
     // Try direct NR first.
+    // Use options.diag_gmin for the diagonal Gmin.  For DC OP this is 0
+    // (matching ngspice CKTdiagGmin initial value); for transient timesteps
+    // it may be elevated to options.gmin for regularization.
     let attempt = NrAttempt {
-        gmin: options.gmin,
+        gmin: options.diag_gmin,
         source_factor: 1.0,
         max_iters: options.itl1,
     };
