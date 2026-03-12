@@ -491,11 +491,7 @@ harness_test!(
 );
 harness_test!(harness_pz_filt_multistage, "polezero/filt_multistage.cir");
 harness_test!(harness_pz_filt_rc, "polezero/filt_rc.cir");
-harness_test!(
-    harness_pz_pz2,
-    "polezero/pz2.cir",
-    ignore = "PZ numerical accuracy: eigenvalue computation off for inductors"
-);
+harness_test!(harness_pz_pz2, "polezero/pz2.cir");
 harness_test!(harness_pz_pzt, "polezero/pzt.cir");
 harness_test!(harness_pz_simplepz, "polezero/simplepz.cir");
 

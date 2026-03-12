@@ -1,3 +1,4 @@
+use faer::linalg::solvers::Solve as _;
 use faer::Mat;
 
 use thevenin_types::{
@@ -262,11 +263,19 @@ fn build_capacitance_matrix(mna: &MnaSystem, op_solution: &[f64]) -> Mat<f64> {
     c
 }
 
-/// Find roots of det(G + sC) = 0 using eigenvalue decomposition.
+/// Find roots of det(G + sC) = 0 using Schur complement + generalized eigenvalue decomposition.
 ///
-/// Two approaches based on whether G is invertible:
-/// 1. If G is invertible: eigenvalues of G^{-1}*C, poles = -1/λ for non-zero λ
-/// 2. If G is singular: use generalized eigenvalue decomposition
+/// When the C matrix has zero rows (purely algebraic variables such as voltage nodes in
+/// inductor-only circuits), the full GEVD is ill-conditioned because the QZ algorithm
+/// cannot accurately compute large-magnitude eigenvalues when G and C entries span many
+/// orders of magnitude.
+///
+/// Strategy: identify "reactive" rows (those where C has at least one non-zero entry)
+/// and "algebraic" rows (where the entire C row is zero).  Eliminate the algebraic
+/// variables via Schur complement, reducing the problem to a smaller, well-conditioned
+/// GEVD on the reactive subspace only.
+///
+/// For circuits with no purely-algebraic rows (e.g. RC only), the full GEVD is used.
 fn find_eigenvalue_roots(
     g: &Mat<f64>,
     c: &Mat<f64>,
@@ -287,55 +296,195 @@ fn find_eigenvalue_roots(
         return Ok(vec![(-gv / cv, 0.0)]);
     }
 
-    // Try the standard approach: A = G^{-1} * C, then eigenvalues of A.
-    // Check if G is well-conditioned enough by trying to solve.
-    use faer::linalg::solvers::FullPivLu;
-    use faer::prelude::Solve;
+    // Classify rows into reactive (any C entry non-zero) and algebraic (C row all zero).
+    let c_abs_max = {
+        let mut m = 0.0_f64;
+        for i in 0..dim {
+            for j in 0..dim {
+                m = m.max(c[(i, j)].abs());
+            }
+        }
+        m
+    };
+    let c_zero_tol = c_abs_max * 1e-12;
 
-    let lu = FullPivLu::new(g.as_ref());
+    let is_reactive = |row: usize| -> bool {
+        (0..dim).any(|j| c[(row, j)].abs() > c_zero_tol || c[(j, row)].abs() > c_zero_tol)
+    };
 
-    // Check if G is approximately singular by examining the LU factor.
-    // We test by solving G*x = e_1 and checking for NaN/Inf.
-    let mut test_rhs = Mat::<f64>::zeros(dim, 1);
-    test_rhs[(0, 0)] = 1.0;
-    let test_sol = lu.solve(&test_rhs);
-    let g_is_invertible = (0..dim).all(|i| test_sol[(i, 0)].is_finite());
+    let reactive: Vec<usize> = (0..dim).filter(|&i| is_reactive(i)).collect();
+    let algebraic: Vec<usize> = (0..dim).filter(|&i| !is_reactive(i)).collect();
 
-    if g_is_invertible {
-        let a = lu.solve(c);
+    // If there are algebraic variables, attempt Schur complement elimination.
+    // This reduces the GEVD to the reactive subspace only, which is much better
+    // conditioned for circuits with widely-varying component values (e.g. pz2
+    // with R from 1e7 to 1e9 Ω alongside inductors).
+    //
+    // Prerequisite: Gaa (the algebraic-to-algebraic block of G) must be non-singular.
+    // It is singular when algebraic variables are voltage-source branch currents,
+    // because G[iv, iv] = 0 for all voltage sources.  In that case we fall back
+    // to the full GEVD on the original system.
+    if !algebraic.is_empty() && !reactive.is_empty() {
+        let n_a = algebraic.len();
+        let n_q = reactive.len();
 
-        let eigenvalues = a.eigenvalues().map_err(|e| {
-            MnaError::UnsupportedElement(format!("eigenvalue computation failed: {e:?}"))
-        })?;
+        // Build partitioned blocks.
+        //   [Gaa Gaq] [xa]       [0   0  ] [xa]
+        //   [Gqa Gqq] [xq] = s * [0   Cqq] [xq]
+        let mut gaa = Mat::<f64>::zeros(n_a, n_a);
+        let mut gaq = Mat::<f64>::zeros(n_a, n_q);
+        let mut gqa = Mat::<f64>::zeros(n_q, n_a);
+        let mut gqq = Mat::<f64>::zeros(n_q, n_q);
+        let mut cqq = Mat::<f64>::zeros(n_q, n_q);
 
-        let mut roots = Vec::new();
-
-        // Use a relative threshold: eigenvalues smaller than eps * max_eigenvalue
-        // are considered zero (numerical noise from the matrix solve).
-        let max_mag = eigenvalues
-            .iter()
-            .map(|ev| (ev.re * ev.re + ev.im * ev.im).sqrt())
-            .fold(0.0_f64, f64::max);
-        let threshold = max_mag * 1e-10;
-
-        for ev in &eigenvalues {
-            let mag = (ev.re * ev.re + ev.im * ev.im).sqrt();
-            if mag > threshold {
-                // pole = -1/lambda
-                let mag_sq = mag * mag;
-                let re = -ev.re / mag_sq;
-                let im = ev.im / mag_sq;
-                roots.push((re, im));
+        for (ia, &i) in algebraic.iter().enumerate() {
+            for (ja, &j) in algebraic.iter().enumerate() {
+                gaa[(ia, ja)] = g[(i, j)];
+            }
+            for (jq, &j) in reactive.iter().enumerate() {
+                gaq[(ia, jq)] = g[(i, j)];
+            }
+        }
+        for (iq, &i) in reactive.iter().enumerate() {
+            for (ja, &j) in algebraic.iter().enumerate() {
+                gqa[(iq, ja)] = g[(i, j)];
+            }
+            for (jq, &j) in reactive.iter().enumerate() {
+                gqq[(iq, jq)] = g[(i, j)];
+                cqq[(iq, jq)] = c[(i, j)];
             }
         }
 
-        // Remove conjugate pairs (keep one representative).
-        remove_conjugate_duplicates(&mut roots);
+        // Guard: if any row of Gaa is all-zero, Gaa is singular (typical for V-source
+        // branch current rows where G[iv, iv] = 0). Fall back to full GEVD.
+        let g_max = {
+            let mut m = 1e-30_f64;
+            for i in 0..dim {
+                for j in 0..dim {
+                    m = m.max(g[(i, j)].abs());
+                }
+            }
+            m
+        };
+        let zero_row_tol = g_max * 1e-12;
+        let gaa_ok = (0..n_a)
+            .all(|ia| (0..n_a).any(|ja| gaa[(ia, ja)].abs() > zero_row_tol));
 
-        return Ok(roots);
+        if gaa_ok {
+            // Compute Schur complement: S = Gqq - Gqa * Gaa^{-1} * Gaq.
+            // Solve Gaa * X = Gaq for X, then S = Gqq - Gqa * X.
+            let gaa_lu = gaa.partial_piv_lu();
+            let x = gaa_lu.solve(&gaq); // X = Gaa^{-1} * Gaq, shape n_a × n_q
+
+            // If Gaa was effectively singular (e.g., a node's self-conductance was
+            // in the removed column for zeros), the LU solution contains NaN/inf.
+            // In that case fall through to full GEVD.
+            let x_ok = (0..n_a).all(|ia| (0..n_q).all(|jq| x[(ia, jq)].is_finite()));
+            if !x_ok {
+                return find_eigenvalue_roots_gevd(g, c, dim);
+            }
+
+            let s = &gqq - &gqa * &x; // Schur complement, shape n_q × n_q
+
+            // Reduced eigenvalue problem: det(S + λ·Cqq) = 0.
+            // Since Cqq is always invertible (reactive elements have non-zero C),
+            // convert to standard form: A = -Cqq^{-1} · S, poles = eigenvalues(A).
+            let cqq_lu = cqq.partial_piv_lu();
+            let neg_s = &s * faer::Scale(-1.0_f64);
+            let a = cqq_lu.solve(&neg_s); // A = Cqq^{-1} · (-S), poles = eig(A)
+
+            // Apply diagonal similarity balancing D^{-1}·A·D so sub-diagonal
+            // magnitudes ≤ diagonal magnitudes.  For VCVS-cascaded circuits the
+            // raw A has sub-diagonal entries >> diagonal, which prevents QR
+            // convergence.  The similarity preserves eigenvalues exactly.
+            let a_bal = balance_for_eigenvalues(&a, n_q);
+
+            // Normalise by spectral scale to keep entries O(1).
+            let scale = {
+                let mut m = 1e-30_f64;
+                for i in 0..n_q {
+                    m = m.max(a_bal[(i, i)].abs());
+                }
+                m
+            };
+            let a_norm = &a_bal * faer::Scale(1.0 / scale);
+
+            let evs = a_norm
+                .eigenvalues()
+                .map_err(|e| MnaError::UnsupportedElement(format!("EVD failed: {e:?}")))?;
+
+            let mut roots: Vec<(f64, f64)> =
+                evs.iter().map(|c| (c.re * scale, c.im * scale)).collect();
+            remove_conjugate_duplicates(&mut roots);
+            return Ok(roots);
+        }
     }
 
-    // G is singular — use generalized eigenvalue decomposition.
+    // Fall back: full GEVD on the original system.
+    find_eigenvalue_roots_gevd(g, c, dim)
+}
+
+/// Apply a diagonal similarity transformation D^{-1}·A·D that reduces sub-diagonal
+/// magnitudes to be ≤ diagonal magnitudes (iterative Parlett-Reinsch-style balancing).
+///
+/// This does not change eigenvalues but improves QR/QZ convergence for matrices where
+/// off-diagonal entries (e.g. from high-gain VCVS stages) dominate the diagonal.
+fn balance_for_eigenvalues(a: &Mat<f64>, n: usize) -> Mat<f64> {
+    // Start with d[i] = 1 (identity scaling).
+    let mut d = vec![1.0_f64; n];
+
+    // Iterate: for each row, find the max sub-diagonal magnitude and scale d[i]
+    // so that the sub-diagonal → diagonal ratio becomes ≤ 1.
+    // 5 passes is sufficient for practical circuit matrices.
+    for _ in 0..10 {
+        for i in 0..n {
+            let diag = a[(i, i)].abs().max(1e-100);
+            for j in 0..n {
+                if j == i {
+                    continue;
+                }
+                let off_scaled = a[(i, j)].abs() * d[j] / d[i];
+                if off_scaled > diag {
+                    // Scale d[i] up to bring ratio to 1.
+                    d[i] = a[(i, j)].abs() * d[j] / diag;
+                }
+            }
+        }
+    }
+
+    // Build balanced matrix A' = D^{-1} · A · D.
+    let mut out = Mat::<f64>::zeros(n, n);
+    for i in 0..n {
+        for j in 0..n {
+            out[(i, j)] = a[(i, j)] * d[j] / d[i];
+        }
+    }
+    out
+}
+
+/// Core GEVD-based root finder: solves det(G_r + s*C_r) = 0 where both G_r and C_r
+/// are the (possibly reduced) matrices with no purely-algebraic zero rows in C_r.
+fn find_eigenvalue_roots_gevd(
+    g: &Mat<f64>,
+    c: &Mat<f64>,
+    dim: usize,
+) -> Result<Vec<(f64, f64)>, MnaError> {
+    if dim == 0 {
+        return Ok(vec![]);
+    }
+
+    // Special case: faer's generalized_eigen panics on 1×1 matrices.
+    if dim == 1 {
+        let gv = g[(0, 0)];
+        let cv = c[(0, 0)];
+        if cv.abs() < 1e-30 {
+            return Ok(vec![]);
+        }
+        return Ok(vec![(-gv / cv, 0.0)]);
+    }
+
+    // Generalized eigenvalue decomposition: G*v = λ*(-C)*v.
+    // Eigenvalues λ = α/β satisfy det(G + λC) = 0, i.e. λ = pole directly.
     let neg_c = c * faer::Scale(-1.0_f64);
 
     let gevd = g
@@ -345,8 +494,16 @@ fn find_eigenvalue_roots(
     let s_a = gevd.S_a();
     let s_b = gevd.S_b();
 
+    // Threshold for identifying "infinite" eigenvalues (β → 0).
+    let mut c_norm = 1e-30_f64;
+    for i in 0..dim {
+        for j in 0..dim {
+            c_norm = c_norm.max(neg_c[(i, j)].abs());
+        }
+    }
+    let threshold = c_norm * f64::EPSILON * 1e6;
+
     let mut roots = Vec::new();
-    let threshold = 1e-15;
 
     for i in 0..dim {
         let alpha = s_a.column_vector()[i];
@@ -357,15 +514,15 @@ fn find_eigenvalue_roots(
             continue; // Infinite eigenvalue — skip.
         }
 
-        let denom = beta.re * beta.re + beta.im * beta.im;
-        let re = (alpha.re * beta.re + alpha.im * beta.im) / denom;
-        let im = (alpha.im * beta.re - alpha.re * beta.im) / denom;
-
         let alpha_mag = (alpha.re * alpha.re + alpha.im * alpha.im).sqrt();
-        if alpha_mag < threshold * beta_mag {
+        if alpha_mag < threshold {
             roots.push((0.0, 0.0));
             continue;
         }
+
+        let denom = beta.re * beta.re + beta.im * beta.im;
+        let re = (alpha.re * beta.re + alpha.im * beta.im) / denom;
+        let im = (alpha.im * beta.re - alpha.re * beta.im) / denom;
 
         roots.push((re, im));
     }
@@ -380,31 +537,33 @@ fn find_eigenvalue_roots(
 /// keep only one (the one with positive imaginary part).
 /// Does NOT remove repeated real roots (which are physically meaningful).
 fn remove_conjugate_duplicates(roots: &mut Vec<(f64, f64)>) {
-    let tol = 1e-8;
-
-    // First snap near-real roots to real.
+    // Snap to real: if |im| is less than 0.1% of the pole magnitude, treat as real.
+    // This threshold is deliberately generous: the GEVD (QZ algorithm) may return
+    // repeated real poles as complex conjugate pairs with small but non-negligible
+    // imaginary noise. Snapping those to real prevents them from being incorrectly
+    // deduplicated as "one complex pole" instead of "two real poles".
+    let snap_frac = 1e-3;
     for root in roots.iter_mut() {
-        if root.1.abs() < tol * root.0.abs().max(1.0) {
+        let mag = (root.0 * root.0 + root.1 * root.1).sqrt().max(1.0);
+        if root.1.abs() < snap_frac * mag {
             root.1 = 0.0;
         }
     }
 
-    // Remove conjugate pairs: for each complex root (a, b) with b > 0,
+    // Remove conjugate pairs: for each truly complex root (a, b) with b > 0,
     // remove any matching (a, -b).
+    let tol = 1e-6;
     let mut i = 0;
     while i < roots.len() {
-        if roots[i].1.abs() > tol {
-            // Complex root — look for its conjugate.
+        if roots[i].1 > 0.0 {
+            // Complex root with positive imaginary part — look for its conjugate.
             let mut j = i + 1;
             while j < roots.len() {
                 let (ri, ii) = roots[i];
                 let (rj, ij) = roots[j];
-                let scale = ri.abs().max(ii.abs()).max(1.0);
+                let scale = (ri.abs() + ii.abs()).max(1.0);
                 if (ri - rj).abs() < tol * scale && (ii + ij).abs() < tol * scale {
-                    // j is the conjugate of i — remove j, keep the one with im > 0.
-                    if ii < 0.0 {
-                        roots[i].1 = -roots[i].1; // keep positive im
-                    }
+                    // j is the conjugate of i — remove j, keep i (positive im).
                     roots.remove(j);
                     break;
                 }

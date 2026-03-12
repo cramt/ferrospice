@@ -1152,6 +1152,15 @@ fn compare_with_interpolation(
 }
 
 /// Check if two lines match, allowing numeric tolerance.
+/// Parse a token as f64, stripping a trailing comma if present.
+/// This handles complex-number output like "-2.000000e+01, 0.000000e+00"
+/// where the real part token is "-2.000000e+01,".
+fn parse_token_f64(s: &str) -> Option<f64> {
+    s.parse::<f64>()
+        .ok()
+        .or_else(|| s.strip_suffix(',').and_then(|s| s.parse::<f64>().ok()))
+}
+
 fn lines_match_approx(expected: &str, actual: &str) -> bool {
     let exp_tokens: Vec<&str> = expected.split_whitespace().collect();
     let act_tokens: Vec<&str> = actual.split_whitespace().collect();
@@ -1164,8 +1173,8 @@ fn lines_match_approx(expected: &str, actual: &str) -> bool {
         if e == a {
             continue;
         }
-        match (e.parse::<f64>(), a.parse::<f64>()) {
-            (Ok(ev), Ok(av)) => {
+        match (parse_token_f64(e), parse_token_f64(a)) {
+            (Some(ev), Some(av)) => {
                 let abs_diff = (ev - av).abs();
                 let rel_tol = HARNESS_REL_TOL * ev.abs().max(av.abs());
                 if abs_diff > rel_tol.max(1e-15) {
