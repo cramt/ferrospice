@@ -518,7 +518,6 @@ fn compute_total_noise(
             ves,
             &bsim.size_params,
             &bsim.model,
-            1e-12,
         );
         let m = bsim.m;
 
@@ -541,7 +540,6 @@ fn compute_total_noise(
             ves,
             &bsim.size_params,
             &bsim.model,
-            1e-12,
             bsim.body_idx.is_none(),
         );
         let m = bsim.m;
@@ -565,7 +563,6 @@ fn compute_total_noise(
             ves,
             &bsim.size_params,
             &bsim.model,
-            1e-12,
         );
         let m = bsim.m;
 

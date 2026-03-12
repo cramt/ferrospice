@@ -359,10 +359,11 @@ pub struct Bsim3SoiFdCompanion {
     pub gii_g: f64,
     pub gii_b: f64,
 
-    // Body current components for body node KCL
+    // Equivalent current sources for NR companion
     pub ceq_d: f64,
     pub ceq_bs: f64,
     pub ceq_bd: f64,
+    pub ceq_iii: f64,
 
     // Capacitances (intrinsic)
     pub cggb: f64,
@@ -1032,7 +1033,6 @@ pub fn bsim3soi_fd_companion(
     ves: f64,
     sp: &Bsim3SoiFdSizeParam,
     model: &Bsim3SoiFdModel,
-    gmin: f64,
     floating_body: bool,
 ) -> Bsim3SoiFdCompanion {
     let sign = model.mos_type.sign();
@@ -1670,8 +1670,8 @@ pub fn bsim3soi_fd_companion(
     let gmbs = if floating_body { 0.0 } else { dids_dvb };
 
     // FD: Junction currents are ALL ZERO
-    let gbs_jct = gmin;
-    let gbd_jct = gmin;
+    let gbs_jct = 0.0;
+    let gbd_jct = 0.0;
 
     // Impact ionization (FD uses AII/BII/CII/DII)
     let (iii, gii_d, gii_g, gii_b) = if model.alpha0 <= 0.0 || vds_i <= sp.beta0.max(0.0) {
@@ -1690,6 +1690,7 @@ pub fn bsim3soi_fd_companion(
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
     let ceq_bs = 0.0; // No junction current in FD
     let ceq_bd = 0.0;
+    let ceq_iii = iii - gii_d * vds_i - gii_g * vgs_i - gii_b * vbs_i;
 
     // Capacitances (simplified — gate overlap + basic intrinsic)
     let cox_wl = cox * weff_ch * leff;
@@ -1728,6 +1729,7 @@ pub fn bsim3soi_fd_companion(
         ceq_d,
         ceq_bs,
         ceq_bd,
+        ceq_iii,
         cggb: cggb + sp.cgso_eff * weff + sp.cgdo_eff * weff,
         cgdb: cgdb - sp.cgdo_eff * weff,
         cgsb: cgsb - sp.cgso_eff * weff,
@@ -1801,36 +1803,45 @@ pub fn stamp_bsim3soi_fd(
     crate::stamp_conductance(matrix, b, dp, gbd);
     crate::stamp_conductance(matrix, b, sp, gbs);
 
-    // Impact ionization: asymmetric current from D' into B
+    // Impact ionization: Iii flows drain→body (OUT of drain, INTO body).
     if comp.iii != 0.0 {
         let gii_d = m * comp.gii_d;
         let gii_g = m * comp.gii_g;
         let gii_b = m * comp.gii_b;
         if let (Some(d), Some(bi)) = (dp, b) {
-            matrix.add(bi, d, gii_d);
-            matrix.add(d, d, -gii_d);
+            matrix.add(d, d, gii_d);
+            matrix.add(bi, d, -gii_d);
         }
-        if let (Some(gate), Some(bi)) = (g, b) {
-            matrix.add(bi, gate, gii_g);
+        if let Some(gate) = g {
             if let Some(d) = dp {
-                matrix.add(d, gate, -gii_g);
+                matrix.add(d, gate, gii_g);
+            }
+            if let Some(bi) = b {
+                matrix.add(bi, gate, -gii_g);
             }
         }
         if let Some(bi) = b {
-            matrix.add(bi, bi, gii_b);
+            matrix.add(bi, bi, -gii_b);
             if let Some(d) = dp {
-                matrix.add(d, bi, -gii_b);
+                matrix.add(d, bi, gii_b);
             }
         }
     }
 
     // RHS
     let ceq_d = sign * m * comp.ceq_d;
+    let ceq_iii = sign * m * comp.ceq_iii;
     if let Some(d) = dp {
-        rhs[d] -= ceq_d;
+        rhs[d] -= ceq_d + ceq_iii;
     }
     if let Some(s) = sp {
         rhs[s] += ceq_d;
+    }
+    // Impact ionization current enters body
+    if let Some(bi) = b
+        && comp.iii != 0.0
+    {
+        rhs[bi] += ceq_iii;
     }
 
     // Body resistance to external body contact

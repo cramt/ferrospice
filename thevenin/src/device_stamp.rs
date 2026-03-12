@@ -439,8 +439,8 @@ impl DeviceVoltageState {
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp =
-                    bsim3soi_pd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model, gmin);
-                stamp_bsim3soi_pd(&mut system.matrix, &mut system.rhs, bsim, &comp);
+                    bsim3soi_pd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model);
+                stamp_bsim3soi_pd(&mut system.matrix, &mut system.rhs, bsim, &comp, gmin);
             }
         }
 
@@ -471,7 +471,6 @@ impl DeviceVoltageState {
                     ves,
                     &bsim.size_params,
                     &bsim.model,
-                    gmin,
                     floating_body,
                 );
                 stamp_bsim3soi_fd(&mut system.matrix, &mut system.rhs, bsim, &comp);
@@ -499,8 +498,8 @@ impl DeviceVoltageState {
                 prev[bi] = (vgs, vds, vbs, ves);
 
                 let comp =
-                    bsim3soi_dd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model, gmin);
-                stamp_bsim3soi_dd(&mut system.matrix, &mut system.rhs, bsim, &comp);
+                    bsim3soi_dd_companion(vgs, vds, vbs, ves, &bsim.size_params, &bsim.model);
+                stamp_bsim3soi_dd(&mut system.matrix, &mut system.rhs, bsim, &comp, gmin);
             }
         }
 

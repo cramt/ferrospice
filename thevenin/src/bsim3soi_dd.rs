@@ -388,10 +388,13 @@ pub struct Bsim3SoiDdCompanion {
     pub isgidl: f64,
     pub gsgidl_g: f64,
 
-    // Body current components for body node KCL
+    // Equivalent current sources for NR companion
     pub ceq_d: f64,
     pub ceq_bs: f64,
     pub ceq_bd: f64,
+    pub ceq_iii: f64,
+    pub ceq_gidl: f64,
+    pub ceq_sgidl: f64,
 
     // Capacitances (intrinsic)
     pub cggb: f64,
@@ -1102,7 +1105,6 @@ pub fn bsim3soi_dd_companion(
     ves: f64,
     sp: &Bsim3SoiDdSizeParam,
     model: &Bsim3SoiDdModel,
-    gmin: f64,
 ) -> Bsim3SoiDdCompanion {
     let sign = model.mos_type.sign();
     let cox = model.cox;
@@ -1901,8 +1903,8 @@ pub fn bsim3soi_dd_companion(
     // Total junction currents
     let ibs = ibs1 + ibs2 + ibs3 + ibs4;
     let ibd = ibd1 + ibd2 + ibd3 + ibd4;
-    let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb + gmin;
-    let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb + gmin;
+    let gbs_jct = dibs1_dvb + dibs2_dvb + dibs3_dvb + dibs4_dvb;
+    let gbd_jct = dibd1_dvb + dibd2_dvb + dibd3_dvb + dibd4_dvb;
 
     // Impact ionization (DD uses ALPHA0/ALPHA1/BETA0, same as FD)
     let (iii, gii_d, gii_g, gii_b) = if sp.alpha0 <= 0.0 || vds_i <= sp.beta0.max(0.0) {
@@ -1917,10 +1919,13 @@ pub fn bsim3soi_dd_companion(
         (iii, gii_d, gii_g, gii_b)
     };
 
-    // Body node current balance
+    // Equivalent current sources for NR companion model
     let ceq_d = sign * (ids - gm * vgs_i - gds * vds_i - gmbs * vbs_i);
     let ceq_bs = -(ibs - gbs_jct * vbs_i);
     let ceq_bd = -(ibd - gbd_jct * vbd);
+    let ceq_iii = iii - gii_d * vds_i - gii_g * vgs_i - gii_b * vbs_i;
+    let ceq_gidl = igidl - ggidl_d * vds_i - ggidl_g * vgs_i;
+    let ceq_sgidl = isgidl - gsgidl_g * vgs_i;
 
     // Capacitances
     let cox_wl = cox * weff_ch * leff;
@@ -1966,6 +1971,9 @@ pub fn bsim3soi_dd_companion(
         ceq_d,
         ceq_bs,
         ceq_bd,
+        ceq_iii,
+        ceq_gidl,
+        ceq_sgidl,
         cggb: cggb + sp.cgso_eff * weff + sp.cgdo_eff * weff,
         cgdb: cgdb - sp.cgdo_eff * weff,
         cgsb: cgsb - sp.cgso_eff * weff,
@@ -1991,6 +1999,7 @@ pub fn stamp_bsim3soi_dd(
     rhs: &mut [f64],
     inst: &Bsim3SoiDdInstance,
     comp: &Bsim3SoiDdCompanion,
+    gmin: f64,
 ) {
     let dp = inst.drain_eff_idx();
     let g = inst.gate_idx;
@@ -2049,36 +2058,65 @@ pub fn stamp_bsim3soi_dd(
     // BS junction: gbs between body and source-prime
     crate::stamp_conductance(matrix, b, sp, gbs);
 
-    // Minimum body conductance for floating-body numerical stability.
-    // Body junction conductances at zero bias are ~4e-17 S → nearly-zero body diagonal
-    // → FullPivLU gives garbage. 1e-12 S clamps body to a solvable range.
-    // At realistic operating points junction cond >> 1e-12 S, so physics is unaffected.
-    if inst.body_idx.is_none()
-        && let Some(bi) = b
-    {
-        matrix.add(bi, bi, 1e-12);
+    // Floating-body stability: add Gmin body-to-source coupling (matching ngspice
+    // b3soiddld.c explicit Gmin stamps). This prevents the body node from becoming
+    // singular when junction conductances are very small.
+    if inst.body_idx.is_none() {
+        crate::stamp_conductance(matrix, b, sp, gmin);
     }
 
-    // --- Impact ionization (current flows drain→body, asymmetric) ---
+    // Impact ionization: Iii flows drain→body (OUT of drain, INTO body).
     if comp.iii != 0.0 {
         let gii_d = m * comp.gii_d;
         let gii_g = m * comp.gii_g;
         let gii_b = m * comp.gii_b;
-        // KCL at B: +Iii; KCL at D': -Iii
         if let (Some(d), Some(bi)) = (dp, b) {
-            matrix.add(bi, d, gii_d);
-            matrix.add(d, d, -gii_d);
+            matrix.add(d, d, gii_d);
+            matrix.add(bi, d, -gii_d);
         }
-        if let (Some(gate), Some(bi)) = (g, b) {
-            matrix.add(bi, gate, gii_g);
+        if let Some(gate) = g {
             if let Some(d) = dp {
-                matrix.add(d, gate, -gii_g);
+                matrix.add(d, gate, gii_g);
+            }
+            if let Some(bi) = b {
+                matrix.add(bi, gate, -gii_g);
             }
         }
         if let Some(bi) = b {
-            matrix.add(bi, bi, gii_b);
+            matrix.add(bi, bi, -gii_b);
             if let Some(d) = dp {
-                matrix.add(d, bi, -gii_b);
+                matrix.add(d, bi, gii_b);
+            }
+        }
+    }
+
+    // GIDL drain-side: Igidl flows drain→body.
+    if comp.igidl != 0.0 {
+        let ggidl_d = m * comp.ggidl_d;
+        let ggidl_g = m * comp.ggidl_g;
+        if let (Some(d), Some(bi)) = (dp, b) {
+            matrix.add(d, d, ggidl_d);
+            matrix.add(bi, d, -ggidl_d);
+        }
+        if let Some(gate) = g {
+            if let Some(d) = dp {
+                matrix.add(d, gate, ggidl_g);
+            }
+            if let Some(bi) = b {
+                matrix.add(bi, gate, -ggidl_g);
+            }
+        }
+    }
+
+    // GIDL source-side: Isgidl flows source→body.
+    if comp.isgidl != 0.0 {
+        let gsgidl_g = m * comp.gsgidl_g;
+        if let Some(gate) = g {
+            if let Some(s) = sp {
+                matrix.add(s, gate, gsgidl_g);
+            }
+            if let Some(bi) = b {
+                matrix.add(bi, gate, -gsgidl_g);
             }
         }
     }
@@ -2087,15 +2125,18 @@ pub fn stamp_bsim3soi_dd(
     let ceq_d = sign * m * comp.ceq_d;
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
+    let ceq_iii = sign * m * comp.ceq_iii;
+    let ceq_gidl = sign * m * comp.ceq_gidl;
+    let ceq_sgidl = sign * m * comp.ceq_sgidl;
 
     if let Some(d) = dp {
-        rhs[d] -= ceq_d + ceq_bd;
+        rhs[d] -= ceq_d + ceq_bd + ceq_iii + ceq_gidl;
     }
     if let Some(s) = sp {
-        rhs[s] += ceq_d + ceq_bs;
+        rhs[s] += ceq_d + ceq_bs - ceq_sgidl;
     }
     if let Some(bulk) = b {
-        rhs[bulk] -= ceq_bs + ceq_bd;
+        rhs[bulk] -= ceq_bs + ceq_bd - ceq_iii - ceq_gidl - ceq_sgidl;
     }
 
     // --- Body resistance to external body contact (if present) ---
@@ -2206,7 +2247,7 @@ mod tests {
     fn test_dd_companion_zero_bias() {
         let model = Bsim3SoiDdModel::new(MosfetType::Nmos);
         let sp = model.size_dep_param(10e-6, 0.25e-6, TEMP_DEFAULT);
-        let comp = bsim3soi_dd_companion(0.0, 0.0, 0.0, 0.0, &sp, &model, 1e-12);
+        let comp = bsim3soi_dd_companion(0.0, 0.0, 0.0, 0.0, &sp, &model);
         // At zero bias, Ids should be very small (subthreshold)
         assert!(comp.ids.abs() < 1e-3);
         assert!(comp.gm.is_finite());
@@ -2217,7 +2258,7 @@ mod tests {
     fn test_dd_companion_on_state() {
         let model = Bsim3SoiDdModel::new(MosfetType::Nmos);
         let sp = model.size_dep_param(10e-6, 0.25e-6, TEMP_DEFAULT);
-        let comp = bsim3soi_dd_companion(1.5, 1.0, 0.0, 0.0, &sp, &model, 1e-12);
+        let comp = bsim3soi_dd_companion(1.5, 1.0, 0.0, 0.0, &sp, &model);
         // In strong inversion with positive Vds, should have meaningful current
         assert!(comp.ids > 0.0);
         assert!(comp.gm > 0.0);
@@ -2228,7 +2269,7 @@ mod tests {
     fn test_dd_companion_reverse() {
         let model = Bsim3SoiDdModel::new(MosfetType::Nmos);
         let sp = model.size_dep_param(10e-6, 0.25e-6, TEMP_DEFAULT);
-        let comp = bsim3soi_dd_companion(1.5, -0.5, 0.0, 0.0, &sp, &model, 1e-12);
+        let comp = bsim3soi_dd_companion(1.5, -0.5, 0.0, 0.0, &sp, &model);
         assert_eq!(comp.mode, -1);
         assert!(comp.ids.is_finite());
     }

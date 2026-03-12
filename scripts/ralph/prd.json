@@ -72,6 +72,13 @@
       "summary": "Continued US-059: Fixed three major bugs in BSIM3SOI-DD model. (1) Abulk formula restructured from BSIM3v3 bulk pattern to ngspice DD pattern (keta multiplicative after clamp, +1 last). (2) XJ parameter now defaults to tsi instead of hardcoded 1.5e-7 (also fixed in PD). (3) Added DD-specific Xcsat/Abeff cross-section saturation computation (ABP, MXC, ADICE0 parameters) — all Vdsat/Ids/VA calculations now use Abeff. Also fixed drain/source prime node conditions for DD/PD, added adice precomputed field, fixed dvbseff_dvb derivative chain. DD t3 current accuracy improved from ~65% error to ~10% error.",
       "date": "2026-03-12",
       "storyId": "US-059"
+    },
+    {
+      "iteration": 30,
+      "passType": "project-management",
+      "summary": "Deprioritized US-059 (43→90) after 3 iterations without resolving PD floating body NR convergence. Documented all findings: ruled out gmin counting, elevated gmin, SmartVbs, various limiting strategies (±0.2V, pnjlim, damping, write-back). Root cause is likely a bug in the companion model or stamp Jacobian for the body node, not the NR strategy. Refocused story on systematic line-by-line diff of PD/DD companion+stamp against ngspice b3soipdld.c/b3soiddld.c.",
+      "date": "2026-03-12",
+      "storyId": "US-059"
     }
   ],
   "userStories": [
@@ -224,9 +231,12 @@
     },
     {
       "id": "US-059",
-      "title": "Fix BSIM3SOI convergence failures",
-      "description": "As a developer, I need BSIM3SOI (DD/FD/PD) models to converge on their test circuits instead of failing with 'singular matrix / NR failed to converge'.",
+      "title": "Fix BSIM3SOI convergence failures via systematic ngspice diff",
+      "description": "As a developer, I need BSIM3SOI (DD/FD/PD) models to converge on their test circuits. The NR limiting strategy has been extensively explored — the root cause is likely a bug in the companion model or stamp (wrong sign, missing current, incorrect Jacobian) for the floating body node. This story requires systematically diffing our PD/DD companion and stamp code against ngspice's b3soipdld.c / b3soiddld.c line-by-line to find the model bug.",
       "acceptanceCriteria": [
+        "Systematically diff bsim3soi_pd_companion + stamp_bsim3soi_pd against ngspice b3soipdld.c body-node equation",
+        "Systematically diff bsim3soi_dd_companion + stamp_bsim3soi_dd against ngspice b3soiddld.c body-node equation",
+        "Identify and fix the model bug causing body voltage oscillation",
         "BSIM3SOI-DD inv2.cir and RampVg2.cir converge and produce correct output",
         "BSIM3SOI-FD inv2.cir and RampVg2.cir converge and produce correct output",
         "BSIM3SOI-PD inv2.cir and RampVg2.cir converge and produce correct output",
@@ -235,9 +245,9 @@
         "cargo clippy --workspace -- -D warnings passes",
         "cargo test --workspace passes"
       ],
-      "priority": 43,
+      "priority": 90,
       "passes": false,
-      "notes": "PARTIAL PROGRESS (2026-03-12): FD floating body architecture FIXED — all 4 active FD tests pass. Two earlier bugs fixed in DD/FD/PD (NCH/NPEAK alias, vbi formula). PD and DD still failing.\n\n## BUGS FIXED\n1. NCH/NPEAK alias sync (all 3 models) — committed 2026-03-11\n2. vbi formula 1e10→1e20 (all 3 models) — committed 2026-03-11\n3. FD floating body architecture — committed 2026-03-12:\n   - body_int_idx=None when no external body contact (matching ngspice bNode=pNode=0)\n   - vbsdio=vbs0eff_fd and gmbs=0 for floating body (b3soifdld.c line 1090)\n   - drain/source prime nodes only with RBSH*NRD/NRS > 0 (RDSW is internal to channel)\n   - internal_node_count_fd() for correct pre-pass node counting\n   - floating_body flag propagated to companion, AC, noise\n\n## REMAINING ISSUES\n\n### DD t3: current 64% too high\nVbsdio smooth-max gives vbseff≈0.41V when body is at 0V. Need same floating body treatment as FD.\n\n### PD: all tests — singular matrix / NR non-convergence\nPre-existing failures, not investigated yet. Likely needs similar floating body fix.\n\n### FD inv2/RampVg2: transient NR non-convergence (ignored tests)\nNeed correct initial OP + Jacobian. Fix after DD/PD DC is correct.\n\n### t4/t5: transient capacitance tests\nNot yet investigated.\n\n## KEY REFERENCE FILES\n- b3soifdld.c — FD load; Vbsdio at line 1090\n- b3soifdset.c — FD setup; bNode=pNode=0 when floating\n- b3soiddld.c — DD load\n- b3soiddtemp.c / b3soifdtemp.c — precompute\n\n## SUGGESTED NEXT\n- Apply similar floating body fix to DD model\n- Investigate PD singular matrix root cause\n- Then tackle inv2/RampVg2 transient convergence",
+      "notes": "DEPRIORITIZED (2026-03-12): 3 iterations spent on NR convergence without resolving the core issue. The problem is NOT the NR limiting strategy — it's almost certainly a bug in the companion model or MNA stamp for the body node.\n\n## INVESTIGATION FINDINGS (iterations 27-30)\n\n### What was tried and ruled out\n1. **Triple gmin counting** — Fixed: removed gmin from junction conductances (gbs_jct, gbd_jct) in all 3 models. Only body-source coupling in stamp + solver diagonal.\n2. **Elevated gmin passed to device stamps** — Fixed: device stamps always use nominal gmin (1e-12), only solver diagonal gets elevated gmin during gmin stepping.\n3. **SmartVbs in PD** — Fixed: ngspice PD does NOT use SmartVbs. Removed.\n4. **Various limiting strategies** — Tried: ±0.2V clamp (matches ngspice B3SOIPDlimit), ±0.05V, ±0.026V, pnjlim with high vcrit, pnjlim with low vcrit. None fix the oscillation.\n5. **Solution write-back** — Tried: writing limited body voltage back into solution vector for convergence check. Creates worse mismatch (limited vs raw comparison).\n6. **NR damping** — Tried: averaging consecutive solutions. Creates stable 2-cycle.\n\n### Root cause hypothesis\nThe body voltage oscillates between ~0.04V and ~0.12V (at sf=0.50, gmin=1e-12). With correct Jacobians, NR should converge regardless of limiting details. The oscillation indicates the linearized body equation (companion model) is inconsistent with the actual nonlinear equation — likely a wrong sign, missing current term, or incorrect derivative in the body node KCL.\n\n### What needs to happen\nSystematically diff against ngspice, focusing on:\n- **Body node KCL**: junction currents (Ibs, Ibd), impact ionization (Iii), GIDL, gmin coupling — check signs, magnitudes, and which node they're stamped on\n- **Junction conductances**: gbs_jct, gbd_jct derivatives — check they match ngspice's dIbs/dVbs, dIbd/dVbd\n- **ceq values**: companion equivalent current sources for body node — check sign convention (rhs[b] -= vs +=)\n- **Impact ionization Jacobian**: gii_d, gii_g, gii_b — verify against b3soipdld.c\n- **GIDL Jacobian**: ggidl_d, ggidl_g — verify stamp placement\n\n## BUGS FIXED (still valid)\n1. NCH/NPEAK alias sync (all 3 models)\n2. vbi formula 1e10→1e20 (all 3 models)\n3. FD floating body architecture (all 4 active FD tests pass)\n4. DD Abulk formula, XJ default, Xcsat/Abeff corrections\n\n## KEY REFERENCE FILES\n- b3soipdld.c — PD load (body node stamps near line 1800-2200)\n- b3soiddld.c — DD load\n- b3soifdld.c — FD load\n- Our: bsim3soi_pd.rs (companion + stamp), bsim3soi_dd.rs, device_stamp.rs",
       "tags": [
         "bugfix",
         "device-model"

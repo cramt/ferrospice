@@ -122,7 +122,7 @@ fn solve_nonlinear_op_with_guess(
         _ => DeviceVoltageState::new_zero(mna),
     };
 
-    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
+    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64| {
         // 1. Copy base linear stamps.
         for triplet in base_matrix.triplets() {
             system.matrix.add(triplet.row, triplet.col, triplet.value);
@@ -136,7 +136,11 @@ fn solve_nonlinear_op_with_guess(
         mna.stamp_txl_dc_all(system);
         mna.stamp_cpl_dc_all(system);
 
-        // 3. Stamp all nonlinear device companions.
+        // 3. Stamp all nonlinear device companions. Device stamps always use the
+        //    nominal gmin (not the elevated gmin from gmin stepping), matching
+        //    ngspice where CKTgmin stays at its nominal value during stepping and
+        //    only CKTdiagGmin (solver diagonal) is elevated.
+        let _ = gmin; // elevated gmin used only by solver diagonal, not device stamps
         dev_state.stamp_devices(solution, system, mna, options.gmin);
     };
 

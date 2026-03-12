@@ -894,7 +894,7 @@ fn solve_timestep(
 
     let dev_state = DeviceVoltageState::from_solution(mna, prev_solution);
 
-    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
+    let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64| {
         // 1. Copy base linear stamps (R, V, I topology + inductor topology).
         for triplet in base_matrix.triplets() {
             system.matrix.add(triplet.row, triplet.col, triplet.value);
@@ -970,8 +970,10 @@ fn solve_timestep(
             system.rhs[ind.branch_idx] += veq;
         }
 
-        // 4. Stamp all nonlinear device companions.
+        // 4. Stamp all nonlinear device companions. Device stamps always use
+        //    nominal gmin (not the elevated gmin from gmin stepping).
         if has_nonlinear {
+            let _ = gmin;
             dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
         }
     };
@@ -986,7 +988,7 @@ fn solve_timestep(
     } else {
         // Linear: single solve.
         let mut system = LinearSystem::new(dim);
-        load(prev_solution, &mut system, 1.0);
+        load(prev_solution, &mut system, 1.0, nr_options.gmin);
         let sol = system.solve()?;
         Ok(sol)
     }

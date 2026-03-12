@@ -35,7 +35,7 @@ impl Default for NrOptions {
             reltol: 1e-3,
             vntol: 1e-6,
             itl1: 100,
-            itl2: 50,
+            itl2: 100,
             gmin: 1e-12,
         }
     }
@@ -93,16 +93,15 @@ fn try_nr<F>(
     attempt: &NrAttempt,
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64),
 {
     let mut solution = initial_guess.to_vec();
     let mut system = LinearSystem::new(dim);
     let mut total_iters = 0;
-
     for iter in 0..attempt.max_iters {
         system.matrix.clear();
         system.rhs.fill(0.0);
-        load_system(&solution, &mut system, attempt.source_factor);
+        load_system(&solution, &mut system, attempt.source_factor, attempt.gmin);
 
         // Add Gmin from each node to ground for numerical stability.
         for i in 0..num_nodes {
@@ -112,7 +111,6 @@ where
         let new_solution = system.solve()?;
         total_iters = iter + 1;
 
-        // Check convergence (skip first iteration — need two solutions to compare).
         if iter > 0 && check_convergence(&solution, &new_solution, num_nodes, options) {
             return Ok(NrResult {
                 solution: new_solution,
@@ -144,10 +142,10 @@ fn gmin_stepping<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64),
 {
     let mut gmin = 1e-2;
-    let gmin_factor = 10.0;
+    let gmin_factor = 10.0; // matches ngspice SPICE3-style gmin stepping
     let mut solution = initial_guess.to_vec();
     let mut total_iters = 0;
 
@@ -194,7 +192,7 @@ fn source_stepping<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64),
 {
     let num_steps = 10;
     let mut solution = initial_guess.to_vec();
@@ -228,8 +226,9 @@ where
 /// * `num_nodes` - Number of node voltage entries (for convergence check;
 ///   indices 0..num_nodes are voltages, num_nodes.. are branch currents).
 /// * `load_system` - Callback that fills the linear system for a given solution
-///   estimate. Called as `load_system(solution, system, source_factor)` where
-///   `source_factor` is 1.0 for normal operation and < 1.0 during source stepping.
+///   estimate. Called as `load_system(solution, system, source_factor, gmin)` where
+///   `source_factor` is 1.0 for normal operation and < 1.0 during source stepping,
+///   and `gmin` is the current minimum conductance (elevated during Gmin stepping).
 ///   The system is zeroed before each call.
 /// * `initial_guess` - Starting solution vector (length `dim`).
 ///
@@ -246,7 +245,7 @@ pub fn newton_raphson_solve<F>(
     initial_guess: &[f64],
 ) -> Result<NrResult, NrError>
 where
-    F: Fn(&[f64], &mut LinearSystem, f64),
+    F: Fn(&[f64], &mut LinearSystem, f64, f64),
 {
     // Try direct NR first.
     let attempt = NrAttempt {
@@ -329,7 +328,7 @@ mod tests {
         let num_nodes = 2;
         let options = NrOptions::default();
 
-        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
+        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
             let v2 = solution[1]; // diode voltage
 
             // Resistor R1 between nodes 0 and 1 (matrix indices)
@@ -394,7 +393,7 @@ mod tests {
 
         // V1=5V, R1=1k to ground
         // V(1) = 5V, I(V1) = -5mA
-        let load = |_solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
+        let load = |_solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
             let g = 1.0 / 1000.0;
             // Resistor from node 0 to ground
             system.matrix.add(0, 0, g);
@@ -449,7 +448,7 @@ mod tests {
         let num_nodes = 2;
         let options = NrOptions::default();
 
-        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64| {
+        let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
             let v2 = solution[1];
 
             // Resistor
