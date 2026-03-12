@@ -40,10 +40,13 @@ pub fn simulate_op(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
     let mut vecs = Vec::new();
 
-    // Node voltages
-    for (name, idx) in mna.node_map.iter() {
-        let v = if idx < solution_vec.len() {
-            solution_vec[idx]
+    // Node voltages — emit in descending matrix-index order to match ngspice's
+    // LIFO node-list traversal (last-inserted node first in output).
+    let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
+    nodes.sort_by(|a, b| b.1.cmp(&a.1));
+    for (name, idx) in &nodes {
+        let v = if *idx < solution_vec.len() {
+            solution_vec[*idx]
         } else {
             0.0
         };
@@ -117,8 +120,11 @@ pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     };
 
     let mut vecs = Vec::new();
-    for (name, idx) in mna.node_map.iter() {
-        let v = if idx < solution_vec.len() { solution_vec[idx] } else { 0.0 };
+    // Descending matrix-index order to match ngspice's LIFO node output.
+    let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
+    nodes.sort_by(|a, b| b.1.cmp(&a.1));
+    for (name, idx) in &nodes {
+        let v = if *idx < solution_vec.len() { solution_vec[*idx] } else { 0.0 };
         vecs.push(SimVector {
             name: format!("v({})", name),
             real: vec![v],

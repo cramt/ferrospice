@@ -438,11 +438,7 @@ harness_test!(
 harness_test!(harness_jfet_vds_vgs, "jfet/jfet_vds-vgs.cir");
 
 // === MESA ===
-harness_test!(
-    harness_mesa_mesa11,
-    "mesa/mesa11.cir",
-    ignore = "device info output (US-061)"
-);
+harness_test!(harness_mesa_mesa11, "mesa/mesa11.cir");
 harness_test!(harness_mesa_mesa13, "mesa/mesa13.cir");
 harness_test!(harness_mesa_mesa14, "mesa/mesa14.cir");
 harness_test!(harness_mesa_mesa15, "mesa/mesa15.cir");
@@ -484,11 +480,7 @@ harness_test!(
 );
 
 // === Pole-Zero ===
-harness_test!(
-    harness_pz_filt_bridge_t,
-    "polezero/filt_bridge_t.cir",
-    ignore = "device info output (US-061)"
-);
+harness_test!(harness_pz_filt_bridge_t, "polezero/filt_bridge_t.cir");
 harness_test!(harness_pz_filt_multistage, "polezero/filt_multistage.cir");
 harness_test!(harness_pz_filt_rc, "polezero/filt_rc.cir");
 harness_test!(harness_pz_pz2, "polezero/pz2.cir");
