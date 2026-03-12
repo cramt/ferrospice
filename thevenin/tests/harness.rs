@@ -179,8 +179,9 @@ fn run_all_analyses(netlist: &Netlist) -> Result<thevenin_types::SimResult, Stri
     for analysis in &analyses {
         match analysis {
             Analysis::Op => {
+                // Use simulate_op_dc (diag_gmin=0) to match ngspice .op branch currents.
                 let result =
-                    thevenin::simulate_op(netlist).map_err(|e| format!("OP error: {e}"))?;
+                    thevenin::simulate_op_dc(netlist).map_err(|e| format!("OP error: {e}"))?;
                 all_plots.extend(result.plots);
             }
             Analysis::Dc { .. } => {
@@ -408,11 +409,7 @@ harness_test!(
     "general/mosmem.cir",
     ignore = "device info output (US-061)"
 );
-harness_test!(
-    harness_general_rca3040,
-    "general/rca3040.cir",
-    ignore = "device info output (US-061)"
-);
+harness_test!(harness_general_rca3040, "general/rca3040.cir");
 harness_test!(
     harness_general_rc,
     "general/rc.cir",
@@ -438,11 +435,7 @@ harness_test!(
 );
 
 // === JFET ===
-harness_test!(
-    harness_jfet_vds_vgs,
-    "jfet/jfet_vds-vgs.cir",
-    ignore = "device info output (US-061)"
-);
+harness_test!(harness_jfet_vds_vgs, "jfet/jfet_vds-vgs.cir");
 
 // === MESA ===
 harness_test!(
@@ -507,11 +500,7 @@ harness_test!(harness_pz_pzt, "polezero/pzt.cir");
 harness_test!(harness_pz_simplepz, "polezero/simplepz.cir");
 
 // === Regression: func ===
-harness_test!(
-    harness_regression_func_1,
-    "regression/func/func-1.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_func_1, "regression/func/func-1.cir");
 
 // === Regression: lib-processing ===
 harness_test!(
@@ -534,21 +523,9 @@ harness_test!(
     "regression/lib-processing/ex3a.cir",
     ignore = "Requires .control scripting language"
 );
-harness_test!(
-    harness_regression_lib_scope1,
-    "regression/lib-processing/scope-1.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_lib_scope2,
-    "regression/lib-processing/scope-2.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_lib_scope3,
-    "regression/lib-processing/scope-3.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_lib_scope1, "regression/lib-processing/scope-1.cir");
+harness_test!(harness_regression_lib_scope2, "regression/lib-processing/scope-2.cir");
+harness_test!(harness_regression_lib_scope3, "regression/lib-processing/scope-3.cir");
 
 // === Regression: misc ===
 harness_test!(
@@ -571,16 +548,8 @@ harness_test!(
     "regression/misc/asrc-tc-2.cir",
     ignore = "Requires .control scripting language"
 );
-harness_test!(
-    harness_regression_misc_bugs_1,
-    "regression/misc/bugs-1.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_misc_bugs_2,
-    "regression/misc/bugs-2.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_misc_bugs_1, "regression/misc/bugs-1.cir");
+harness_test!(harness_regression_misc_bugs_2, "regression/misc/bugs-2.cir");
 harness_test!(
     harness_regression_misc_dollar_1,
     "regression/misc/dollar-1.cir",
@@ -591,11 +560,7 @@ harness_test!(
     "regression/misc/empty-1.cir",
     ignore = "Requires .control scripting language"
 );
-harness_test!(
-    harness_regression_misc_if_elseif,
-    "regression/misc/if-elseif.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_misc_if_elseif, "regression/misc/if-elseif.cir");
 harness_test!(
     harness_regression_misc_log_functions_1,
     "regression/misc/log-functions-1.cir",
@@ -618,11 +583,7 @@ harness_test!(
 );
 
 // === Regression: model ===
-harness_test!(
-    harness_regression_model_binning_1,
-    "regression/model/binning-1.cir",
-    ignore = "Requires .control scripting + model binning"
-);
+harness_test!(harness_regression_model_binning_1, "regression/model/binning-1.cir");
 harness_test!(
     harness_regression_model_instance_defaults,
     "regression/model/instance-defaults.cir",
@@ -635,26 +596,14 @@ harness_test!(
 );
 
 // === Regression: parser ===
-harness_test!(
-    harness_regression_parser_bxpressn_1,
-    "regression/parser/bxpressn-1.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_parser_bxpressn_1, "regression/parser/bxpressn-1.cir");
 harness_test!(
     harness_regression_parser_minus_minus,
     "regression/parser/minus-minus.cir",
     ignore = "Requires .control scripting language"
 );
-harness_test!(
-    harness_regression_parser_xpressn_1,
-    "regression/parser/xpressn-1.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_parser_xpressn_2,
-    "regression/parser/xpressn-2.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_parser_xpressn_1, "regression/parser/xpressn-1.cir");
+harness_test!(harness_regression_parser_xpressn_2, "regression/parser/xpressn-2.cir");
 harness_test!(
     harness_regression_parser_xpressn_3,
     "regression/parser/xpressn-3.cir",
@@ -669,38 +618,14 @@ harness_test!(
 );
 
 // === Regression: sens ===
-harness_test!(
-    harness_regression_sens_ac_1,
-    "regression/sens/sens-ac-1.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_sens_ac_2,
-    "regression/sens/sens-ac-2.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_sens_dc_1,
-    "regression/sens/sens-dc-1.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_sens_dc_2,
-    "regression/sens/sens-dc-2.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_sens_ac_1, "regression/sens/sens-ac-1.cir");
+harness_test!(harness_regression_sens_ac_2, "regression/sens/sens-ac-2.cir");
+harness_test!(harness_regression_sens_dc_1, "regression/sens/sens-dc-1.cir");
+harness_test!(harness_regression_sens_dc_2, "regression/sens/sens-dc-2.cir");
 
 // === Regression: subckt-processing ===
-harness_test!(
-    harness_regression_subckt_global_1,
-    "regression/subckt-processing/global-1.cir",
-    ignore = "Requires .control scripting language"
-);
-harness_test!(
-    harness_regression_subckt_model_scope_5,
-    "regression/subckt-processing/model-scope-5.cir",
-    ignore = "Requires .control scripting language"
-);
+harness_test!(harness_regression_subckt_global_1, "regression/subckt-processing/global-1.cir");
+harness_test!(harness_regression_subckt_model_scope_5, "regression/subckt-processing/model-scope-5.cir");
 
 // === Regression: temper ===
 harness_test!(

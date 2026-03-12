@@ -79,7 +79,7 @@ impl JfetModel {
             fc: 0.5,
             b: 1.0,
             kf: 0.0,
-            af: 1.0,
+            af: 0.0,
         }
     }
 

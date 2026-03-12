@@ -101,6 +101,45 @@ pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
     }
 }
 
+/// Compute the DC operating point with `diag_gmin = 0`, matching ngspice's
+/// behaviour for explicit `.op` analysis (`CKTdiagGmin` starts at 0).
+///
+/// Unlike `solve_op_raw` (used for transient initial conditions, which needs
+/// the default `diag_gmin = gmin` for convergence stability), this variant
+/// produces branch currents that match ngspice's `.op` output exactly.
+pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
+    let mna = assemble_mna(netlist)?;
+    let opts = NrOptions { diag_gmin: 0.0, ..NrOptions::default() };
+    let solution_vec = if !mna.has_nonlinear() {
+        solve_op_raw(&mna)?
+    } else {
+        solve_nonlinear_op(&mna, &opts)?
+    };
+
+    let mut vecs = Vec::new();
+    for (name, idx) in mna.node_map.iter() {
+        let v = if idx < solution_vec.len() { solution_vec[idx] } else { 0.0 };
+        vecs.push(SimVector {
+            name: format!("v({})", name),
+            real: vec![v],
+            complex: vec![],
+        });
+    }
+    let num_nodes = mna.total_num_nodes();
+    for (i, vsrc) in mna.vsource_names.iter().enumerate() {
+        let idx = num_nodes + i;
+        let current = if idx < solution_vec.len() { solution_vec[idx] } else { 0.0 };
+        vecs.push(SimVector {
+            name: format!("{}#branch", vsrc.to_lowercase()),
+            real: vec![current],
+            complex: vec![],
+        });
+    }
+    Ok(SimResult {
+        plots: vec![SimPlot { name: "op1".to_string(), vecs }],
+    })
+}
+
 /// Solve a nonlinear DC operating point using Newton-Raphson.
 pub fn solve_nonlinear_op(mna: &MnaSystem, options: &NrOptions) -> Result<Vec<f64>, MnaError> {
     solve_nonlinear_op_with_guess(mna, options, None)
