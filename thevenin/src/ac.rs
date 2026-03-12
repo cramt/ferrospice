@@ -176,6 +176,16 @@ pub fn stamp_ac_devices(
         sys.real.add(triplet.row, triplet.col, triplet.value);
     }
 
+    // 1b. Adjust for resistors with explicit AC resistance (ac= parameter).
+    for r in &mna.resistors {
+        if let Some(ac_r) = r.ac_resistance {
+            let dc_g = 1.0 / r.resistance;
+            let ac_g = 1.0 / ac_r;
+            let delta = ac_g - dc_g;
+            crate::stamp_conductance(&mut sys.real, r.pos_idx, r.neg_idx, delta);
+        }
+    }
+
     // 2. Stamp capacitor AC admittance: jωC between nodes.
     for cap in &mna.capacitors {
         let bc = omega * cap.capacitance;

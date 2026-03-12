@@ -990,6 +990,11 @@ fn format_tf_output(out: &mut String, plot: &SimPlot) {
 
 /// Format a .print data table.
 fn format_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: &PrintDirective) {
+    let plot_type = plot_analysis_type(&plot.name);
+    if plot_type == "ac" {
+        format_ac_print_table(out, title, plot, print_dir);
+        return;
+    }
     let resolved_vars = resolve_print_vars(plot, &print_dir.vars);
     if resolved_vars.is_empty() {
         return;
@@ -1022,6 +1027,86 @@ fn format_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: 
         for (_, values) in &resolved_vars {
             if i < values.len() {
                 out.push_str(&format!("{}\t", format_sci(values[i])));
+            }
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+}
+
+/// Format an AC analysis table with complex output (real,\t imag pairs per column).
+fn format_ac_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: &PrintDirective) {
+    use thevenin_types::Complex;
+
+    // Collect columns: (name, Vec<Complex>)
+    let mut cols: Vec<(String, Vec<Complex>)> = Vec::new();
+
+    // First column: frequency sweep (real-valued, imaginary = 0)
+    let Some(freq_vec) = find_sweep_vector(plot) else { return };
+    if freq_vec.real.is_empty() { return; }
+    let freq_complex: Vec<Complex> = freq_vec.real.iter()
+        .map(|&f| Complex { re: f, im: 0.0 })
+        .collect();
+    cols.push((freq_vec.name.clone(), freq_complex));
+
+    // Other columns: complex AC variables
+    for var in &print_dir.vars {
+        let var_lower = var.to_lowercase();
+        if let Some(vec) = find_vec_by_name(plot, &var_lower) {
+            if !vec.complex.is_empty() {
+                cols.push((var_lower.clone(), vec.complex.clone()));
+            } else if !vec.real.is_empty() {
+                // Fallback: treat real as complex with imag=0
+                let as_complex: Vec<Complex> = vec.real.iter()
+                    .map(|&r| Complex { re: r, im: 0.0 })
+                    .collect();
+                cols.push((var_lower.clone(), as_complex));
+            }
+        }
+    }
+
+    if cols.is_empty() { return; }
+
+    let n_rows = cols[0].1.len();
+    if n_rows == 0 { return; }
+
+    out.push_str(&format!("\nNo. of Data Rows : {n_rows}\n"));
+
+    let title_padded = format!("{:^80}", title);
+    out.push_str(&title_padded);
+    out.push('\n');
+
+    // Header: each complex column takes 32 chars
+    out.push_str(&"-".repeat(80));
+    out.push('\n');
+    out.push_str("Index\t");
+    for (name, _) in &cols {
+        out.push_str(&format!("{name:<32}"));
+    }
+    out.push('\n');
+    out.push_str(&"-".repeat(80));
+    out.push('\n');
+
+    // Data rows
+    let page_size = 55;
+    for i in 0..n_rows {
+        if i > 0 && i % page_size == 0 {
+            out.push('\n');
+            out.push_str(&"-".repeat(80));
+            out.push('\n');
+            out.push_str("Index\t");
+            for (name, _) in &cols {
+                out.push_str(&format!("{name:<32}"));
+            }
+            out.push('\n');
+            out.push_str(&"-".repeat(80));
+            out.push('\n');
+        }
+        out.push_str(&format!("{i}\t"));
+        for (_, vals) in &cols {
+            if i < vals.len() {
+                let c = &vals[i];
+                out.push_str(&format!("{},\t{}\t", format_sci(c.re), format_sci(c.im)));
             }
         }
         out.push('\n');

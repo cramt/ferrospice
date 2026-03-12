@@ -70,20 +70,31 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
     // (original_line_number, logical_line_text)
     let mut out: Vec<(usize, String)> = Vec::new();
 
+    // Index into `out` of the last non-comment logical line, for attaching
+    // continuation lines past comment lines.
+    let mut last_noncomment: Option<usize> = None;
+
     for (lineno, raw) in input.lines().enumerate() {
         let line = strip_inline_comment(raw).trim();
         if line.is_empty() {
             continue;
         }
         if let Some(stripped) = line.strip_prefix('+') {
-            // Continuation: append to the previous logical line.
-            if let Some(prev) = out.last_mut() {
-                prev.1.push(' ');
-                prev.1.push_str(stripped.trim());
+            // Continuation: append to the last non-comment logical line.
+            // Standard SPICE allows comment lines between a statement and its
+            // continuation lines (e.g. `*+ commented-out param` before `+ real=val`).
+            if let Some(idx) = last_noncomment {
+                out[idx].1.push(' ');
+                out[idx].1.push_str(stripped.trim());
             }
-            // If there's no previous line (continuation before anything),
-            // silently drop it — malformed but recoverable.
+            // If there's no previous non-comment line, silently drop it.
+        } else if line.starts_with('*') {
+            // Full-line comment: keep in output (produces Item::Comment) but
+            // do NOT update last_noncomment so that subsequent '+' lines
+            // still attach to the previous non-comment line.
+            out.push((lineno + 1, line.to_string()));
         } else {
+            last_noncomment = Some(out.len());
             out.push((lineno + 1, line.to_string()));
         }
     }

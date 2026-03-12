@@ -448,11 +448,7 @@ harness_test!(
     "mesa/mesa.cir",
     ignore = "device info output (US-061)"
 );
-harness_test!(
-    harness_mesa_mesgout,
-    "mesa/mesgout.cir",
-    ignore = "AC complex output formatting (US-058)"
-);
+harness_test!(harness_mesa_mesgout, "mesa/mesgout.cir");
 harness_test!(
     harness_mesa_mesinv,
     "mesa/mesinv.cir",
@@ -643,11 +639,7 @@ harness_test!(
     "resistance/res_array.cir",
     ignore = "parameter expression in resistor array not supported"
 );
-harness_test!(
-    harness_resistance_res_partition,
-    "resistance/res_partition.cir",
-    ignore = "device info output (US-061)"
-);
+harness_test!(harness_resistance_res_partition, "resistance/res_partition.cir");
 harness_test!(harness_resistance_res_simple, "resistance/res_simple.cir");
 
 // === Sensitivity ===
