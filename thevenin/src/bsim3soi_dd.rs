@@ -176,6 +176,7 @@ pub struct Bsim3SoiDdModel {
     pub abp: f64,
     pub mxc: f64,
     pub adice0: f64,
+    pub xj: f64,
     pub kbjt1: f64,
     pub edl: f64,
 
@@ -223,6 +224,8 @@ pub struct Bsim3SoiDdModel {
     pub csieff: f64,
     pub qsieff: f64,
     pub vfbb: f64,
+    /// Processed adice: adice0 / (1 + Cboxt/cox), where Cboxt = cbox*csi/(cbox+csi)
+    pub adice: f64,
 }
 
 /// Size-dependent parameters for BSIM3SOI-DD.
@@ -532,6 +535,7 @@ impl Bsim3SoiDdModel {
             abp: 1.0,
             mxc: -0.9,
             adice0: 1.0,
+            xj: -1.0, // sentinel; will default to tsi in precompute
             kbjt1: 0.0,
             edl: 0.0,
             rbody: 0.0,
@@ -566,6 +570,7 @@ impl Bsim3SoiDdModel {
             csieff: 0.0,
             qsieff: 0.0,
             vfbb: 0.0,
+            adice: 1.0,
         };
         m.precompute();
         m
@@ -727,6 +732,7 @@ impl Bsim3SoiDdModel {
         set!(abp, "ABP");
         set!(mxc, "MXC");
         set!(adice0, "ADICE0");
+        set!(xj, "XJ");
         set!(kbjt1, "KBJT1");
         set!(edl, "EDL");
         set!(rbody, "RBODY");
@@ -758,6 +764,10 @@ impl Bsim3SoiDdModel {
     }
 
     fn precompute(&mut self) {
+        // XJ defaults to tsi in BSIM3SOI-DD (ngspice b3soiddset.c)
+        if self.xj < 0.0 {
+            self.xj = self.tsi;
+        }
         let tnom_k = self.tnom + 273.15;
         self.cox = EPSOX / self.tox;
         self.vtm = KBOQ * TEMP_DEFAULT;
@@ -800,15 +810,22 @@ impl Bsim3SoiDdModel {
         self.qsieff = self.qsi.max(1e-20);
         // Back-gate flat-band voltage
         self.vfbb = self.vtm * (npeak * 1e6 / (nsub * 1e6)).ln();
+        // Processed adice: adice0 / (1 + Cboxt/Cox)
+        let cboxt = self.cbox * self.csi / (self.cbox + self.csi);
+        self.adice = self.adice0 / (1.0 + cboxt / self.cox);
     }
 
     /// Number of internal nodes this model creates.
+    /// Drain/source prime nodes only created when sheet resistance (RBSH) and
+    /// drain/source squares (NRD/NRS) are both positive — matching ngspice
+    /// b3soiddset.c which checks `sheetResistance > 0 && drainSquares > 0`.
+    /// RDSW is folded into the channel model, not external series resistance.
     pub fn internal_node_count(&self, nrd: f64, nrs: f64) -> usize {
         let mut count = 1; // Always create internal body node
-        if self.rdsw > 0.0 || nrd > 0.0 {
+        if self.rbsh > 0.0 && nrd > 0.0 {
             count += 1; // drain prime
         }
-        if self.rdsw > 0.0 || nrs > 0.0 {
+        if self.rbsh > 0.0 && nrs > 0.0 {
             count += 1; // source prime
         }
         count
@@ -856,7 +873,7 @@ impl Bsim3SoiDdModel {
         };
 
         let xdep0 = (2.0 * EPSSI / (CHARGE_Q * npeak * 1e6)).sqrt() * sqrt_phi;
-        let xj = 1.5e-7; // Default XJ
+        let xj = self.xj;
         let litl = (EPSSI * xj / self.cox).sqrt();
 
         let t0 = -0.5 * self.dvt1 * leff / litl;
@@ -1242,18 +1259,22 @@ pub fn bsim3soi_dd_companion(
     let dvbsdio_dvb = 0.5 * (1.0 + t1_vbsdio / t2_vbsdio);
     let vbsdio = vbs0eff_dd + OFF_VBSDIO + 0.5 * (t1_vbsdio + t2_vbsdio);
 
-    // Vbsmos
+    // Vbsmos (ngspice lines 1131-1150)
     let t1_bsmos = vbs0teff - vbsdio - DELT_VBSMOS;
     let t2_bsmos = (t1_bsmos * t1_bsmos + DELT_VBSMOS * DELT_VBSMOS).sqrt();
     let t3_bsmos = 0.5 * (t1_bsmos + t2_bsmos);
+    let t5_bsmos = 0.5 * (1.0 + t1_bsmos / t2_bsmos);
     let t4_bsmos = t3_bsmos * model.csieff / model.qsieff;
     let vbsmos = vbsdio - 0.5 * t3_bsmos * t4_bsmos;
+    // dvbsmos/dvbsdio: vbsmos = vbsdio - 0.5*T3*T4, dT3/dvbsdio = -T5
+    let dvbsmos_dvbsdio = 1.0 + t5_bsmos * t4_bsmos;
 
     // ========== Vbseff (final body-source effective voltage) ==========
     let t1_vbseff = phi - model.delp;
     let t2_vbseff = t1_vbseff - vbsmos - DELT_VBSEFF;
     let t3_vbseff = (t2_vbseff * t2_vbseff + 4.0 * DELT_VBSEFF * t1_vbseff).sqrt();
     let vbseff = t1_vbseff - 0.5 * (t2_vbseff + t3_vbseff);
+    let dvbseff_dvbsmos = 0.5 * (1.0 + t2_vbseff / t3_vbseff);
 
     // The DD-computed Vbs for body node feedback
     let vbs_dd = vbsdio;
@@ -1366,10 +1387,8 @@ pub fn bsim3soi_dd_companion(
     let vgst_nvt = vgst / t10;
     let exp_arg = (2.0 * sp.voff - vgst) / t10;
 
-    // dvbseff_dvb: derivative of effective body voltage w.r.t. body node.
-    // When body is above the vbs0eff floor, vbsdio ≈ vbs_i so dvbsdio_dvb ≈ 1.
-    // Use dvbsdio_dvb directly (from the smooth-max clamp).
-    let dvbseff_dvb = dvbsdio_dvb;
+    // dvbseff_dvb: full derivative chain vbs → vbsdio → vbsmos → vbseff
+    let dvbseff_dvb = dvbseff_dvbsmos * dvbsmos_dvbsdio * dvbsdio_dvb;
 
     let (vgsteff, dvgsteff_dvg, dvgsteff_dvd, dvgsteff_dvb) = if vgst_nvt > EXPL_THRESHOLD {
         (vgst, dvgs_eff_dvg, -dvth_dvd, -dvth_dvb * dvbseff_dvb)
@@ -1441,58 +1460,37 @@ pub fn bsim3soi_dd_companion(
         )
     };
 
-    // Abulk calculation
-    let (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb) = if sp.a0 == 0.0 {
-        (1.0, 0.0, 1.0, 0.0, 0.0)
-    } else {
-        let t10_k = sp.keta * vbseff;
-        let (t11, dt11_dvb) = if t10_k >= -0.9 {
-            let t11 = 1.0 / (1.0 + t10_k);
-            (t11, -sp.keta * t11 * t11)
-        } else {
-            let t12 = 1.0 / (0.8 + t10_k);
-            let t11 = (17.0 + 20.0 * t10_k) * t12;
-            (t11, -sp.keta * t12 * t12)
-        };
+    // Abulk calculation (ngspice DD formula: keta applied multiplicatively, +1 at end)
+    let (abulk0, _dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb) = {
+        let (mut abulk0, mut dabulk0_dvb, mut abulk, mut dabulk_dvg, mut dabulk_dvb) =
+            if sp.a0 == 0.0 {
+                (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64)
+            } else {
+                let t1 = 0.5 * sp.k1eff / phi.sqrt();
 
-        let t10_phi = phi;
-        let t13 = (vbseff * t11) / t10_phi;
-        let dt13_dvb = (vbseff * dt11_dvb + t11) / t10_phi;
+                let t9 = (model.xj * xdep).sqrt();
+                let tmp1 = leff + 2.0 * t9;
+                let t5 = leff / tmp1;
+                let tmp2_a = sp.a0 * t5;
+                let tmp3_a = weff + sp.b1;
+                let tmp4_a = sp.b0 / tmp3_a;
+                let t2 = tmp2_a + tmp4_a;
+                let dt2_dvb = -t9 * tmp2_a / tmp1 / xdep * dxdep_dvb;
+                let _t6 = t5 * t5;
+                let t7 = t5 * t5 * t5;
 
-        let (t14, dt14_dvb) = if t13 < 0.96 {
-            let t14 = 1.0 / (1.0 - t13).sqrt();
-            let t10 = 0.5 * t14 / (1.0 - t13);
-            (t14, t10 * dt13_dvb)
-        } else {
-            let t11 = 1.0 / (1.0 - 1.043406 * t13);
-            let t14 = (6.00167 - 6.26044 * t13) * t11;
-            let t10 = 0.001742 * t11 * t11;
-            (t14, t10 * dt13_dvb)
-        };
+                let abulk0 = t1 * t2; // NO +1 yet
+                let dabulk0_dvb = t1 * dt2_dvb;
 
-        let t10_k1 = 0.5 * sp.k1eff / phi.sqrt();
-        let t1 = t10_k1 * t14;
-        let dt1_dvb = t10_k1 * dt14_dvb;
+                let t8 = sp.ags * sp.a0 * t7;
+                let dabulk_dvg = -t1 * t8;
+                let abulk = abulk0 + dabulk_dvg * vgsteff; // NO +1 yet
+                let dabulk_dvb = dabulk0_dvb - t8 * vgsteff * 3.0 * t1 * dt2_dvb / tmp2_a;
 
-        let t9 = (1.5e-7 * xdep).sqrt(); // XJ=1.5e-7
-        let tmp1 = leff + 2.0 * t9;
-        let t5 = leff / tmp1;
-        let tmp2_a = sp.a0 * t5;
-        let tmp3_a = weff + sp.b1;
-        let tmp4_a = sp.b0 / tmp3_a;
-        let t2 = tmp2_a + tmp4_a;
-        let dt2_dvb = -t9 * tmp2_a / tmp1 / xdep * dxdep_dvb;
-        let t6 = t5 * t5;
-        let t7 = t5 * t6;
+                (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb)
+            };
 
-        let mut abulk0 = 1.0 + t1 * t2;
-        let mut dabulk0_dvb = t1 * dt2_dvb + t2 * dt1_dvb;
-
-        let t8 = sp.ags * sp.a0 * t7;
-        let dabulk_dvg = -t1 * t8;
-        let mut abulk = abulk0 + dabulk_dvg * vgsteff;
-        let mut dabulk_dvb = dabulk0_dvb - t8 * vgsteff * (dt1_dvb + 3.0 * t1 * dt2_dvb / tmp2_a);
-
+        // Clamp before keta
         if abulk0 < 0.01 {
             let t9 = 1.0 / (3.0 - 200.0 * abulk0);
             abulk0 = (0.02 - abulk0) * t9;
@@ -1504,7 +1502,53 @@ pub fn bsim3soi_dd_companion(
             dabulk_dvb *= t9 * t9;
         }
 
+        // Keta multiplicative correction (applied AFTER clamp, BEFORE +1)
+        let t2_k = sp.keta * vbseff;
+        let (t0_k, dt0k_dvb) = if t2_k >= -0.9 {
+            let t0 = 1.0 / (1.0 + t2_k);
+            (t0, -sp.keta * t0 * t0)
+        } else {
+            let t1 = 1.0 / (0.8 + t2_k);
+            ((17.0 + 20.0 * t2_k) * t1, -sp.keta * t1 * t1)
+        };
+        dabulk_dvg *= t0_k;
+        dabulk_dvb = dabulk_dvb * t0_k + abulk * dt0k_dvb;
+        dabulk0_dvb = dabulk0_dvb * t0_k + abulk0 * dt0k_dvb;
+        abulk *= t0_k;
+        abulk0 *= t0_k;
+
+        // Add 1 at the end
+        abulk += 1.0;
+        abulk0 += 1.0;
+
         (abulk0, dabulk0_dvb, abulk, dabulk_dvg, dabulk_dvb)
+    };
+
+    // Xcsat / Abeff (DD-specific cross-section saturation blending)
+    const DELT_XCSAT: f64 = 0.2;
+    let vcs = vbsdio - vbs0eff_dd;
+    let (abeff, dabeff_dvg, dabeff_dvb) = {
+        let t0 = model.abp * vgst2vtm;
+        if t0.abs() < 1e-20 {
+            // Avoid division by zero; Xcsat=0, Abeff=adice
+            (model.adice, 0.0, 0.0)
+        } else {
+            let t1 = 1.0 - vcs / t0 - DELT_XCSAT;
+            let t2 = (t1 * t1 + DELT_XCSAT * DELT_XCSAT).sqrt();
+            let t3 = 1.0 - 0.5 * (t1 + t2);
+            let t5 = -0.5 * (1.0 + t1 / t2);
+            let dt1_dvg = vcs / vgst2vtm / t0;
+            let dt3_dvg = t5 * dt1_dvg;
+
+            let xcsat = model.mxc * t3 * t3 + (1.0 - model.mxc) * t3;
+            let t4 = 2.0 * model.mxc * t3 + (1.0 - model.mxc);
+            let dxcsat_dvg = t4 * dt3_dvg;
+
+            let abeff = xcsat * abulk + (1.0 - xcsat) * model.adice;
+            let dabeff_dvg = xcsat * dabulk_dvg + abulk * dxcsat_dvg - model.adice * dxcsat_dvg;
+            let dabeff_dvb = xcsat * dabulk_dvb;
+            (abeff, dabeff_dvg, dabeff_dvb)
+        }
     };
 
     // Mobility
@@ -1578,38 +1622,38 @@ pub fn bsim3soi_dd_companion(
     };
 
     if rds == 0.0 && lambda == 1.0 {
-        let t0 = 1.0 / (abulk * esat_l + vgst2vtm);
+        let t0 = 1.0 / (abeff * esat_l + vgst2vtm);
         let t1 = t0 * t0;
         let t2 = vgst2vtm * t0;
         let t3 = esat_l * vgst2vtm;
         vdsat = t3 * t0;
-        let dt0_dvg = -(abulk * desat_l_dvg + esat_l * dabulk_dvg + 1.0) * t1;
-        let dt0_dvd = -(abulk * desat_l_dvd) * t1;
-        let dt0_dvb = -(abulk * desat_l_dvb + esat_l * dabulk_dvb) * t1;
+        let dt0_dvg = -(abeff * desat_l_dvg + esat_l * dabeff_dvg + 1.0) * t1;
+        let dt0_dvd = -(abeff * desat_l_dvd) * t1;
+        let dt0_dvb = -(abeff * desat_l_dvb + esat_l * dabeff_dvb) * t1;
         dvdsat_dvg = t3 * dt0_dvg + t2 * desat_l_dvg + esat_l * t0;
         dvdsat_dvd = t3 * dt0_dvd + t2 * desat_l_dvd;
         dvdsat_dvb = t3 * dt0_dvb + t2 * desat_l_dvb;
     } else {
-        let t9 = abulk * wvcox_rds;
-        let t8 = abulk * t9;
+        let t9 = abeff * wvcox_rds;
+        let t8 = abeff * t9;
         let t7 = vgst2vtm * t9;
         let t6 = vgst2vtm * wvcox_rds;
-        let t0 = 2.0 * abulk * (t9 - 1.0 + 1.0 / lambda);
+        let t0 = 2.0 * abeff * (t9 - 1.0 + 1.0 / lambda);
         let dt0_dvg = 2.0
-            * (t8 * tmp2_rds - abulk * dlambda_dvg / (lambda * lambda)
-                + (2.0 * t9 + 1.0 / lambda - 1.0) * dabulk_dvg);
+            * (t8 * tmp2_rds - abeff * dlambda_dvg / (lambda * lambda)
+                + (2.0 * t9 + 1.0 / lambda - 1.0) * dabeff_dvg);
         let dt0_dvb =
-            2.0 * (t8 * (2.0 / abulk * dabulk_dvb + tmp3_rds) + (1.0 / lambda - 1.0) * dabulk_dvb);
+            2.0 * (t8 * (2.0 / abeff * dabeff_dvb + tmp3_rds) + (1.0 / lambda - 1.0) * dabeff_dvb);
         let dt0_dvd = 0.0;
 
-        let t1 = vgst2vtm * (2.0 / lambda - 1.0) + abulk * esat_l + 3.0 * t7;
+        let t1 = vgst2vtm * (2.0 / lambda - 1.0) + abeff * esat_l + 3.0 * t7;
         let dt1_dvg = (2.0 / lambda - 1.0) - 2.0 * vgst2vtm * dlambda_dvg / (lambda * lambda)
-            + abulk * desat_l_dvg
-            + esat_l * dabulk_dvg
-            + 3.0 * (t9 + t7 * tmp2_rds + t6 * dabulk_dvg);
+            + abeff * desat_l_dvg
+            + esat_l * dabeff_dvg
+            + 3.0 * (t9 + t7 * tmp2_rds + t6 * dabeff_dvg);
         let dt1_dvb =
-            abulk * desat_l_dvb + esat_l * dabulk_dvb + 3.0 * (t6 * dabulk_dvb + t7 * tmp3_rds);
-        let dt1_dvd = abulk * desat_l_dvd;
+            abeff * desat_l_dvb + esat_l * dabeff_dvb + 3.0 * (t6 * dabeff_dvb + t7 * tmp3_rds);
+        let dt1_dvd = abeff * desat_l_dvd;
 
         let t2 = vgst2vtm * (esat_l + 2.0 * t6);
         let dt2_dvg = esat_l + vgst2vtm * desat_l_dvg + t6 * (4.0 + 2.0 * vgst2vtm * tmp2_rds);
@@ -1646,16 +1690,16 @@ pub fn bsim3soi_dd_companion(
 
     // VA (Early voltage)
     let vaclm = if sp.pclm > 0.0 && diff_vds > 1e-10 {
-        let t0 = 1.0 / (sp.pclm * abulk * sp.litl);
+        let t0 = 1.0 / (sp.pclm * abeff * sp.litl);
         let t2 = vgsteff / esat_l;
-        let t1 = leff * (abulk + t2);
+        let t1 = leff * (abeff + t2);
         t0 * t1 * diff_vds
     } else {
         MAX_EXP
     };
 
     let vadibl = if sp.theta_rout > 0.0 {
-        let t8 = abulk * vdsat;
+        let t8 = abeff * vdsat;
         let t0 = vgst2vtm * t8;
         let t1 = vgst2vtm + t8;
         let vadibl = (vgst2vtm - t0 / t1) / sp.theta_rout;
@@ -1682,10 +1726,10 @@ pub fn bsim3soi_dd_companion(
     let tmp3_va = vaclm + vadibl;
     let t1_va = vaclm * vadibl / tmp3_va;
 
-    let tmp4 = 1.0 - 0.5 * abulk * vdsat / vgst2vtm;
+    let tmp4 = 1.0 - 0.5 * abeff * vdsat / vgst2vtm;
     let t9_va = wvcox_rds * vgsteff;
     let t0_va = esat_l + vdsat + 2.0 * t9_va * tmp4;
-    let t9_ab = wvcox_rds * abulk;
+    let t9_ab = wvcox_rds * abeff;
     let t1_ab = 2.0 / lambda - 1.0 + t9_ab;
     let vasat = t0_va / t1_ab;
 
@@ -1695,7 +1739,7 @@ pub fn bsim3soi_dd_companion(
     let cox_wov_l = cox * weff_ch / leff;
     let beta = ueff * cox_wov_l;
 
-    let t0_ids = 1.0 - 0.5 * abulk * vdseff / vgst2vtm;
+    let t0_ids = 1.0 - 0.5 * abeff * vdseff / vgst2vtm;
     let fgche1 = vgsteff * t0_ids;
     let t9_fgche = vdseff / esat_l;
     let fgche2 = 1.0 + t9_fgche;
@@ -1709,7 +1753,7 @@ pub fn bsim3soi_dd_companion(
     let ids = idl * t0_ids2;
 
     // Derivatives
-    let dgche_dvg = (beta * (t0_ids + vgsteff * (-0.5 * abulk / vgst2vtm))
+    let dgche_dvg = (beta * (t0_ids + vgsteff * (-0.5 * abeff / vgst2vtm))
         + fgche1 * dueff_dvg * cox_wov_l)
         / fgche2;
     let didl_dvg =
@@ -1899,7 +1943,6 @@ pub fn bsim3soi_dd_companion(
         0.0
     };
 
-
     Bsim3SoiDdCompanion {
         ids: ids / sp.nseg,
         gm: gm / sp.nseg,
@@ -2010,7 +2053,9 @@ pub fn stamp_bsim3soi_dd(
     // Body junction conductances at zero bias are ~4e-17 S → nearly-zero body diagonal
     // → FullPivLU gives garbage. 1e-12 S clamps body to a solvable range.
     // At realistic operating points junction cond >> 1e-12 S, so physics is unaffected.
-    if inst.body_idx.is_none() && let Some(bi) = b {
+    if inst.body_idx.is_none()
+        && let Some(bi) = b
+    {
         matrix.add(bi, bi, 1e-12);
     }
 

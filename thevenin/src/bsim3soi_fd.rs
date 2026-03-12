@@ -1759,7 +1759,11 @@ pub fn stamp_bsim3soi_fd(
     let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
-    let (xnrm, xrev) = if comp.mode > 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+    let (xnrm, xrev) = if comp.mode > 0 {
+        (1.0, 0.0)
+    } else {
+        (0.0, 1.0)
+    };
 
     let gm_eff = m * (comp.gm * xnrm + comp.gds * xrev);
     let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
@@ -1770,15 +1774,27 @@ pub fn stamp_bsim3soi_fd(
     // Channel current: asymmetric VCCS stamps (must use matrix.add, not stamp_conductance)
     if let Some(d) = dp {
         matrix.add(d, d, gds_eff);
-        if let Some(gate) = g { matrix.add(d, gate, gm_eff); }
-        if let Some(s) = sp { matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff)); }
-        if let Some(bulk) = b { matrix.add(d, bulk, gmbs_eff); }
+        if let Some(gate) = g {
+            matrix.add(d, gate, gm_eff);
+        }
+        if let Some(s) = sp {
+            matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff));
+        }
+        if let Some(bulk) = b {
+            matrix.add(d, bulk, gmbs_eff);
+        }
     }
     if let Some(s) = sp {
-        if let Some(d) = dp { matrix.add(s, d, -gds_eff); }
-        if let Some(gate) = g { matrix.add(s, gate, -gm_eff); }
+        if let Some(d) = dp {
+            matrix.add(s, d, -gds_eff);
+        }
+        if let Some(gate) = g {
+            matrix.add(s, gate, -gm_eff);
+        }
         matrix.add(s, s, gm_eff + gds_eff + gmbs_eff);
-        if let Some(bulk) = b { matrix.add(s, bulk, -gmbs_eff); }
+        if let Some(bulk) = b {
+            matrix.add(s, bulk, -gmbs_eff);
+        }
     }
 
     // BD/BS junctions: symmetric two-terminal stamps (correct use of stamp_conductance)
@@ -1796,22 +1812,34 @@ pub fn stamp_bsim3soi_fd(
         }
         if let (Some(gate), Some(bi)) = (g, b) {
             matrix.add(bi, gate, gii_g);
-            if let Some(d) = dp { matrix.add(d, gate, -gii_g); }
+            if let Some(d) = dp {
+                matrix.add(d, gate, -gii_g);
+            }
         }
         if let Some(bi) = b {
             matrix.add(bi, bi, gii_b);
-            if let Some(d) = dp { matrix.add(d, bi, -gii_b); }
+            if let Some(d) = dp {
+                matrix.add(d, bi, -gii_b);
+            }
         }
     }
 
     // RHS
     let ceq_d = sign * m * comp.ceq_d;
-    if let Some(d) = dp { rhs[d] -= ceq_d; }
-    if let Some(s) = sp { rhs[s] += ceq_d; }
+    if let Some(d) = dp {
+        rhs[d] -= ceq_d;
+    }
+    if let Some(s) = sp {
+        rhs[s] += ceq_d;
+    }
 
     // Body resistance to external body contact
     if let (Some(b_int), Some(b_ext)) = (inst.body_int_idx, inst.body_idx) {
-        let gbody = if inst.model.rbody > 0.0 { m / inst.model.rbody } else { m * 1e3 };
+        let gbody = if inst.model.rbody > 0.0 {
+            m / inst.model.rbody
+        } else {
+            m * 1e3
+        };
         crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), gbody);
     }
 

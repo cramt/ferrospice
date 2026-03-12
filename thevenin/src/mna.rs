@@ -1326,14 +1326,16 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         crate::bsim3soi_dd::Bsim3SoiDdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
 
-                    let drain_prime_idx = if bm.rdsw > 0.0 || nrd > 0.0 {
+                    // Drain/source prime nodes only when RBSH*NRD/NRS > 0
+                    // (matching ngspice b3soiddset.c: sheetResistance > 0 && drainSquares > 0)
+                    let drain_prime_idx = if bm.rbsh > 0.0 && nrd > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
                     } else {
                         drain_idx
                     };
-                    let source_prime_idx = if bm.rdsw > 0.0 || nrs > 0.0 {
+                    let source_prime_idx = if bm.rbsh > 0.0 && nrs > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
@@ -1387,14 +1389,16 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         crate::bsim3soi_pd::Bsim3SoiPdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
 
-                    let drain_prime_idx = if bm.rdsw > 0.0 || nrd > 0.0 {
+                    // Drain/source prime nodes only when RBSH*NRD/NRS > 0
+                    // (matching ngspice b3soipdset.c: sheetResistance > 0 && drainSquares > 0)
+                    let drain_prime_idx = if bm.rbsh > 0.0 && nrd > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
                     } else {
                         drain_idx
                     };
-                    let source_prime_idx = if bm.rdsw > 0.0 || nrs > 0.0 {
+                    let source_prime_idx = if bm.rbsh > 0.0 && nrs > 0.0 {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)

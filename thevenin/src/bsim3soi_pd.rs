@@ -421,7 +421,7 @@ impl Bsim3SoiPdModel {
             npeak: 1.7e17,
             ngate: 0.0,
             nsub: 6e16,
-            xj: 1.5e-7,
+            xj: -1.0, // sentinel; will default to tsi in precompute
             u0: u0_default,
             ua: 2.25e-9,
             ub: 5.87e-19,
@@ -705,6 +705,10 @@ impl Bsim3SoiPdModel {
     }
 
     fn precompute(&mut self) {
+        // XJ defaults to tsi in BSIM3SOI-PD (ngspice b3soipdset.c)
+        if self.xj < 0.0 {
+            self.xj = self.tsi;
+        }
         let tnom_k = self.tnom + 273.15;
         self.cox = EPSOX / self.tox;
         self.vtm = KBOQ * TEMP_DEFAULT;
@@ -734,12 +738,16 @@ impl Bsim3SoiPdModel {
     }
 
     /// Number of internal nodes this model creates.
+    /// Drain/source prime nodes only created when sheet resistance (RBSH) and
+    /// drain/source squares (NRD/NRS) are both positive — matching ngspice
+    /// b3soipdset.c which checks `sheetResistance > 0 && drainSquares > 0`.
+    /// RDSW is folded into the channel model, not external series resistance.
     pub fn internal_node_count(&self, nrd: f64, nrs: f64) -> usize {
         let mut count = 1; // Always create internal body node
-        if self.rdsw > 0.0 || nrd > 0.0 {
+        if self.rbsh > 0.0 && nrd > 0.0 {
             count += 1; // drain prime
         }
-        if self.rdsw > 0.0 || nrs > 0.0 {
+        if self.rbsh > 0.0 && nrs > 0.0 {
             count += 1; // source prime
         }
         count
@@ -1813,7 +1821,11 @@ pub fn stamp_bsim3soi_pd(
     let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
-    let (xnrm, xrev) = if comp.mode > 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+    let (xnrm, xrev) = if comp.mode > 0 {
+        (1.0, 0.0)
+    } else {
+        (0.0, 1.0)
+    };
 
     let gm_eff = m * (comp.gm * xnrm + comp.gds * xrev);
     let gds_eff = m * (comp.gds * xnrm + comp.gm * xrev);
@@ -1824,15 +1836,27 @@ pub fn stamp_bsim3soi_pd(
     // Channel current: asymmetric VCCS stamps (must use matrix.add, not stamp_conductance)
     if let Some(d) = dp {
         matrix.add(d, d, gds_eff);
-        if let Some(gate) = g { matrix.add(d, gate, gm_eff); }
-        if let Some(s) = sp { matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff)); }
-        if let Some(bulk) = b { matrix.add(d, bulk, gmbs_eff); }
+        if let Some(gate) = g {
+            matrix.add(d, gate, gm_eff);
+        }
+        if let Some(s) = sp {
+            matrix.add(d, s, -(gm_eff + gds_eff + gmbs_eff));
+        }
+        if let Some(bulk) = b {
+            matrix.add(d, bulk, gmbs_eff);
+        }
     }
     if let Some(s) = sp {
-        if let Some(d) = dp { matrix.add(s, d, -gds_eff); }
-        if let Some(gate) = g { matrix.add(s, gate, -gm_eff); }
+        if let Some(d) = dp {
+            matrix.add(s, d, -gds_eff);
+        }
+        if let Some(gate) = g {
+            matrix.add(s, gate, -gm_eff);
+        }
         matrix.add(s, s, gm_eff + gds_eff + gmbs_eff);
-        if let Some(bulk) = b { matrix.add(s, bulk, -gmbs_eff); }
+        if let Some(bulk) = b {
+            matrix.add(s, bulk, -gmbs_eff);
+        }
     }
 
     // BD/BS junctions: symmetric two-terminal stamps (correct use of stamp_conductance)
@@ -1840,7 +1864,11 @@ pub fn stamp_bsim3soi_pd(
     crate::stamp_conductance(matrix, b, sp, gbs);
 
     // Minimum body conductance for floating-body stability (direct add; stamp_conductance(b,b,x) = no-op)
-    if inst.body_idx.is_none() && let Some(bi) = b { matrix.add(bi, bi, 1e-12); }
+    if inst.body_idx.is_none()
+        && let Some(bi) = b
+    {
+        matrix.add(bi, bi, 1e-12);
+    }
 
     // Impact ionization: asymmetric current from D' into B
     if comp.iii != 0.0 {
@@ -1853,11 +1881,15 @@ pub fn stamp_bsim3soi_pd(
         }
         if let (Some(gate), Some(bi)) = (g, b) {
             matrix.add(bi, gate, gii_g);
-            if let Some(d) = dp { matrix.add(d, gate, -gii_g); }
+            if let Some(d) = dp {
+                matrix.add(d, gate, -gii_g);
+            }
         }
         if let Some(bi) = b {
             matrix.add(bi, bi, gii_b);
-            if let Some(d) = dp { matrix.add(d, bi, -gii_b); }
+            if let Some(d) = dp {
+                matrix.add(d, bi, -gii_b);
+            }
         }
     }
 
@@ -1865,13 +1897,23 @@ pub fn stamp_bsim3soi_pd(
     let ceq_d = sign * m * comp.ceq_d;
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
-    if let Some(d) = dp { rhs[d] -= ceq_d + ceq_bd; }
-    if let Some(s) = sp { rhs[s] += ceq_d + ceq_bs; }
-    if let Some(bulk) = b { rhs[bulk] -= ceq_bs + ceq_bd; }
+    if let Some(d) = dp {
+        rhs[d] -= ceq_d + ceq_bd;
+    }
+    if let Some(s) = sp {
+        rhs[s] += ceq_d + ceq_bs;
+    }
+    if let Some(bulk) = b {
+        rhs[bulk] -= ceq_bs + ceq_bd;
+    }
 
     // Body resistance to external body contact
     if let (Some(b_int), Some(b_ext)) = (inst.body_int_idx, inst.body_idx) {
-        let gbody = if inst.model.rbody > 0.0 { m / inst.model.rbody } else { m * 1e3 };
+        let gbody = if inst.model.rbody > 0.0 {
+            m / inst.model.rbody
+        } else {
+            m * 1e3
+        };
         crate::stamp_conductance(matrix, Some(b_int), Some(b_ext), gbody);
     }
 
