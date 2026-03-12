@@ -4,6 +4,10 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 
 ## Codebase Patterns
 - BSIM3SOI-FD floating body: when no external body contact, body_int_idx=None (ground). vbsdio=vbs0eff_fd, gmbs=0. Companion takes `floating_body: bool`. drain/source prime only with RBSH*NRD/NRS>0 (RDSW internal). `internal_node_count_fd(nrd, nrs, has_body_contact)` for pre-pass.
+- BSIM3SOI-DD Abulk: follows ngspice DD formula, NOT BSIM3v3 bulk formula. Key differences: (1) keta applied as multiplicative factor AFTER Abulk clamp, not woven into depletion charge. (2) +1 added at the very end. (3) T1=0.5*K1/sqrt(phi) is constant (no keta-modulated depletion). (4) Uses Abeff = Xcsat*Abulk + (1-Xcsat)*adice in all Ids/Vdsat/VA calculations; Abulk only in charge/CV calculations.
+- BSIM3SOI-DD/PD XJ: defaults to tsi (not 1.5e-7). Affects litl=sqrt(3*XJ*tox) and short-channel Abulk correction.
+- BSIM3SOI-DD adice: precomputed as adice0/(1+Cboxt/Cox) where Cboxt=cbox*csi/(cbox+csi). Stored in model struct.
+- BSIM3SOI-DD dvbseff_dvb: full chain dvbseff_dvbsmos * dvbsmos_dvbsdio * dvbsdio_dvb (not just dvbsdio_dvb).
 - PZ output: `format_pz_table()` in output.rs merges all pz* plots, formats complex values as `re,\tim` pairs, 2 cols/page
 - Sensitivity output: always routes through `format_print_all_table()` (4 cols/page pagination), even when `.print SENS` exists
 - TF plots: named sequentially tf1, tf2, ... — `format_tf_output()` takes a single SimPlot directly

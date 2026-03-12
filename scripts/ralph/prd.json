@@ -65,6 +65,13 @@
       "summary": "Continued US-059: Fixed BSIM3SOI-FD floating body architecture. (1) body_int_idx=None when no external body contact (matching ngspice bNode=pNode=0). (2) vbsdio=vbs0eff_fd and gmbs=0 for floating body (matching b3soifdld.c line 1090). (3) drain/source prime nodes only created with actual external resistance (RBSH*NRD/NRS > 0), not RDSW (which is folded into channel model). (4) Added internal_node_count_fd() for correct pre-pass node counting. (5) Propagated floating_body flag to companion, AC, and noise. All 4 active FD tests pass (2 ignored for convergence). PD failures pre-existing.",
       "date": "2026-03-12",
       "storyId": "US-059"
+    },
+    {
+      "iteration": 29,
+      "passType": "implementation",
+      "summary": "Continued US-059: Fixed three major bugs in BSIM3SOI-DD model. (1) Abulk formula restructured from BSIM3v3 bulk pattern to ngspice DD pattern (keta multiplicative after clamp, +1 last). (2) XJ parameter now defaults to tsi instead of hardcoded 1.5e-7 (also fixed in PD). (3) Added DD-specific Xcsat/Abeff cross-section saturation computation (ABP, MXC, ADICE0 parameters) — all Vdsat/Ids/VA calculations now use Abeff. Also fixed drain/source prime node conditions for DD/PD, added adice precomputed field, fixed dvbseff_dvb derivative chain. DD t3 current accuracy improved from ~65% error to ~10% error.",
+      "date": "2026-03-12",
+      "storyId": "US-059"
     }
   ],
   "userStories": [
