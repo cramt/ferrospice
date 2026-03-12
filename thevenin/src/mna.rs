@@ -786,7 +786,8 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
                     let (nrd, nrs) = get_nrd_nrs(params);
-                    internal_node_count += bm.internal_node_count(nrd, nrs);
+                    let has_body_contact = body.is_some();
+                    internal_node_count += bm.internal_node_count_fd(nrd, nrs, has_body_contact);
                 } else if level == 6 {
                     // MOS6
                     let mm = if let Some(mdef) = models.get(&model.to_uppercase()) {
@@ -1447,25 +1448,34 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         crate::bsim3soi_fd::Bsim3SoiFdModel::new(crate::mosfet::MosfetType::Nmos)
                     };
 
-                    let drain_prime_idx = if bm.rdsw > 0.0 || nrd > 0.0 {
+                    // In BSIM3SOI, RDSW is handled internally in the channel model
+                    // (via rds0). Only create drain/source prime nodes when there's
+                    // actual external series resistance (RBSH*NRD/NRS > 0).
+                    let has_ext_rd = nrd > 0.0 && bm.rbsh > 0.0;
+                    let has_ext_rs = nrs > 0.0 && bm.rbsh > 0.0;
+                    let drain_prime_idx = if has_ext_rd {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
                     } else {
                         drain_idx
                     };
-                    let source_prime_idx = if bm.rdsw > 0.0 || nrs > 0.0 {
+                    let source_prime_idx = if has_ext_rs {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
                     } else {
                         source_idx
                     };
-                    // Internal body node (always created for SOI)
-                    let body_int_idx = {
+                    // Internal body node: only created when body contact exists.
+                    // For floating body (body_idx == None), bNode = ground (matching
+                    // ngspice b3soifdset.c: bNode = pNode = 0 when bNodeExt == -1).
+                    let body_int_idx = if body_idx.is_some() {
                         let idx = internal_idx;
                         internal_idx += 1;
                         Some(idx)
+                    } else {
+                        None
                     };
 
                     // For SOI: bulk node is the back-gate (E), body_idx is external body contact

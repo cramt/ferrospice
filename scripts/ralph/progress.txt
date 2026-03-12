@@ -3,6 +3,7 @@ Started: Sun  8 Mar 14:08:50 CET 2026
 ---
 
 ## Codebase Patterns
+- BSIM3SOI-FD floating body: when no external body contact, body_int_idx=None (ground). vbsdio=vbs0eff_fd, gmbs=0. Companion takes `floating_body: bool`. drain/source prime only with RBSH*NRD/NRS>0 (RDSW internal). `internal_node_count_fd(nrd, nrs, has_body_contact)` for pre-pass.
 - PZ output: `format_pz_table()` in output.rs merges all pz* plots, formats complex values as `re,\tim` pairs, 2 cols/page
 - Sensitivity output: always routes through `format_print_all_table()` (4 cols/page pagination), even when `.print SENS` exists
 - TF plots: named sequentially tf1, tf2, ... — `format_tf_output()` takes a single SimPlot directly

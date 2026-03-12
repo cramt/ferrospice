@@ -542,6 +542,7 @@ fn compute_total_noise(
             &bsim.size_params,
             &bsim.model,
             1e-12,
+            bsim.body_idx.is_none(),
         );
         let m = bsim.m;
 

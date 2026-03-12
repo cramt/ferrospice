@@ -527,6 +527,7 @@ pub fn stamp_ac_devices(
             &bsim.size_params,
             &bsim.model,
             1e-12,
+            bsim.body_idx.is_none(),
         );
         stamp_bsim_ac(&bsim.ac_stamp(&comp), omega, sys);
     }

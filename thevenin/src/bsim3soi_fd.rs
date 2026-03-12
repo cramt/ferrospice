@@ -753,11 +753,16 @@ impl Bsim3SoiFdModel {
 
     /// Number of internal nodes this model creates.
     pub fn internal_node_count(&self, nrd: f64, nrs: f64) -> usize {
-        let mut count = 1; // Always create internal body node
-        if self.rdsw > 0.0 || nrd > 0.0 {
+        self.internal_node_count_fd(nrd, nrs, true)
+    }
+
+    /// FD-specific internal node count: body node only created when body contact exists.
+    pub fn internal_node_count_fd(&self, nrd: f64, nrs: f64, has_body_contact: bool) -> usize {
+        let mut count = if has_body_contact { 1 } else { 0 };
+        if nrd > 0.0 && self.rbsh > 0.0 {
             count += 1; // drain prime
         }
-        if self.rdsw > 0.0 || nrs > 0.0 {
+        if nrs > 0.0 && self.rbsh > 0.0 {
             count += 1; // source prime
         }
         count
@@ -1028,6 +1033,7 @@ pub fn bsim3soi_fd_companion(
     sp: &Bsim3SoiFdSizeParam,
     model: &Bsim3SoiFdModel,
     gmin: f64,
+    floating_body: bool,
 ) -> Bsim3SoiFdCompanion {
     let sign = model.mos_type.sign();
     let cox = model.cox;
@@ -1181,14 +1187,16 @@ pub fn bsim3soi_fd_companion(
 
     let vbs0eff_fd = vbs0 - nfb * 0.5 * (t1_eff + t2_eff);
 
-    // Vbsdio: smooth-max(vbs_i, vbs0eff_fd + OFF_VBSDIO)
-    // NOTE: ngspice FD actually uses Vbs = Vbsdio = Vbs0eff (dVbsdio/dVb = 0), but correctly
-    // implementing that requires not creating a floating body node in the MNA (bNode = ground in
-    // ngspice FD). That architectural change is tracked as a follow-up.  For now we use the
-    // smooth-max form (same as DD) which keeps the body node well-conditioned.
-    let t1_vbsdio = vbs_i - (vbs0eff_fd + OFF_VBSDIO) - DELT_VBSDIO;
-    let t2_vbsdio = (t1_vbsdio * t1_vbsdio + DELT_VBSDIO * DELT_VBSDIO).sqrt();
-    let vbsdio = vbs0eff_fd + OFF_VBSDIO + 0.5 * (t1_vbsdio + t2_vbsdio);
+    // Vbsdio for FD: when body is floating (bodyMod=0), Vbsdio = Vbs0eff, dVbsdio/dVb = 0
+    // (matching b3soifdld.c line 1090). When body has an external contact, use smooth-max.
+    let vbsdio = if floating_body {
+        // FD floating body: channel current independent of body voltage
+        vbs0eff_fd
+    } else {
+        let t1_vbsdio = vbs_i - (vbs0eff_fd + OFF_VBSDIO) - DELT_VBSDIO;
+        let t2_vbsdio = (t1_vbsdio * t1_vbsdio + DELT_VBSDIO * DELT_VBSDIO).sqrt();
+        vbs0eff_fd + OFF_VBSDIO + 0.5 * (t1_vbsdio + t2_vbsdio)
+    };
 
     // Prepare Vbsmos (account for silicon capacitance correction)
     let t1_bsmos = vbs0teff - vbsdio - DELT_VBSMOS;
@@ -1657,7 +1665,9 @@ pub fn bsim3soi_fd_companion(
 
     let gm = dids_dvg;
     let gds = dids_dvd + dids_dvg * dvgsteff_dvd / dvgs_eff_dvg.max(1e-20);
-    let gmbs = dids_dvb;
+    // FD floating body: dIds/dVb = 0 because Vbsdio = Vbs0eff is independent of Vb
+    // (dVbsdio/dVb = 0, see b3soifdld.c line 1095)
+    let gmbs = if floating_body { 0.0 } else { dids_dvb };
 
     // FD: Junction currents are ALL ZERO
     let gbs_jct = gmin;
@@ -1774,9 +1784,6 @@ pub fn stamp_bsim3soi_fd(
     // BD/BS junctions: symmetric two-terminal stamps (correct use of stamp_conductance)
     crate::stamp_conductance(matrix, b, dp, gbd);
     crate::stamp_conductance(matrix, b, sp, gbs);
-
-    // Minimum body conductance for floating-body stability (direct add; stamp_conductance(b,b,x) = no-op)
-    if inst.body_idx.is_none() && let Some(bi) = b { matrix.add(bi, bi, 1e-12); }
 
     // Impact ionization: asymmetric current from D' into B
     if comp.iii != 0.0 {
