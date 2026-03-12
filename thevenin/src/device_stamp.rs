@@ -563,9 +563,10 @@ impl DeviceVoltageState {
             for (mi, mesa) in mna.mesas.iter().enumerate() {
                 let (raw_vgs, raw_vgd) = mesa.junction_voltages(solution);
 
-                let vt = mesa.model.n * VT_NOM;
-                let vgs = pnjlim(raw_vgs, prev[mi].0, vt, self.mesa_vcrits[mi]);
-                let vgd = pnjlim(raw_vgd, prev[mi].1, vt, self.mesa_vcritd[mi]);
+                let vtes = mesa.model.n * crate::mesa::K_OVER_Q * mesa.precomp.ts;
+                let vted = mesa.model.n * crate::mesa::K_OVER_Q * mesa.precomp.td;
+                let vgs = pnjlim(raw_vgs, prev[mi].0, vtes, self.mesa_vcrits[mi]);
+                let vgd = pnjlim(raw_vgd, prev[mi].1, vted, self.mesa_vcritd[mi]);
                 let vgs = fetlim(vgs, prev[mi].0, mesa.precomp.t_vto);
                 let vgd = fetlim(vgd, prev[mi].1, mesa.precomp.t_vto);
                 prev[mi] = (vgs, vgd);

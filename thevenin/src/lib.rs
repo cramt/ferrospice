@@ -74,6 +74,25 @@ pub fn netlist_temp(netlist: &thevenin_types::Netlist) -> f64 {
         .unwrap_or(27.0)
 }
 
+/// Extract nominal temperature (TNOM) from `.options` in Kelvin.
+/// Defaults to 300.15K (27°C).
+pub fn netlist_tnom(netlist: &thevenin_types::Netlist) -> f64 {
+    use thevenin_types::{Expr, Item};
+    let mut tnom_c = 27.0_f64;
+    for item in &netlist.items {
+        if let Item::Options(params) = item {
+            for p in params {
+                if let Expr::Num(v) = &p.value
+                    && p.name.eq_ignore_ascii_case("TNOM")
+                {
+                    tnom_c = *v;
+                }
+            }
+        }
+    }
+    tnom_c + 273.15
+}
+
 pub use ac::simulate_ac;
 pub use bjt::{BjtInstance, BjtModel, BjtType, stamp_bjt};
 pub use bsim3::{Bsim3Companion, Bsim3Instance, Bsim3Model, stamp_bsim3};

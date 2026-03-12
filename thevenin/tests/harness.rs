@@ -452,11 +452,7 @@ harness_test!(
 );
 harness_test!(harness_mesa_mesa13, "mesa/mesa13.cir");
 harness_test!(harness_mesa_mesa14, "mesa/mesa14.cir");
-harness_test!(
-    harness_mesa_mesa15,
-    "mesa/mesa15.cir",
-    ignore = "MESA model numerical error at non-default temperature"
-);
+harness_test!(harness_mesa_mesa15, "mesa/mesa15.cir");
 harness_test!(harness_mesa_mesa21, "mesa/mesa21.cir");
 harness_test!(
     harness_mesa_mesa,

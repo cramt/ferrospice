@@ -10,10 +10,10 @@
 
 use thevenin_types::{Expr, ModelDef};
 
-/// Physical constants matching ngspice.
-const CHARGE: f64 = 1.602_176_634e-19;
-const BOLTZMANN: f64 = 1.380_649e-23;
-const K_OVER_Q: f64 = BOLTZMANN / CHARGE;
+/// Physical constants matching ngspice (const.h).
+const CHARGE: f64 = 1.602_176_620_8e-19;
+const BOLTZMANN: f64 = 1.380_648_52e-23;
+pub const K_OVER_Q: f64 = BOLTZMANN / CHARGE;
 const C_TO_K: f64 = 273.15;
 const EPSI_GAAS: f64 = 12.244 * 8.85418e-12;
 const ROOT2: f64 = std::f64::consts::SQRT_2;

@@ -1793,15 +1793,25 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
 
                         let mut w = 20e-6;
                         let mut l = 1e-6;
+                        let mut ts_given = None;
+                        let mut td_given = None;
+                        let mut dtemp = 0.0_f64;
                         for p in params {
                             if let Expr::Num(v) = &p.value {
                                 match p.name.to_uppercase().as_str() {
                                     "W" => w = *v,
                                     "L" => l = *v,
+                                    "TS" => ts_given = Some(*v + 273.15),
+                                    "TD" => td_given = Some(*v + 273.15),
+                                    "DTEMP" => dtemp = *v,
                                     _ => {}
                                 }
                             }
                         }
+                        // Circuit temperature in Kelvin (default 27°C = 300.15K)
+                        let ckt_temp = crate::netlist_temp(netlist) + 273.15;
+                        let ts = ts_given.unwrap_or(ckt_temp + dtemp);
+                        let td = td_given.unwrap_or(ckt_temp + dtemp);
 
                         let drain_prime_idx = if mm.rd > 0.0 {
                             let idx = internal_idx;
@@ -1839,8 +1849,9 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                             drain_prime_idx
                         };
 
+                        let tnom = crate::netlist_tnom(netlist);
                         let pre =
-                            crate::mesa::MesaPrecomp::compute(&mm, 300.15, 300.15, 300.15, w, l);
+                            crate::mesa::MesaPrecomp::compute(&mm, ts, td, tnom, w, l);
 
                         mesas.push(crate::mesa::MesaInstance {
                             name: element.name.clone(),
