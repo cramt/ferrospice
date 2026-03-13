@@ -1103,6 +1103,8 @@ pub struct Netlist {
     /// The title line (always the first line of a SPICE file).
     pub title: String,
     pub items: Vec<Item>,
+    /// Raw source text passed to `Netlist::parse()`, used for netlist echo.
+    pub source: String,
 }
 
 impl Netlist {
@@ -1306,6 +1308,7 @@ mod tests {
     fn netlist_display() {
         let n = Netlist {
             title: "Test circuit".into(),
+            source: String::new(),
             items: vec![
                 Item::Element(Element {
                     name: "V1".into(),

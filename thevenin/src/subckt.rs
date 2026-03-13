@@ -92,6 +92,7 @@ pub fn flatten_netlist(netlist: &Netlist) -> Result<Netlist, SubcktError> {
 
     Ok(Netlist {
         title: netlist.title.clone(),
+        source: netlist.source.clone(),
         items: flat_items,
     })
 }

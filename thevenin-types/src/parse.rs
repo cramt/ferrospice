@@ -1528,7 +1528,7 @@ pub fn parse(input: &str) -> Result<Netlist, ParseError> {
         items.push(parse_line(lineno, &line, &mut iter)?);
     }
 
-    Ok(Netlist { title, items })
+    Ok(Netlist { title, items, source: input.to_string() })
 }
 
 // ---------------------------------------------------------------------------

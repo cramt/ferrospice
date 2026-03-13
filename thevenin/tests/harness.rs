@@ -382,17 +382,13 @@ harness_test!(harness_bsim3soipd_t4, "bsim3soipd/t4.cir", ignore = "US-059: BSIM
 harness_test!(harness_bsim3soipd_t5, "bsim3soipd/t5.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
 
 // === Filters ===
-harness_test!(
-    harness_filters_lowpass,
-    "filters/lowpass.cir",
-    ignore = "AC complex output + device info (US-058, US-061)"
-);
+harness_test!(harness_filters_lowpass, "filters/lowpass.cir");
 
 // === General circuits ===
 harness_test!(
     harness_general_diffpair,
     "general/diffpair.cir",
-    ignore = "transient timestep + .plot (US-055, US-058)"
+    ignore = "reference output file says 'To be done' — no reference to compare against"
 );
 harness_test!(
     harness_general_fourbitadder,
@@ -443,11 +439,7 @@ harness_test!(harness_mesa_mesa13, "mesa/mesa13.cir");
 harness_test!(harness_mesa_mesa14, "mesa/mesa14.cir");
 harness_test!(harness_mesa_mesa15, "mesa/mesa15.cir");
 harness_test!(harness_mesa_mesa21, "mesa/mesa21.cir");
-harness_test!(
-    harness_mesa_mesa,
-    "mesa/mesa.cir",
-    ignore = "device info output (US-061)"
-);
+harness_test!(harness_mesa_mesa, "mesa/mesa.cir");
 harness_test!(harness_mesa_mesgout, "mesa/mesgout.cir");
 harness_test!(
     harness_mesa_mesinv,
@@ -692,32 +684,32 @@ harness_test!(
 harness_test!(
     harness_vbic_ceamp,
     "vbic/CEamp.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "VBIC AC/PZ numerical accuracy: ~0.3% AC error + PZ eigenvalue mismatch"
 );
 harness_test!(
     harness_vbic_diffamp,
     "vbic/diffamp.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "VBIC diffamp: singular matrix during DC OP solve"
 );
 harness_test!(
     harness_vbic_fg,
     "vbic/FG.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "VBIC FG: ~5% error in DC sweep (PNP VBIC subthreshold)"
 );
 harness_test!(
     harness_vbic_fo,
     "vbic/FO.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "VBIC FO: ~27% error in 2D DC sweep"
 );
 harness_test!(
     harness_vbic_noise_scale,
     "vbic/noise_scale_test.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "VBIC noise: simulate_noise does not yet handle VBIC devices"
 );
 harness_test!(
     harness_vbic_temp,
     "vbic/temp.cir",
-    ignore = "transient timestep (US-055, US-060)"
+    ignore = "VBIC temp: ~5% error in DC sweep at non-default temperature"
 );
 
 // === XSPICE (unimplemented) ===

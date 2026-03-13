@@ -506,39 +506,86 @@ fn expr_value(expr: &Expr, element_name: &str) -> Result<f64, MnaError> {
 /// Resolve a resistor value, supporting model-referenced resistors.
 ///
 /// When the value is a model name (e.g. `r1 2 0 my` where `.model my r r=2k`),
-/// look up the model definition and extract the `r=` or `resistance=` parameter.
+/// Resolve a resistor's DC resistance value.
+///
+/// Handles: numeric value, model-name reference (with RSH+L/W or R= params),
+/// `m` (multiplicity) and `scale` instance parameters.
 fn resolve_resistor_value(
     value: &Expr,
     element_name: &str,
+    params: &[thevenin_types::Param],
     models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
 ) -> Result<f64, MnaError> {
-    match value {
-        Expr::Num(v) => Ok(*v),
+    // Helper: extract a numeric param by name from a list
+    fn get_num(list: &[thevenin_types::Param], name: &str) -> Option<f64> {
+        list.iter().find(|p| p.name.eq_ignore_ascii_case(name)).and_then(|p| {
+            if let Expr::Num(v) = &p.value { Some(*v) } else { None }
+        })
+    }
+
+    let base_r = match value {
+        Expr::Num(v) => *v,
         Expr::Param(name) => {
             // Try to look up as a resistor model
             if let Some(mdef) = models.get(&name.to_uppercase())
                 && mdef.kind.eq_ignore_ascii_case("r")
             {
-                // Look for r= or resistance= parameter
+                // Look for explicit r= or resistance= in model
                 for p in &mdef.params {
-                    if p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance")
+                    if p.name.eq_ignore_ascii_case("r")
+                        || p.name.eq_ignore_ascii_case("resistance")
                     {
-                        return expr_value(&p.value, element_name);
+                        return Ok(apply_multipliers(
+                            expr_value(&p.value, element_name)?,
+                            params,
+                        ));
                     }
                 }
-                // Default resistance if model exists but no r= param
+                // Compute from RSH + L/W (sheet resistance model)
+                let rsh = get_num(&mdef.params, "rsh").unwrap_or(0.0);
+                if rsh != 0.0 {
+                    let l = get_num(params, "l").unwrap_or(0.0);
+                    let w = get_num(params, "w").unwrap_or(1.0);
+                    let narrow = get_num(&mdef.params, "narrow").unwrap_or(0.0);
+                    let w_eff = (w - narrow).max(1e-30);
+                    if l > 0.0 {
+                        let r = rsh * l / w_eff;
+                        return Ok(apply_multipliers(r, params));
+                    }
+                    // No L/W given — model exists, default to 0 (short)
+                    return Ok(0.0);
+                }
                 return Err(MnaError::NonNumericValue {
                     element: element_name.to_string(),
                 });
             }
-            Err(MnaError::NonNumericValue {
+            return Err(MnaError::NonNumericValue {
                 element: element_name.to_string(),
-            })
+            });
         }
-        _ => Err(MnaError::NonNumericValue {
-            element: element_name.to_string(),
-        }),
-    }
+        _ => {
+            return Err(MnaError::NonNumericValue {
+                element: element_name.to_string(),
+            });
+        }
+    };
+    Ok(apply_multipliers(base_r, params))
+}
+
+/// Apply `m` (multiplicity) and `scale` instance parameters to a resistance.
+fn apply_multipliers(r: f64, params: &[thevenin_types::Param]) -> f64 {
+    let m = params
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("m"))
+        .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+        .unwrap_or(1.0);
+    let scale = params
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("scale"))
+        .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+        .unwrap_or(1.0);
+    // m parallel resistors: R_eff = R / m; scale multiplies the resistance
+    r * scale / m
 }
 
 /// Extract the BJT LEVEL parameter from model definition and instance params.
@@ -2302,7 +2349,7 @@ fn stamp_element(
             value,
             params,
         } => {
-            let r = resolve_resistor_value(value, &element.name, models)?;
+            let r = resolve_resistor_value(value, &element.name, params, models)?;
             let g = 1.0 / r;
             let ni = node_map.get(pos);
             let nj = node_map.get(neg);
