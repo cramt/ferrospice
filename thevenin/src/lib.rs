@@ -57,21 +57,27 @@ pub mod txl;
 pub mod vbic;
 pub mod waveform;
 
-/// Extract simulation temperature from a netlist (from `.temp` directive).
+/// Extract simulation temperature from a netlist (from `.temp` directive or `.options temp=`).
 /// Returns 27.0°C (room temperature) as default.
 pub fn netlist_temp(netlist: &thevenin_types::Netlist) -> f64 {
-    netlist
-        .items
-        .iter()
-        .filter_map(|item| {
-            if let thevenin_types::Item::Temp(t) = item {
-                Some(*t)
-            } else {
-                None
+    use thevenin_types::{Expr, Item};
+    let mut temp_c = 27.0_f64;
+    for item in &netlist.items {
+        match item {
+            Item::Temp(t) => temp_c = *t,
+            Item::Options(params) => {
+                for p in params {
+                    if let Expr::Num(v) = &p.value
+                        && p.name.eq_ignore_ascii_case("TEMP")
+                    {
+                        temp_c = *v;
+                    }
+                }
             }
-        })
-        .next_back()
-        .unwrap_or(27.0)
+            _ => {}
+        }
+    }
+    temp_c
 }
 
 /// Extract nominal temperature (TNOM) from `.options` in Kelvin.
