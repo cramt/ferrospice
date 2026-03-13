@@ -176,6 +176,12 @@ fn run_all_analyses(netlist: &Netlist) -> Result<thevenin_types::SimResult, Stri
         return Ok(result);
     }
 
+    // Track which multi-analysis simulation types have already run.
+    // simulate_tf / simulate_sens process ALL matching analyses in the netlist,
+    // so calling them once per directive would produce duplicates.
+    let mut tf_done = false;
+    let mut sens_done = false;
+
     for analysis in &analyses {
         match analysis {
             Analysis::Op => {
@@ -209,14 +215,20 @@ fn run_all_analyses(netlist: &Netlist) -> Result<thevenin_types::SimResult, Stri
                 all_plots.extend(result.plots);
             }
             Analysis::Tf { .. } => {
-                let result =
-                    thevenin::simulate_tf(netlist).map_err(|e| format!("TF error: {e}"))?;
-                all_plots.extend(result.plots);
+                if !tf_done {
+                    let result =
+                        thevenin::simulate_tf(netlist).map_err(|e| format!("TF error: {e}"))?;
+                    all_plots.extend(result.plots);
+                    tf_done = true;
+                }
             }
             Analysis::Sens { .. } => {
-                let result =
-                    thevenin::simulate_sens(netlist).map_err(|e| format!("Sens error: {e}"))?;
-                all_plots.extend(result.plots);
+                if !sens_done {
+                    let result = thevenin::simulate_sens(netlist)
+                        .map_err(|e| format!("Sens error: {e}"))?;
+                    all_plots.extend(result.plots);
+                    sens_done = true;
+                }
             }
             Analysis::Pz { .. } => {
                 let result =

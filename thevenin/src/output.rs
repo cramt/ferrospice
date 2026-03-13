@@ -1080,6 +1080,48 @@ fn format_tf_output(out: &mut String, plot: &SimPlot) {
 fn format_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: &PrintDirective) {
     let plot_type = plot_analysis_type(&plot.name);
     if plot_type == "ac" {
+        // First try to resolve all variables as scalar (e.g., db(), ph(), abs() functions).
+        // If all resolve to scalar data, use the regular table format.
+        // If any are unresolved as scalar (i.e., raw complex), use the complex AC table.
+        // Only use scalar path when vars use explicit scalar-reducing wrappers (db/ph/abs).
+        // Raw complex AC variables (V(2), i(r1), etc.) must use the complex-pair format.
+        let has_scalar_wrappers = print_dir.vars.iter().any(|v| {
+            let vl = v.to_lowercase();
+            vl.starts_with("db(") || vl.starts_with("ph(") || vl.starts_with("abs(")
+        });
+        let scalar_vars = if has_scalar_wrappers {
+            resolve_print_vars(plot, &print_dir.vars)
+        } else {
+            vec![]
+        };
+        if scalar_vars.len() > 1 {
+            // At least some variables resolved as scalar — use regular table format.
+            let resolved_vars = scalar_vars;
+            let n_rows = resolved_vars[0].1.len();
+            if n_rows > 0 {
+                out.push_str(&format!("\nNo. of Data Rows : {n_rows}\n"));
+                let title_padded = format!("{:^80}", title);
+                out.push_str(&title_padded);
+                out.push('\n');
+                format_table_header(out, &resolved_vars);
+                let page_size = 55;
+                for i in 0..n_rows {
+                    if i > 0 && i % page_size == 0 {
+                        out.push('\n');
+                        format_table_header(out, &resolved_vars);
+                    }
+                    out.push_str(&format!("{i}\t"));
+                    for (_, values) in &resolved_vars {
+                        if i < values.len() {
+                            out.push_str(&format!("{}\t", format_sci(values[i])));
+                        }
+                    }
+                    out.push('\n');
+                }
+                out.push('\n');
+            }
+            return;
+        }
         format_ac_print_table(out, title, plot, print_dir);
         return;
     }
@@ -1453,6 +1495,18 @@ fn find_vec_by_name<'a>(plot: &'a SimPlot, name: &str) -> Option<&'a SimVector> 
             .vecs
             .iter()
             .find(|v| v.name.to_lowercase() == branch_name)
+        {
+            return Some(v);
+        }
+    }
+
+    // v(name) -> look for a vector named exactly "name" (handles noise/sens vectors like
+    // v(inoise_spectrum) matching a vector named "inoise_spectrum")
+    if let Some(inner) = strip_func(&name_lower, "v") {
+        if let Some(v) = plot
+            .vecs
+            .iter()
+            .find(|v| v.name.to_lowercase() == inner)
         {
             return Some(v);
         }
