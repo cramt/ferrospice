@@ -188,6 +188,15 @@ impl MosfetModel {
         };
 
         // Body effect: compute threshold voltage shift.
+        //
+        // The incoming vgs/vds/vbs are already sign-adjusted (multiplied by
+        // mos_type.sign() in terminal_voltages).  The threshold must be
+        // expressed in that same signed space, so we apply the sign to vto:
+        //   von = sign * (vto + gamma * sarg)
+        // This ensures PMOS (sign=-1, vto=-0.8) has a positive threshold
+        // ~0.45 V in signed space, matching ngspice Level 1 behaviour where
+        // the cutoff condition is vgst = vgs_eff - von <= 0.
+        let sign = self.mos_type.sign();
         let sarg = if vbs_eff <= 0.0 {
             (self.phi - vbs_eff).sqrt()
         } else {
@@ -195,7 +204,7 @@ impl MosfetModel {
             (s - vbs_eff / (2.0 * s)).max(0.0)
         };
 
-        let von = self.vto + self.gamma * sarg;
+        let von = sign * (self.vto + self.gamma * sarg);
         let vgst = vgs_eff - von;
         let vdsat = vgst.max(0.0);
 
@@ -368,14 +377,10 @@ impl MosfetInstance {
 
 /// Stamp the MOSFET companion model into the MNA matrix and RHS.
 ///
-/// Follows the ngspice decomposition:
-/// 1. gds conductance between d' and s'
-/// 2. gm VCCS: Vgs controls current from s' to d'
-/// 3. gmbs: Vbs controls current from s' to d'
-/// 4. gbd conductance between b and d'
-/// 5. gbs conductance between b and s'
-/// 6. Series resistances (RD, RS)
-/// 7. Equivalent current sources on the RHS
+/// Follows ngspice mos1load.c convention (gate row not modified — ideal gate).
+/// The xnrm/xrev factors route the gm/gmbs active terms to the correct terminal:
+///   mode=+1 (Vds≥0): xnrm=1, xrev=0  → active terms on sp,sp diagonal
+///   mode=-1 (Vds<0):  xnrm=0, xrev=1  → active terms on dp,dp diagonal
 pub fn stamp_mosfet(
     matrix: &mut crate::SparseMatrix,
     rhs: &mut [f64],
@@ -390,52 +395,65 @@ pub fn stamp_mosfet(
     let sign = inst.model.mos_type.sign();
     let m = inst.m;
 
-    // Determine effective source/drain based on mode.
-    // mode=+1: normal (dp=drain', sp=source')
-    // mode=-1: reversed (dp=source', sp=drain' effectively)
+    // xnrm=1,xrev=0 for normal mode; xnrm=0,xrev=1 for reversed.
     let (xnrm, xrev) = if comp.mode > 0 {
         (1.0, 0.0)
     } else {
         (0.0, 1.0)
     };
 
-    // 1. gds conductance between d' and s'
+    let gm_scaled = m * comp.gm;
+    let gmbs_scaled = m * comp.gmbs;
+
+    // 1. gds output conductance between d' and s'
     crate::stamp_conductance(matrix, dp, sp, m * comp.gds);
 
-    // 2. gm VCCS: Vgs controls current from s' to d'
-    // In normal mode: d' gets +gm from g, -gm from s'
-    // s' gets -gm from g, +gm from s'
-    let gm_scaled = m * comp.gm;
+    // 2. gm VCCS diagonal terms: active side depends on mode.
+    //    mode=+1: sp,sp += gm (source is "active" terminal)
+    //    mode=-1: dp,dp += gm (drain is "active" terminal in reverse mode)
     if let Some(d) = dp {
-        if let Some(gate) = g {
+        matrix.add(d, d, xrev * gm_scaled);
+    }
+    if let Some(s) = sp {
+        matrix.add(s, s, xnrm * gm_scaled);
+    }
+    // gm VCCS off-diagonal gate coupling (dp,g and sp,g only, ideal gate)
+    if let Some(gate) = g {
+        if let Some(d) = dp {
             matrix.add(d, gate, (xnrm - xrev) * gm_scaled);
         }
         if let Some(s) = sp {
-            matrix.add(d, s, -(xnrm - xrev) * gm_scaled);
-        }
-    }
-    if let Some(s) = sp {
-        if let Some(gate) = g {
             matrix.add(s, gate, -(xnrm - xrev) * gm_scaled);
         }
-        matrix.add(s, s, (xnrm - xrev) * gm_scaled);
+    }
+    // gm VCCS off-diagonals (standard MNA, asymmetric):
+    //   dp,sp += -xnrm*gm  (mode=+1: -gm; mode=-1: 0)
+    //   sp,dp += -xrev*gm  (mode=+1: 0;   mode=-1: -gm)
+    if let (Some(d), Some(s)) = (dp, sp) {
+        matrix.add(d, s, -xnrm * gm_scaled);
+        matrix.add(s, d, -xrev * gm_scaled);
     }
 
-    // 3. gmbs: Vbs controls current from s' to d'
-    let gmbs_scaled = m * comp.gmbs;
+    // 3. gmbs body-effect transconductance (same xnrm/xrev routing as gm)
     if let Some(d) = dp {
+        matrix.add(d, d, xrev * gmbs_scaled);
         if let Some(bulk) = b {
             matrix.add(d, bulk, (xnrm - xrev) * gmbs_scaled);
         }
         if let Some(s) = sp {
-            matrix.add(d, s, -(xnrm - xrev) * gmbs_scaled);
+            // dp,sp += -xnrm*gmbs  (mode=+1: -gmbs; mode=-1: 0)
+            matrix.add(d, s, -xnrm * gmbs_scaled);
         }
     }
     if let Some(s) = sp {
+        matrix.add(s, s, xnrm * gmbs_scaled);
         if let Some(bulk) = b {
             matrix.add(s, bulk, -(xnrm - xrev) * gmbs_scaled);
         }
-        matrix.add(s, s, (xnrm - xrev) * gmbs_scaled);
+        if let Some(d) = dp {
+            // sp,dp += -xrev*gmbs  (mode=+1: 0; mode=-1: -gmbs)
+            matrix.add(s, d, -xrev * gmbs_scaled);
+        }
     }
 
     // 4. gbd conductance between b and d'
@@ -455,15 +473,10 @@ pub fn stamp_mosfet(
     }
 
     // 7. Equivalent current sources on the RHS.
-    // For NR: the linearized drain current model is:
-    //   Id = gm*Vgs + gds*Vds + gmbs*Vbs + ceq_d
-    // ceq_d = Id_prev - gm*Vgs_prev - gds*Vds_prev - gmbs*Vbs_prev
     let ceq_d = sign * m * comp.ceq_d;
     let ceq_bs = sign * m * comp.ceq_bs;
     let ceq_bd = sign * m * comp.ceq_bd;
 
-    // Drain current enters d' and exits s' (or reversed for mode=-1,
-    // but ceq_d already accounts for mode through the companion computation).
     if let Some(d) = dp {
         rhs[d] -= ceq_d + ceq_bd;
     }

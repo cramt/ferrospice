@@ -518,9 +518,15 @@ fn resolve_resistor_value(
 ) -> Result<f64, MnaError> {
     // Helper: extract a numeric param by name from a list
     fn get_num(list: &[thevenin_types::Param], name: &str) -> Option<f64> {
-        list.iter().find(|p| p.name.eq_ignore_ascii_case(name)).and_then(|p| {
-            if let Expr::Num(v) = &p.value { Some(*v) } else { None }
-        })
+        list.iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .and_then(|p| {
+                if let Expr::Num(v) = &p.value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
     }
 
     let base_r = match value {
@@ -532,8 +538,7 @@ fn resolve_resistor_value(
             {
                 // Look for explicit r= or resistance= in model
                 for p in &mdef.params {
-                    if p.name.eq_ignore_ascii_case("r")
-                        || p.name.eq_ignore_ascii_case("resistance")
+                    if p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance")
                     {
                         return Ok(apply_multipliers(
                             expr_value(&p.value, element_name)?,
@@ -577,12 +582,24 @@ fn apply_multipliers(r: f64, params: &[thevenin_types::Param]) -> f64 {
     let m = params
         .iter()
         .find(|p| p.name.eq_ignore_ascii_case("m"))
-        .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+        .and_then(|p| {
+            if let Expr::Num(v) = &p.value {
+                Some(*v)
+            } else {
+                None
+            }
+        })
         .unwrap_or(1.0);
     let scale = params
         .iter()
         .find(|p| p.name.eq_ignore_ascii_case("scale"))
-        .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+        .and_then(|p| {
+            if let Expr::Num(v) = &p.value {
+                Some(*v)
+            } else {
+                None
+            }
+        })
         .unwrap_or(1.0);
     // m parallel resistors: R_eff = R / m; scale multiplies the resistance
     r * scale / m
@@ -662,6 +679,16 @@ fn get_nrd_nrs(params: &[thevenin_types::Param]) -> (f64, f64) {
 /// independent current sources (I), capacitors (C, open in DC),
 /// inductors (L, short in DC), and diodes (D, nonlinear).
 pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
+    assemble_mna_inner(netlist, false)
+}
+
+/// Assemble MNA using MODEDC behavior: waveform sources are evaluated at t=0,
+/// ignoring any explicit DC value. This matches ngspice's initial transient solution.
+pub fn assemble_mna_modedc(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
+    assemble_mna_inner(netlist, true)
+}
+
+fn assemble_mna_inner(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaError> {
     // Resolve parameter expressions before flattening.
     let mut resolved = netlist.clone();
     crate::expr::resolve_netlist_exprs(&mut resolved).map_err(|e| MnaError::ExprError {
@@ -670,11 +697,11 @@ pub fn assemble_mna(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
     })?;
     // Flatten subcircuit calls before assembly.
     let flat_netlist = flatten_netlist(&resolved)?;
-    assemble_mna_flat(&flat_netlist)
+    assemble_mna_flat(&flat_netlist, modedc)
 }
 
 /// Assemble an MNA system from a flattened (no subcircuit calls) netlist.
-fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
+fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaError> {
     // Build a map of model definitions for lookup.
     let models: BTreeMap<String, &thevenin_types::ModelDef> = netlist
         .items
@@ -1897,8 +1924,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                         };
 
                         let tnom = crate::netlist_tnom(netlist);
-                        let pre =
-                            crate::mesa::MesaPrecomp::compute(&mm, ts, td, tnom, w, l);
+                        let pre = crate::mesa::MesaPrecomp::compute(&mm, ts, td, tnom, w, l);
 
                         mesas.push(crate::mesa::MesaInstance {
                             name: element.name.clone(),
@@ -2290,6 +2316,7 @@ fn assemble_mna_flat(netlist: &Netlist) -> Result<MnaSystem, MnaError> {
                     &mut current_sources,
                     &mut resistors,
                     &models,
+                    modedc,
                 )?;
             }
         }
@@ -2341,6 +2368,7 @@ fn stamp_element(
     current_sources: &mut Vec<CurrentSourceInstance>,
     resistors: &mut Vec<ResistorInstance>,
     models: &std::collections::BTreeMap<String, &thevenin_types::ModelDef>,
+    modedc: bool,
 ) -> Result<(), MnaError> {
     match &element.kind {
         ElementKind::Resistor {
@@ -2373,12 +2401,43 @@ fn stamp_element(
             });
         }
         ElementKind::VoltageSource { pos, neg, source } => {
-            let v = source
-                .dc
-                .as_ref()
-                .map(|e| expr_value(e, &element.name))
-                .transpose()?
-                .unwrap_or(0.0);
+            let v = if modedc {
+                // MODEDC (initial transient solution): always evaluate waveform at t=0.
+                // Matches ngspice: DC value is ignored when MODEDC is set (only MODEDCOP uses DC).
+                source.waveform.as_ref().map_or_else(
+                    || {
+                        source
+                            .dc
+                            .as_ref()
+                            .map(|e| expr_value(e, &element.name))
+                            .transpose()
+                            .map(|v| v.unwrap_or(0.0))
+                    },
+                    |wf| {
+                        let tran = crate::waveform::TranParams {
+                            tstep: 1e-9,
+                            tstop: 1.0,
+                        };
+                        Ok(crate::waveform::evaluate(wf, 0.0, &tran))
+                    },
+                )?
+            } else {
+                // MODEDCOP: use explicit DC if given, else evaluate waveform at t=0.
+                source
+                    .dc
+                    .as_ref()
+                    .map(|e| expr_value(e, &element.name))
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        source.waveform.as_ref().map_or(0.0, |wf| {
+                            let tran = crate::waveform::TranParams {
+                                tstep: 1e-9,
+                                tstop: 1.0,
+                            };
+                            crate::waveform::evaluate(wf, 0.0, &tran)
+                        })
+                    })
+            };
             let ni = node_map.get(pos);
             let nj = node_map.get(neg);
             let branch = num_nodes + *vsource_idx;
@@ -2405,12 +2464,42 @@ fn stamp_element(
             *vsource_idx += 1;
         }
         ElementKind::CurrentSource { pos, neg, source } => {
-            let i_val = source
-                .dc
-                .as_ref()
-                .map(|e| expr_value(e, &element.name))
-                .transpose()?
-                .unwrap_or(0.0);
+            let i_val = if modedc {
+                // MODEDC: evaluate waveform at t=0, ignore explicit DC value.
+                source.waveform.as_ref().map_or_else(
+                    || {
+                        source
+                            .dc
+                            .as_ref()
+                            .map(|e| expr_value(e, &element.name))
+                            .transpose()
+                            .map(|v| v.unwrap_or(0.0))
+                    },
+                    |wf| {
+                        let tran = crate::waveform::TranParams {
+                            tstep: 1e-9,
+                            tstop: 1.0,
+                        };
+                        Ok(crate::waveform::evaluate(wf, 0.0, &tran))
+                    },
+                )?
+            } else {
+                // MODEDCOP: use explicit DC if given, else waveform at t=0.
+                source
+                    .dc
+                    .as_ref()
+                    .map(|e| expr_value(e, &element.name))
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        source.waveform.as_ref().map_or(0.0, |wf| {
+                            let tran = crate::waveform::TranParams {
+                                tstep: 1e-9,
+                                tstop: 1.0,
+                            };
+                            crate::waveform::evaluate(wf, 0.0, &tran)
+                        })
+                    })
+            };
             let ni = node_map.get(pos);
             let nj = node_map.get(neg);
 
@@ -2948,5 +3037,31 @@ R2 out 0 10k
 
         let solution = mna.solve().unwrap();
         assert_abs_diff_eq!(solution.voltage("out").unwrap(), 2.0, epsilon = 1e-9);
+    }
+
+    /// Verify that assemble_mna_modedc evaluates SIN waveform at t=0 (not DC value).
+    #[test]
+    fn test_modedc_ignores_dc_uses_waveform_at_t0() {
+        // Vin with DC=1 and SIN(offset=0), at t=0 SIN gives 0, not DC.
+        // In MODEDC, node 1 should be 0V.
+        let netlist = Netlist::parse(
+            "modedc test
+Vin 1 0 DC 1 SIN (0 1 100MEG 1NS 0.0) AC 1
+R1 1 0 1k
+.tran 1ns 10ns
+.end
+",
+        )
+        .unwrap();
+
+        // MODEDCOP: should use DC=1
+        let mna_dc = assemble_mna(&netlist).unwrap();
+        let sol_dc = mna_dc.solve().unwrap();
+        assert_abs_diff_eq!(sol_dc.voltage("1").unwrap(), 1.0, epsilon = 1e-9);
+
+        // MODEDC: should use waveform at t=0 = 0
+        let mna_modedc = assemble_mna_modedc(&netlist).unwrap();
+        let sol_modedc = mna_modedc.solve().unwrap();
+        assert_abs_diff_eq!(sol_modedc.voltage("1").unwrap(), 0.0, epsilon = 1e-9);
     }
 }

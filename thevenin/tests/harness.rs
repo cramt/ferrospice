@@ -224,8 +224,8 @@ fn run_all_analyses(netlist: &Netlist) -> Result<thevenin_types::SimResult, Stri
             }
             Analysis::Sens { .. } => {
                 if !sens_done {
-                    let result = thevenin::simulate_sens(netlist)
-                        .map_err(|e| format!("Sens error: {e}"))?;
+                    let result =
+                        thevenin::simulate_sens(netlist).map_err(|e| format!("Sens error: {e}"))?;
                     all_plots.extend(result.plots);
                     sens_done = true;
                 }
@@ -373,25 +373,85 @@ harness_test!(
 );
 
 // === BSIM3SOI-DD ===
-harness_test!(harness_bsim3soidd_inv2, "bsim3soidd/inv2.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soidd_rampvg2, "bsim3soidd/RampVg2.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soidd_t3, "bsim3soidd/t3.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soidd_t4, "bsim3soidd/t4.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soidd_t5, "bsim3soidd/t5.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
+harness_test!(
+    harness_bsim3soidd_inv2,
+    "bsim3soidd/inv2.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soidd_rampvg2,
+    "bsim3soidd/RampVg2.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soidd_t3,
+    "bsim3soidd/t3.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soidd_t4,
+    "bsim3soidd/t4.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soidd_t5,
+    "bsim3soidd/t5.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
 
 // === BSIM3SOI-FD ===
-harness_test!(harness_bsim3soifd_inv2, "bsim3soifd/inv2.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soifd_rampvg2, "bsim3soifd/RampVg2.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soifd_t3, "bsim3soifd/t3.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soifd_t4, "bsim3soifd/t4.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soifd_t5, "bsim3soifd/t5.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
+harness_test!(
+    harness_bsim3soifd_inv2,
+    "bsim3soifd/inv2.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soifd_rampvg2,
+    "bsim3soifd/RampVg2.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soifd_t3,
+    "bsim3soifd/t3.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soifd_t4,
+    "bsim3soifd/t4.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soifd_t5,
+    "bsim3soifd/t5.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
 
 // === BSIM3SOI-PD ===
-harness_test!(harness_bsim3soipd_inv2, "bsim3soipd/inv2.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soipd_rampvg2, "bsim3soipd/RampVg2.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soipd_t3, "bsim3soipd/t3.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soipd_t4, "bsim3soipd/t4.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
-harness_test!(harness_bsim3soipd_t5, "bsim3soipd/t5.cir", ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice");
+harness_test!(
+    harness_bsim3soipd_inv2,
+    "bsim3soipd/inv2.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soipd_rampvg2,
+    "bsim3soipd/RampVg2.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soipd_t3,
+    "bsim3soipd/t3.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soipd_t4,
+    "bsim3soipd/t4.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
+harness_test!(
+    harness_bsim3soipd_t5,
+    "bsim3soipd/t5.cir",
+    ignore = "US-059: BSIM3SOI output accuracy — needs systematic diff against ngspice"
+);
 
 // === Filters ===
 harness_test!(harness_filters_lowpass, "filters/lowpass.cir");
@@ -511,9 +571,18 @@ harness_test!(
     "regression/lib-processing/ex3a.cir",
     ignore = "Requires .control scripting language"
 );
-harness_test!(harness_regression_lib_scope1, "regression/lib-processing/scope-1.cir");
-harness_test!(harness_regression_lib_scope2, "regression/lib-processing/scope-2.cir");
-harness_test!(harness_regression_lib_scope3, "regression/lib-processing/scope-3.cir");
+harness_test!(
+    harness_regression_lib_scope1,
+    "regression/lib-processing/scope-1.cir"
+);
+harness_test!(
+    harness_regression_lib_scope2,
+    "regression/lib-processing/scope-2.cir"
+);
+harness_test!(
+    harness_regression_lib_scope3,
+    "regression/lib-processing/scope-3.cir"
+);
 
 // === Regression: misc ===
 harness_test!(
@@ -548,7 +617,10 @@ harness_test!(
     "regression/misc/empty-1.cir",
     ignore = "Requires .control scripting language"
 );
-harness_test!(harness_regression_misc_if_elseif, "regression/misc/if-elseif.cir");
+harness_test!(
+    harness_regression_misc_if_elseif,
+    "regression/misc/if-elseif.cir"
+);
 harness_test!(
     harness_regression_misc_log_functions_1,
     "regression/misc/log-functions-1.cir",
@@ -571,7 +643,10 @@ harness_test!(
 );
 
 // === Regression: model ===
-harness_test!(harness_regression_model_binning_1, "regression/model/binning-1.cir");
+harness_test!(
+    harness_regression_model_binning_1,
+    "regression/model/binning-1.cir"
+);
 harness_test!(
     harness_regression_model_instance_defaults,
     "regression/model/instance-defaults.cir",
@@ -584,14 +659,23 @@ harness_test!(
 );
 
 // === Regression: parser ===
-harness_test!(harness_regression_parser_bxpressn_1, "regression/parser/bxpressn-1.cir");
+harness_test!(
+    harness_regression_parser_bxpressn_1,
+    "regression/parser/bxpressn-1.cir"
+);
 harness_test!(
     harness_regression_parser_minus_minus,
     "regression/parser/minus-minus.cir",
     ignore = "Requires .control scripting language"
 );
-harness_test!(harness_regression_parser_xpressn_1, "regression/parser/xpressn-1.cir");
-harness_test!(harness_regression_parser_xpressn_2, "regression/parser/xpressn-2.cir");
+harness_test!(
+    harness_regression_parser_xpressn_1,
+    "regression/parser/xpressn-1.cir"
+);
+harness_test!(
+    harness_regression_parser_xpressn_2,
+    "regression/parser/xpressn-2.cir"
+);
 harness_test!(
     harness_regression_parser_xpressn_3,
     "regression/parser/xpressn-3.cir",
@@ -606,14 +690,32 @@ harness_test!(
 );
 
 // === Regression: sens ===
-harness_test!(harness_regression_sens_ac_1, "regression/sens/sens-ac-1.cir");
-harness_test!(harness_regression_sens_ac_2, "regression/sens/sens-ac-2.cir");
-harness_test!(harness_regression_sens_dc_1, "regression/sens/sens-dc-1.cir");
-harness_test!(harness_regression_sens_dc_2, "regression/sens/sens-dc-2.cir");
+harness_test!(
+    harness_regression_sens_ac_1,
+    "regression/sens/sens-ac-1.cir"
+);
+harness_test!(
+    harness_regression_sens_ac_2,
+    "regression/sens/sens-ac-2.cir"
+);
+harness_test!(
+    harness_regression_sens_dc_1,
+    "regression/sens/sens-dc-1.cir"
+);
+harness_test!(
+    harness_regression_sens_dc_2,
+    "regression/sens/sens-dc-2.cir"
+);
 
 // === Regression: subckt-processing ===
-harness_test!(harness_regression_subckt_global_1, "regression/subckt-processing/global-1.cir");
-harness_test!(harness_regression_subckt_model_scope_5, "regression/subckt-processing/model-scope-5.cir");
+harness_test!(
+    harness_regression_subckt_global_1,
+    "regression/subckt-processing/global-1.cir"
+);
+harness_test!(
+    harness_regression_subckt_model_scope_5,
+    "regression/subckt-processing/model-scope-5.cir"
+);
 
 // === Regression: temper ===
 harness_test!(
@@ -643,7 +745,10 @@ harness_test!(
     "resistance/res_array.cir",
     ignore = "parameter expression in resistor array not supported"
 );
-harness_test!(harness_resistance_res_partition, "resistance/res_partition.cir");
+harness_test!(
+    harness_resistance_res_partition,
+    "resistance/res_partition.cir"
+);
 harness_test!(harness_resistance_res_simple, "resistance/res_simple.cir");
 
 // === Sensitivity ===

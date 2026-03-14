@@ -4,7 +4,7 @@ use crate::LinearSystem;
 use crate::device_stamp::DeviceVoltageState;
 use crate::expr_val;
 use crate::mna::{MnaError, MnaSystem, assemble_mna};
-use crate::newton::{NrOptions, newton_raphson_solve};
+use crate::newton::{NrOptions, newton_raphson_solve, source_stepping_solve};
 
 /// Extract Newton-Raphson options from netlist `.OPTIONS` directives.
 pub fn nr_options_from_netlist(netlist: &Netlist) -> NrOptions {
@@ -112,7 +112,10 @@ pub(crate) fn solve_op_raw(mna: &MnaSystem) -> Result<Vec<f64>, MnaError> {
 /// produces branch currents that match ngspice's `.op` output exactly.
 pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mna = assemble_mna(netlist)?;
-    let opts = NrOptions { diag_gmin: 0.0, ..NrOptions::default() };
+    let opts = NrOptions {
+        diag_gmin: 0.0,
+        ..NrOptions::default()
+    };
     let solution_vec = if !mna.has_nonlinear() {
         solve_op_raw(&mna)?
     } else {
@@ -124,7 +127,11 @@ pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let mut nodes: Vec<(&str, usize)> = mna.node_map.iter().collect();
     nodes.sort_by(|a, b| b.1.cmp(&a.1));
     for (name, idx) in &nodes {
-        let v = if *idx < solution_vec.len() { solution_vec[*idx] } else { 0.0 };
+        let v = if *idx < solution_vec.len() {
+            solution_vec[*idx]
+        } else {
+            0.0
+        };
         vecs.push(SimVector {
             name: format!("v({})", name),
             real: vec![v],
@@ -134,7 +141,11 @@ pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let num_nodes = mna.total_num_nodes();
     for (i, vsrc) in mna.vsource_names.iter().enumerate() {
         let idx = num_nodes + i;
-        let current = if idx < solution_vec.len() { solution_vec[idx] } else { 0.0 };
+        let current = if idx < solution_vec.len() {
+            solution_vec[idx]
+        } else {
+            0.0
+        };
         vecs.push(SimVector {
             name: format!("{}#branch", vsrc.to_lowercase()),
             real: vec![current],
@@ -142,13 +153,72 @@ pub fn simulate_op_dc(netlist: &Netlist) -> Result<SimResult, MnaError> {
         });
     }
     Ok(SimResult {
-        plots: vec![SimPlot { name: "op1".to_string(), vecs }],
+        plots: vec![SimPlot {
+            name: "op1".to_string(),
+            vecs,
+        }],
     })
 }
 
 /// Solve a nonlinear DC operating point using Newton-Raphson.
 pub fn solve_nonlinear_op(mna: &MnaSystem, options: &NrOptions) -> Result<Vec<f64>, MnaError> {
     solve_nonlinear_op_with_guess(mna, options, None)
+}
+
+/// Compute a MODEINITJCT-style initial guess for the DC operating point.
+///
+/// Stamps each Level-1 MOSFET with its companion model evaluated slightly
+/// above threshold (vgs = von + 0.1 V), then does a single linear solve.
+/// This produces a non-trivial starting point so that NR doesn't get stuck
+/// at the trivial all-zero solution when transistors are the only path between
+/// supply rails and floating output nodes (e.g. CMOS inverters).
+///
+/// Matches ngspice's `MODEINITJCT` pass in `NIiter.c`.
+fn jct_initial_guess(
+    mna: &MnaSystem,
+    dim: usize,
+    num_nodes: usize,
+    options: &NrOptions,
+    base_matrix: &crate::SparseMatrix,
+    base_rhs: &[f64],
+) -> Vec<f64> {
+    use crate::mosfet::{mos_limit, stamp_mosfet};
+
+    let mut system = LinearSystem::new(dim);
+
+    // Stamp the linear portion (resistors, voltage sources, etc.) at full amplitude.
+    for triplet in base_matrix.triplets() {
+        system.matrix.add(triplet.row, triplet.col, triplet.value);
+    }
+    for (i, &val) in base_rhs.iter().enumerate() {
+        system.rhs[i] += val;
+    }
+    mna.stamp_ltra_dc_all(&mut system);
+    mna.stamp_txl_dc_all(&mut system);
+    mna.stamp_cpl_dc_all(&mut system);
+
+    // Stamp each Level-1 MOSFET at its threshold voltage.
+    // von (in our signed convention) = sign * (vto + gamma * sqrt(phi)).
+    // We want vgs = von + 0.1V for the companion.  mos_limit with
+    //   prev_vgs = von + 0.6  and  raw_vgs = 0
+    // gives vgs_limited = (von + 0.6) - 0.5 = von + 0.1  (since |diff| = von+0.6 > 0.5).
+    let zeros = vec![0.0_f64; dim];
+    for mos in &mna.mosfets {
+        let sign = mos.model.mos_type.sign();
+        let von = sign * (mos.model.vto + mos.model.gamma * mos.model.phi.sqrt());
+        let (vgs, vds) = mos_limit(0.0, 0.0, von + 0.6, 0.0, mos.model.vto);
+        let mut eff_model = mos.model.clone();
+        eff_model.kp = mos.beta();
+        let comp = eff_model.companion(vgs, vds, 0.0);
+        stamp_mosfet(&mut system.matrix, &mut system.rhs, mos, &comp);
+    }
+
+    // Diagonal gmin for numerical stability.
+    for i in 0..num_nodes {
+        system.matrix.add(i, i, options.gmin);
+    }
+
+    system.solve().unwrap_or(zeros)
 }
 
 fn solve_nonlinear_op_with_guess(
@@ -162,9 +232,25 @@ fn solve_nonlinear_op_with_guess(
     let base_matrix = &mna.system.matrix;
     let base_rhs = &mna.system.rhs;
 
-    let dev_state = match initial_guess {
-        Some(guess) if guess.len() == dim => DeviceVoltageState::from_solution(mna, guess),
-        _ => DeviceVoltageState::new_zero(mna),
+    // Choose initial solution vector.  When no explicit guess is provided and
+    // the circuit contains Level-1 MOSFETs, run the JCT init pass to obtain a
+    // non-trivial starting point (matching ngspice's MODEINITJCT behaviour).
+    let initial: Vec<f64> = if let Some(guess) = initial_guess {
+        if guess.len() == dim {
+            guess.to_vec()
+        } else {
+            vec![0.0; dim]
+        }
+    } else if !mna.mosfets.is_empty() {
+        jct_initial_guess(mna, dim, num_nodes, options, base_matrix, base_rhs)
+    } else {
+        vec![0.0; dim]
+    };
+
+    let dev_state = if initial.iter().any(|&x| x != 0.0) {
+        DeviceVoltageState::from_solution(mna, &initial)
+    } else {
+        DeviceVoltageState::new_zero(mna)
     };
 
     let load = |solution: &[f64], system: &mut LinearSystem, source_factor: f64, gmin: f64| {
@@ -185,17 +271,27 @@ fn solve_nonlinear_op_with_guess(
         //    nominal gmin (not the elevated gmin from gmin stepping), matching
         //    ngspice where CKTgmin stays at its nominal value during stepping and
         //    only CKTdiagGmin (solver diagonal) is elevated.
+        //    Voltage limiting (mos_limit / pnjlim) is NOT applied here, matching
+        //    ngspice's MODEINITFLOAT which calls DEVload without DEVfetlim so that
+        //    NR can take large steps to find the correct DC operating point.
         let _ = gmin; // elevated gmin used only by solver diagonal, not device stamps
-        dev_state.stamp_devices(solution, system, mna, options.gmin);
+        dev_state.stamp_devices(solution, system, mna, options.gmin, false);
     };
 
-    let initial = match initial_guess {
-        Some(guess) if guess.len() == dim => guess.to_vec(),
-        _ => vec![0.0; dim],
-    };
-    let result = newton_raphson_solve(options, dim, num_nodes, load, &initial).map_err(|e| {
-        MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string()))
-    })?;
+    // For circuits with transmission lines (LTRA/TXL/CPL) combined with MOSFETs,
+    // use source stepping for the DC OP.  Without voltage-step limiting
+    // (use_voltage_limit=false matches ngspice MODEINITFLOAT), Gmin stepping can
+    // converge to spurious negative-voltage fixed points in multi-stage MOSFET
+    // circuits (e.g. two cascaded CMOS inverters driving LTRA lines).  Source
+    // stepping avoids this by ramping all independent sources from zero, keeping
+    // the circuit on the physical solution path at every step.
+    let has_tlines = !mna.ltras.is_empty() || !mna.txls.is_empty() || !mna.cpls.is_empty();
+    let result = if has_tlines && !mna.mosfets.is_empty() {
+        source_stepping_solve(options, dim, num_nodes, load, &initial)
+    } else {
+        newton_raphson_solve(options, dim, num_nodes, load, &initial)
+    }
+    .map_err(|e| MnaError::SolveError(crate::SparseMatrixError::SingularMatrix(e.to_string())))?;
 
     Ok(result.solution)
 }

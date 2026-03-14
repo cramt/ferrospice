@@ -5,10 +5,12 @@
 
 use std::collections::HashMap;
 
-use thevenin_types::{Analysis, ElementKind, Expr, Item, ModelDef, Netlist, SimPlot, SimResult, SimVector};
+use thevenin_types::{
+    Analysis, ElementKind, Expr, Item, ModelDef, Netlist, SimPlot, SimResult, SimVector,
+};
 
 use crate::jfet::{JfetModel, JfetType};
-use crate::mesa::{mesa_companion, MesaInstance, MesaModel, MesaPrecomp};
+use crate::mesa::{MesaInstance, MesaModel, MesaPrecomp, mesa_companion};
 
 /// Parsed `.print` directive: analysis type keyword + list of output variable names.
 #[derive(Debug, Clone)]
@@ -299,7 +301,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
     out.push('\n');
     for vec in &op_plot.vecs {
         if vec.name.ends_with("#branch") && !vec.real.is_empty() {
-            out.push_str(&format!("\t{:<38}{:>15}\n", &vec.name, format_sci(vec.real[0])));
+            out.push_str(&format!(
+                "\t{:<38}{:>15}\n",
+                &vec.name,
+                format_sci(vec.real[0])
+            ));
         }
     }
 
@@ -344,7 +350,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
                 out.push_str(&format!("{:>12}{:>22}\n", "type", type_str));
                 out.push_str(&format!("{:>12}{:>22}\n", "vt0", format_op_val(jm.vto)));
                 out.push_str(&format!("{:>12}{:>22}\n", "beta", format_op_val(jm.beta)));
-                out.push_str(&format!("{:>12}{:>22}\n", "lambda", format_op_val(jm.lambda)));
+                out.push_str(&format!(
+                    "{:>12}{:>22}\n",
+                    "lambda",
+                    format_op_val(jm.lambda)
+                ));
                 out.push_str(&format!("{:>12}{:>22}\n", "rd", format_op_val(jm.rd)));
                 out.push_str(&format!("{:>12}{:>22}\n", "rs", format_op_val(jm.rs)));
                 out.push_str(&format!("{:>12}{:>22}\n", "cgs", format_op_val(jm.cgs)));
@@ -414,7 +424,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             let is_val = -(id + ig);
             let igd = cg_gd;
 
-            out.push_str(&format!("{:>12}{:>22}\n", "device", dev_name.to_lowercase()));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "device",
+                dev_name.to_lowercase()
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "model", mname));
             out.push_str(&format!("{:>12} {:>21}\n", "vgs", format_sci(vgs)));
             out.push_str(&format!("{:>12} {:>21}\n", "vgd", format_sci(vgd)));
@@ -435,7 +449,12 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         .iter()
         .filter_map(|item| {
             if let Item::Element(el) = item
-                && let ElementKind::Capacitor { pos, neg, value, params } = &el.kind
+                && let ElementKind::Capacitor {
+                    pos,
+                    neg,
+                    value,
+                    params,
+                } = &el.kind
             {
                 return Some((&el.name, pos, neg, value, params));
             }
@@ -448,7 +467,12 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         .iter()
         .filter_map(|item| {
             if let Item::Element(el) = item
-                && let ElementKind::Resistor { pos, neg, value, params } = &el.kind
+                && let ElementKind::Resistor {
+                    pos,
+                    neg,
+                    value,
+                    params,
+                } = &el.kind
             {
                 return Some((&el.name, pos, neg, value, params));
             }
@@ -461,7 +485,13 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         .iter()
         .filter_map(|item| {
             if let Item::Element(el) = item
-                && let ElementKind::Mesa { d, g, s, model, params } = &el.kind
+                && let ElementKind::Mesa {
+                    d,
+                    g,
+                    s,
+                    model,
+                    params,
+                } = &el.kind
             {
                 return Some((&el.name, d, g, s, model, params));
             }
@@ -526,8 +556,16 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             out.push('\n');
             out.push_str(&format!("{:>12}{:>22}\n", "type", "nmf"));
             out.push_str(&format!("{:>12}{:>22}\n", "vto", format_op_val(mm.vto)));
-            out.push_str(&format!("{:>12}{:>22}\n", "lambda", format_op_val(mm.lambda)));
-            out.push_str(&format!("{:>12}{:>22}\n", "lambdahf", format_op_val(mm.lambdahf)));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "lambda",
+                format_op_val(mm.lambda)
+            ));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "lambdahf",
+                format_op_val(mm.lambdahf)
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "beta", format_op_val(mm.beta)));
             out.push_str(&format!("{:>12}{:>22}\n", "vs", format_op_val(mm.vs)));
             out.push_str(&format!("{:>12}{:>22}\n", "rd", format_op_val(mm.rd)));
@@ -550,9 +588,21 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             out.push_str(&format!("{:>12}{:>22}\n", "m", format_op_val(mm.m)));
             out.push_str(&format!("{:>12}{:>22}\n", "mc", format_op_val(mm.mc)));
             out.push_str(&format!("{:>12}{:>22}\n", "alpha", format_op_val(mm.alpha)));
-            out.push_str(&format!("{:>12}{:>22}\n", "sigma0", format_op_val(mm.sigma0)));
-            out.push_str(&format!("{:>12}{:>22}\n", "vsigmat", format_op_val(mm.vsigmat)));
-            out.push_str(&format!("{:>12}{:>22}\n", "vsigma", format_op_val(mm.vsigma)));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "sigma0",
+                format_op_val(mm.sigma0)
+            ));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "vsigmat",
+                format_op_val(mm.vsigmat)
+            ));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "vsigma",
+                format_op_val(mm.vsigma)
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "mu", format_op_val(mm.mu)));
             out.push_str(&format!("{:>12}{:>22}\n", "theta", format_op_val(mm.theta)));
             out.push_str(&format!("{:>12}{:>22}\n", "mu1", format_op_val(mm.mu1)));
@@ -562,13 +612,29 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             out.push_str(&format!("{:>12}{:>22}\n", "du", format_op_val(mm.du)));
             out.push_str(&format!("{:>12}{:>22}\n", "ndu", format_op_val(mm.ndu)));
             out.push_str(&format!("{:>12}{:>22}\n", "th", format_op_val(mm.th)));
-            out.push_str(&format!("{:>12}{:>22}\n", "ndelta", format_op_val(mm.ndelta)));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "ndelta",
+                format_op_val(mm.ndelta)
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "delta", format_op_val(mm.delta)));
             out.push_str(&format!("{:>12}{:>22}\n", "tc", format_op_val(mm.tc)));
             out.push_str(&format!("{:>12}{:>22}\n", "tvto", format_op_val(mm.tvto)));
-            out.push_str(&format!("{:>12}{:>22}\n", "alphat", format_op_val(mm.alpha)));
-            out.push_str(&format!("{:>12}{:>22}\n", "tlambda", format_op_val_sci(mm.tlambda)));
-            out.push_str(&format!("{:>12}{:>22}\n", "teta0", format_op_val_sci(mm.teta0)));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "alphat",
+                format_op_val(mm.alpha)
+            ));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "tlambda",
+                format_op_val_sci(mm.tlambda)
+            ));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "teta0",
+                format_op_val_sci(mm.teta0)
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "teta1", format_op_val(mm.teta1)));
             out.push_str(&format!("{:>12}{:>22}\n", "tmu", format_op_val(mm.tmu)));
             out.push_str(&format!("{:>12}{:>22}\n", "xtm0", format_op_val(mm.xtm0)));
@@ -583,7 +649,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             out.push_str(&format!("{:>12}{:>22}\n", "rtc1", format_op_val(mm.tc1)));
             out.push_str(&format!("{:>12}{:>22}\n", "rtc2", format_op_val(mm.tc2)));
             out.push_str(&format!("{:>12}{:>22}\n", "zeta", format_op_val(mm.zeta)));
-            out.push_str(&format!("{:>12}{:>22}\n", "level", format_op_val(mm.level as f64)));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "level",
+                format_op_val(mm.level as f64)
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "nmax", format_op_val(mm.nmax)));
             out.push_str(&format!("{:>12}{:>22}\n", "gamma", format_op_val(mm.gamma)));
             out.push_str(&format!("{:>12}{:>22}\n", "epsi", format_op_val(mm.epsi)));
@@ -594,7 +664,6 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             out.push_str(&format!("{:>12}{:>22}\n", "gs", format_op_val(0.0)));
             out.push_str(&format!("{:>12}{:>22}\n", "vcrit", format_op_val(0.0)));
         }
-
     }
 
     // ── DEVICE sections (all devices after all models, matching ngspice order) ──
@@ -619,21 +688,33 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
 
         out.push_str(&format!("{:>12}", "capacitance"));
         for (_, _, _, value, _) in &caps_rev {
-            let c = if let thevenin_types::Expr::Num(v) = value { *v } else { 0.0 };
+            let c = if let thevenin_types::Expr::Num(v) = value {
+                *v
+            } else {
+                0.0
+            };
             out.push_str(&format!("{:>22}", format_op_val(c)));
         }
         out.push('\n');
 
         out.push_str(&format!("{:>12}", "cap"));
         for (_, _, _, value, _) in &caps_rev {
-            let c = if let thevenin_types::Expr::Num(v) = value { *v } else { 0.0 };
+            let c = if let thevenin_types::Expr::Num(v) = value {
+                *v
+            } else {
+                0.0
+            };
             out.push_str(&format!("{:>22}", format_op_val(c)));
         }
         out.push('\n');
 
         out.push_str(&format!("{:>12}", "c"));
         for (_, _, _, value, _) in &caps_rev {
-            let c = if let thevenin_types::Expr::Num(v) = value { *v } else { 0.0 };
+            let c = if let thevenin_types::Expr::Num(v) = value {
+                *v
+            } else {
+                0.0
+            };
             out.push_str(&format!("{:>22}", format_op_val(c)));
         }
         out.push('\n');
@@ -677,18 +758,32 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
 
         out.push_str(&format!("{:>12}", "resistance"));
         for (_, _, _, value, _) in &res_rev {
-            let r = if let thevenin_types::Expr::Num(v) = value { *v } else { 0.0 };
+            let r = if let thevenin_types::Expr::Num(v) = value {
+                *v
+            } else {
+                0.0
+            };
             out.push_str(&format!("{:>22}", format_op_val(r)));
         }
         out.push('\n');
 
         out.push_str(&format!("{:>12}", "ac"));
         for (_, _, _, value, params) in &res_rev {
-            let dc_r = if let thevenin_types::Expr::Num(v) = value { *v } else { 0.0 };
+            let dc_r = if let thevenin_types::Expr::Num(v) = value {
+                *v
+            } else {
+                0.0
+            };
             let ac_r = params
                 .iter()
                 .find(|p| p.name.eq_ignore_ascii_case("ac"))
-                .and_then(|p| if let thevenin_types::Expr::Num(v) = &p.value { Some(*v) } else { None })
+                .and_then(|p| {
+                    if let thevenin_types::Expr::Num(v) = &p.value {
+                        Some(*v)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(dc_r);
             out.push_str(&format!("{:>22}", format_op_val(ac_r)));
         }
@@ -699,7 +794,13 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             let dtemp = params
                 .iter()
                 .find(|p| p.name.eq_ignore_ascii_case("dtemp"))
-                .and_then(|p| if let thevenin_types::Expr::Num(v) = &p.value { Some(*v) } else { None })
+                .and_then(|p| {
+                    if let thevenin_types::Expr::Num(v) = &p.value {
+                        Some(*v)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(0.0);
             out.push_str(&format!("{:>22}", format_op_val(dtemp)));
         }
@@ -710,7 +811,13 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             let noisy = params
                 .iter()
                 .find(|p| p.name.eq_ignore_ascii_case("noisy"))
-                .and_then(|p| if let thevenin_types::Expr::Num(v) = &p.value { Some(*v) } else { None })
+                .and_then(|p| {
+                    if let thevenin_types::Expr::Num(v) = &p.value {
+                        Some(*v)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or(1.0);
             out.push_str(&format!("{:>22}", format_op_val(noisy)));
         }
@@ -718,7 +825,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
 
         out.push_str(&format!("{:>12}", "i"));
         for (_, pos, neg, value, _) in &res_rev {
-            let r = if let thevenin_types::Expr::Num(v) = value { *v } else { 0.0 };
+            let r = if let thevenin_types::Expr::Num(v) = value {
+                *v
+            } else {
+                0.0
+            };
             let vp = node_v.get(pos.as_str()).copied().unwrap_or(0.0);
             let vn = node_v.get(neg.as_str()).copied().unwrap_or(0.0);
             let i = if r != 0.0 { (vp - vn) / r } else { 0.0 };
@@ -728,7 +839,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
 
         out.push_str(&format!("{:>12}", "p"));
         for (_, pos, neg, value, _) in &res_rev {
-            let r = if let thevenin_types::Expr::Num(v) = value { *v } else { 0.0 };
+            let r = if let thevenin_types::Expr::Num(v) = value {
+                *v
+            } else {
+                0.0
+            };
             let vp = node_v.get(pos.as_str()).copied().unwrap_or(0.0);
             let vn = node_v.get(neg.as_str()).copied().unwrap_or(0.0);
             let i = if r != 0.0 { (vp - vn) / r } else { 0.0 };
@@ -807,7 +922,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             let cs = -(comp.cd + comp.cg);
             let power = vds * comp.cd;
 
-            out.push_str(&format!("{:>12}{:>22}\n", "device", dev_name.to_lowercase()));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "device",
+                dev_name.to_lowercase()
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "model", mname));
             out.push_str(&format!("{:>12}{:>22}\n", "off", format_op_val(0.0)));
             out.push_str(&format!("{:>12}{:>22}\n", "l", format_op_val(l)));
@@ -815,8 +934,16 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
             out.push_str(&format!("{:>12}{:>22}\n", "m", format_op_val(m_mult)));
             out.push_str(&format!("{:>12}{:>22}\n", "icvds", format_op_val(0.0)));
             out.push_str(&format!("{:>12}{:>22}\n", "icvgs", format_op_val(0.0)));
-            out.push_str(&format!("{:>12}{:>22}\n", "td", format_op_val(ckt_temp_c + dtemp)));
-            out.push_str(&format!("{:>12}{:>22}\n", "ts", format_op_val(ckt_temp_c + dtemp)));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "td",
+                format_op_val(ckt_temp_c + dtemp)
+            ));
+            out.push_str(&format!(
+                "{:>12}{:>22}\n",
+                "ts",
+                format_op_val(ckt_temp_c + dtemp)
+            ));
             out.push_str(&format!("{:>12}{:>22}\n", "dtemp", format_op_val(dtemp)));
             out.push_str(&format!("{:>12}{:>22}\n", "dnode", d_num));
             out.push_str(&format!("{:>12}{:>22}\n", "gnode", g_num));
@@ -848,7 +975,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         .iter()
         .filter_map(|item| {
             if let Item::Element(el) = item
-                && let ElementKind::VoltageSource { pos, neg: _, source } = &el.kind
+                && let ElementKind::VoltageSource {
+                    pos,
+                    neg: _,
+                    source,
+                } = &el.kind
             {
                 return Some((&el.name, pos, source));
             }
@@ -916,10 +1047,7 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         // i (branch current) row
         out.push_str(&format!("{:>12}", "i"));
         for (name, _, _) in &sorted_vsrcs {
-            let i = branch_i
-                .get(&name.to_lowercase())
-                .copied()
-                .unwrap_or(0.0);
+            let i = branch_i.get(&name.to_lowercase()).copied().unwrap_or(0.0);
             out.push_str(&format!("{:>22}", format_sci(i)));
         }
         out.push('\n');
@@ -932,10 +1060,7 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
                 .as_ref()
                 .and_then(|e| if let Expr::Num(v) = e { Some(*v) } else { None })
                 .unwrap_or(0.0);
-            let i = branch_i
-                .get(&name.to_lowercase())
-                .copied()
-                .unwrap_or(0.0);
+            let i = branch_i.get(&name.to_lowercase()).copied().unwrap_or(0.0);
             let p = -dc * i;
             out.push_str(&format!("{:>22}", format_sci(p)));
         }
@@ -997,7 +1122,10 @@ fn format_op_val_sci(v: f64) -> String {
 
 /// Format the initial transient solution (OP at t=0).
 fn format_initial_tran_solution(out: &mut String, result: &SimResult) {
-    let op_plot = result.plots.iter().find(|p| p.name.starts_with("op"));
+    // Use rfind to get the LAST "op" plot: when both .OP and .TRAN are present,
+    // simulate_op_dc adds the first "op" (DC values) and simulate_op adds the
+    // last "op" (MODEDC, waveform at t=0). The initial transient solution wants t=0 values.
+    let op_plot = result.plots.iter().rfind(|p| p.name.starts_with("op"));
     if let Some(plot) = op_plot {
         out.push_str("\nInitial Transient Solution\n");
         out.push_str("--------------------------\n\n");
@@ -1165,16 +1293,27 @@ fn format_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: 
 }
 
 /// Format an AC analysis table with complex output (real,\t imag pairs per column).
-fn format_ac_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: &PrintDirective) {
+fn format_ac_print_table(
+    out: &mut String,
+    title: &str,
+    plot: &SimPlot,
+    print_dir: &PrintDirective,
+) {
     use thevenin_types::Complex;
 
     // Collect columns: (name, Vec<Complex>)
     let mut cols: Vec<(String, Vec<Complex>)> = Vec::new();
 
     // First column: frequency sweep (real-valued, imaginary = 0)
-    let Some(freq_vec) = find_sweep_vector(plot) else { return };
-    if freq_vec.real.is_empty() { return; }
-    let freq_complex: Vec<Complex> = freq_vec.real.iter()
+    let Some(freq_vec) = find_sweep_vector(plot) else {
+        return;
+    };
+    if freq_vec.real.is_empty() {
+        return;
+    }
+    let freq_complex: Vec<Complex> = freq_vec
+        .real
+        .iter()
         .map(|&f| Complex { re: f, im: 0.0 })
         .collect();
     cols.push((freq_vec.name.clone(), freq_complex));
@@ -1187,7 +1326,9 @@ fn format_ac_print_table(out: &mut String, title: &str, plot: &SimPlot, print_di
                 cols.push((var_lower.clone(), vec.complex.clone()));
             } else if !vec.real.is_empty() {
                 // Fallback: treat real as complex with imag=0
-                let as_complex: Vec<Complex> = vec.real.iter()
+                let as_complex: Vec<Complex> = vec
+                    .real
+                    .iter()
                     .map(|&r| Complex { re: r, im: 0.0 })
                     .collect();
                 cols.push((var_lower.clone(), as_complex));
@@ -1195,10 +1336,14 @@ fn format_ac_print_table(out: &mut String, title: &str, plot: &SimPlot, print_di
         }
     }
 
-    if cols.is_empty() { return; }
+    if cols.is_empty() {
+        return;
+    }
 
     let n_rows = cols[0].1.len();
-    if n_rows == 0 { return; }
+    if n_rows == 0 {
+        return;
+    }
 
     out.push_str(&format!("\nNo. of Data Rows : {n_rows}\n"));
 
@@ -1502,14 +1647,10 @@ fn find_vec_by_name<'a>(plot: &'a SimPlot, name: &str) -> Option<&'a SimVector> 
 
     // v(name) -> look for a vector named exactly "name" (handles noise/sens vectors like
     // v(inoise_spectrum) matching a vector named "inoise_spectrum")
-    if let Some(inner) = strip_func(&name_lower, "v") {
-        if let Some(v) = plot
-            .vecs
-            .iter()
-            .find(|v| v.name.to_lowercase() == inner)
-        {
-            return Some(v);
-        }
+    if let Some(inner) = strip_func(&name_lower, "v")
+        && let Some(v) = plot.vecs.iter().find(|v| v.name.to_lowercase() == inner)
+    {
+        return Some(v);
     }
 
     None

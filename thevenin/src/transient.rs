@@ -654,8 +654,9 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             }
         }
 
-        // Solve this timestep.
-        let new_solution = solve_timestep(
+        // Solve this timestep.  On NR convergence failure, reduce the
+        // timestep and retry (matching ngspice's timestep recovery logic).
+        let new_solution = match solve_timestep(
             &mna,
             &solution,
             step_h,
@@ -677,7 +678,28 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
             },
             if has_txl { Some(&txl_stamps) } else { None },
             if has_cpl { Some(&cpl_stamps) } else { None },
-        )?;
+        ) {
+            Ok(sol) => sol,
+            Err(e) if step_h > h_min * 2.0 => {
+                // NR failed — shrink h and retry without advancing time.
+                if has_txl {
+                    for inst in &mut mna.txls {
+                        inst.txline = inst.txline2.clone();
+                    }
+                }
+                if has_cpl {
+                    for inst in &mut mna.cpls {
+                        inst.cpline = inst.cpline2.clone();
+                    }
+                }
+                h = (step_h * MIN_SHRINK).max(h_min);
+                let _ = e;
+                continue;
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        };
 
         // LTE-based timestep control (only for Trap with reactive elements).
         if method == IntegrationMethod::Trapezoidal && has_reactive {
@@ -972,9 +994,12 @@ fn solve_timestep(
 
         // 4. Stamp all nonlinear device companions. Device stamps always use
         //    nominal gmin (not the elevated gmin from gmin stepping).
+        //    Voltage limiting IS applied (use_voltage_limit=true) during transient
+        //    timestep NR, matching ngspice MODETRANOP which uses DEVfetlim/pnjlim
+        //    to prevent NR divergence across large timesteps.
         if has_nonlinear {
             let _ = gmin;
-            dev_state.stamp_devices(solution, system, mna, nr_options.gmin);
+            dev_state.stamp_devices(solution, system, mna, nr_options.gmin, true);
         }
     };
 

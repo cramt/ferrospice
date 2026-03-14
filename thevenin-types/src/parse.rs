@@ -552,8 +552,31 @@ fn parse_waveform(tok: &str) -> Option<Waveform> {
 // Source parsing (V / I sources)
 // ---------------------------------------------------------------------------
 
+/// Check if a token is a waveform keyword that might be split from its args.
+fn is_waveform_keyword(s: &str) -> bool {
+    matches!(
+        s.to_uppercase().as_str(),
+        "PULSE" | "SIN" | "EXP" | "PWL" | "SFFM" | "AM"
+    )
+}
+
 /// Parse everything after `name n+ n-` for a V or I source.
 fn parse_source(tokens: &[String]) -> Source {
+    // Pre-process tokens: join waveform keywords split from their arg lists.
+    // e.g. ["SIN", "(0 1 100MEG 1NS)"] → ["SIN(0 1 100MEG 1NS)"]
+    let mut joined: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        if is_waveform_keyword(&tokens[i]) && i + 1 < tokens.len() && tokens[i + 1].starts_with('(')
+        {
+            joined.push(format!("{}{}", tokens[i], tokens[i + 1]));
+            i += 2;
+        } else {
+            joined.push(tokens[i].clone());
+            i += 1;
+        }
+    }
+    let tokens = &joined;
     let mut src = Source::default();
     let mut i = 0;
     while i < tokens.len() {
@@ -817,16 +840,17 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             }
         }
         'Q' => {
-            // Q c b e [substrate] model [params]
+            // Q c b e [substrate] model [off] [params]
             // We detect the model by looking for the first token that is not
             // a known node pattern — heuristic: if there are 5 positional
             // tokens before params, the 4th is substrate.
+            // The `off` keyword is stripped before model/substrate detection.
             let c = need!(0, "collector").to_string();
             let b_node = need!(1, "base").to_string();
             let e = need!(2, "emitter").to_string();
             let positional: Vec<&str> = rest[3..]
                 .iter()
-                .filter(|t| !t.contains('='))
+                .filter(|t| !t.contains('=') && !t.eq_ignore_ascii_case("off"))
                 .map(|s| s.as_str())
                 .collect();
             let params: Vec<_> = rest[3..].iter().filter_map(|t| parse_kv(t)).collect();
@@ -1528,7 +1552,11 @@ pub fn parse(input: &str) -> Result<Netlist, ParseError> {
         items.push(parse_line(lineno, &line, &mut iter)?);
     }
 
-    Ok(Netlist { title, items, source: input.to_string() })
+    Ok(Netlist {
+        title,
+        items,
+        source: input.to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
-use faer::linalg::solvers::Solve as _;
 use faer::Mat;
+use faer::linalg::solvers::Solve as _;
 
 use thevenin_types::{
     Analysis, Complex, ElementKind, Item, Netlist, PzAnalysisType, PzInputType, SimPlot, SimResult,
@@ -367,8 +367,7 @@ fn find_eigenvalue_roots(
             m
         };
         let zero_row_tol = g_max * 1e-12;
-        let gaa_ok = (0..n_a)
-            .all(|ia| (0..n_a).any(|ja| gaa[(ia, ja)].abs() > zero_row_tol));
+        let gaa_ok = (0..n_a).all(|ia| (0..n_a).any(|ja| gaa[(ia, ja)].abs() > zero_row_tol));
 
         if gaa_ok {
             // Compute Schur complement: S = Gqq - Gqa * Gaa^{-1} * Gaq.

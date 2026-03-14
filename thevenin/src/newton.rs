@@ -23,6 +23,9 @@ pub struct NrOptions {
     /// Maximum iterations for DC operating point (ngspice ITL1, default 100).
     pub itl1: usize,
     /// Maximum iterations per step during Gmin/source stepping (ngspice ITL2, default 50).
+    /// We use 200 (vs ngspice's 50) because slow-converging circuits (e.g. CMOS drivers
+    /// with LAMBDA=0 MOSFETs feeding LTRA floating nodes) need more iterations to damp NR
+    /// oscillations at each Gmin step.
     pub itl2: usize,
     /// Minimum conductance from each node to ground (ngspice GMIN, default 1e-12).
     /// Used by device models in junction conductance computations.
@@ -44,7 +47,7 @@ impl Default for NrOptions {
             reltol: 1e-3,
             vntol: 1e-6,
             itl1: 100,
-            itl2: 100,
+            itl2: 200,
             gmin: 1e-12,
             diag_gmin: 1e-12,
         }
@@ -187,13 +190,17 @@ where
     })
 }
 
-/// Source stepping fallback.
+/// Source stepping fallback with elevated Gmin.
 ///
-/// Ramp all independent sources from 0 to full value in steps,
-/// converging at each step. The `load_system` callback receives
-/// a `source_factor` (0.0 to 1.0) that scales independent sources.
+/// Ramps all independent sources from 0 to full value while keeping an
+/// elevated diagonal Gmin (1e-2) to prevent near-singular matrices from
+/// floating nodes (e.g. LTRA ports connected only through reactive elements).
+/// After all source steps converge, reduces Gmin to the target value using
+/// the same schedule as `gmin_stepping`.
 ///
-/// Matches ngspice SPICE3-style source stepping from `cktop.c`.
+/// This combined approach handles circuits where plain gmin_stepping diverges
+/// (too many iterations needed) and plain source_stepping fails with a
+/// singular matrix at Gmin = options.gmin.
 fn source_stepping<F>(
     options: &NrOptions,
     dim: usize,
@@ -204,14 +211,19 @@ fn source_stepping<F>(
 where
     F: Fn(&[f64], &mut LinearSystem, f64, f64),
 {
+    // Use elevated Gmin throughout source ramping to prevent near-singular
+    // matrices caused by floating nodes (e.g. LTRA-coupled node pairs where
+    // the only path to ground is the tiny diagonal Gmin=1e-12).
+    let gmin_elevated = 1e-2_f64;
     let num_steps = 10;
     let mut solution = initial_guess.to_vec();
     let mut total_iters = 0;
 
+    // Phase 1: ramp sources with elevated Gmin.
     for step in 0..=num_steps {
         let factor = step as f64 / num_steps as f64;
         let attempt = NrAttempt {
-            gmin: options.gmin,
+            gmin: gmin_elevated,
             source_factor: factor,
             max_iters: options.itl2,
         };
@@ -220,11 +232,56 @@ where
         solution = result.solution;
     }
 
+    // Phase 2: reduce Gmin from elevated level to target (gmin_stepping schedule).
+    let gmin_factor = 10.0;
+    let mut gmin = gmin_elevated / gmin_factor;
+    while gmin >= options.gmin * 0.9 {
+        let attempt = NrAttempt {
+            gmin,
+            source_factor: 1.0,
+            max_iters: options.itl2,
+        };
+        let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt)?;
+        total_iters += result.iterations;
+        solution = result.solution;
+        gmin /= gmin_factor;
+    }
+
+    // Final solve at target Gmin.
+    let attempt = NrAttempt {
+        gmin: options.gmin,
+        source_factor: 1.0,
+        max_iters: options.itl2,
+    };
+    let result = try_nr(options, dim, num_nodes, load_system, &solution, &attempt)?;
+    total_iters += result.iterations;
+
     Ok(NrResult {
-        solution,
+        solution: result.solution,
         iterations: total_iters,
         converged: true,
     })
+}
+
+/// Solve a nonlinear system using source stepping directly, bypassing direct NR
+/// and Gmin stepping.
+///
+/// Use this for circuits with transmission lines (LTRA/TXL) combined with
+/// cascaded MOSFET stages.  Without voltage-step limiting, Gmin stepping can
+/// converge to spurious negative-voltage fixed points in cascaded-inverter
+/// circuits.  Source stepping avoids this by ramping all independent sources
+/// from zero, ensuring NR always follows the physical solution trajectory.
+pub fn source_stepping_solve<F>(
+    options: &NrOptions,
+    dim: usize,
+    num_nodes: usize,
+    load_system: F,
+    initial_guess: &[f64],
+) -> Result<NrResult, NrError>
+where
+    F: Fn(&[f64], &mut LinearSystem, f64, f64),
+{
+    source_stepping(options, dim, num_nodes, &load_system, initial_guess)
 }
 
 /// Solve a potentially nonlinear system using Newton-Raphson iteration.
@@ -406,15 +463,16 @@ mod tests {
 
         // V1=5V, R1=1k to ground
         // V(1) = 5V, I(V1) = -5mA
-        let load = |_solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
-            let g = 1.0 / 1000.0;
-            // Resistor from node 0 to ground
-            system.matrix.add(0, 0, g);
-            // Voltage source: node 0, branch 1
-            system.matrix.add(0, 1, 1.0);
-            system.matrix.add(1, 0, 1.0);
-            system.rhs[1] = 5.0 * source_factor;
-        };
+        let load =
+            |_solution: &[f64], system: &mut LinearSystem, source_factor: f64, _gmin: f64| {
+                let g = 1.0 / 1000.0;
+                // Resistor from node 0 to ground
+                system.matrix.add(0, 0, g);
+                // Voltage source: node 0, branch 1
+                system.matrix.add(0, 1, 1.0);
+                system.matrix.add(1, 0, 1.0);
+                system.rhs[1] = 5.0 * source_factor;
+            };
 
         let initial = vec![0.0; dim];
         let result = newton_raphson_solve(&options, dim, num_nodes, load, &initial).unwrap();

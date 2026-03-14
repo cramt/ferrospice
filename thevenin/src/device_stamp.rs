@@ -291,14 +291,20 @@ impl DeviceVoltageState {
     ///
     /// This is the shared NR load logic used by both DC operating point and
     /// transient analysis. For each device type: extract terminal voltages from
-    /// the current solution, apply voltage limiting, compute the companion model,
-    /// and stamp it into the linear system.
+    /// the current solution, optionally apply voltage limiting, compute the
+    /// companion model, and stamp it into the linear system.
+    ///
+    /// `use_voltage_limit` should be `true` for transient timestep NR (matching
+    /// ngspice MODETRANOP which uses DEVfetlim/pnjlim) and `false` for DC OP
+    /// gmin-stepping (matching ngspice MODEINITFLOAT which does NOT call
+    /// DEVfetlim, allowing large NR steps to find the correct operating point).
     pub fn stamp_devices(
         &self,
         solution: &[f64],
         system: &mut LinearSystem,
         mna: &MnaSystem,
         gmin: f64,
+        use_voltage_limit: bool,
     ) {
         // Diodes
         {
@@ -349,7 +355,11 @@ impl DeviceVoltageState {
             for (mi, mos) in mna.mosfets.iter().enumerate() {
                 let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
 
-                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
+                let (vgs, vds) = if use_voltage_limit {
+                    mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto)
+                } else {
+                    (raw_vgs, raw_vds)
+                };
                 prev[mi] = (vgs, vds);
 
                 let mut eff_model = mos.model.clone();
@@ -366,7 +376,11 @@ impl DeviceVoltageState {
             for (mi, mos) in mna.mos6s.iter().enumerate() {
                 let (raw_vgs, raw_vds, vbs) = mos.terminal_voltages(solution);
 
-                let (vgs, vds) = mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto);
+                let (vgs, vds) = if use_voltage_limit {
+                    mos_limit(raw_vgs, raw_vds, prev[mi].0, prev[mi].1, mos.model.vto)
+                } else {
+                    (raw_vgs, raw_vds)
+                };
                 prev[mi] = (vgs, vds);
 
                 let betac = mos.betac();
