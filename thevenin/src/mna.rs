@@ -2438,7 +2438,7 @@ fn stamp_element(
                 .find(|p| p.name.eq_ignore_ascii_case("ac"))
                 .and_then(|p| {
                     if let thevenin_types::Expr::Num(v) = &p.value {
-                        Some(*v)
+                        Some(apply_multipliers(*v, params))
                     } else {
                         None
                     }

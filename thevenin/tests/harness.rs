@@ -736,11 +736,7 @@ harness_test!(
 );
 
 // === Resistance ===
-harness_test!(
-    harness_resistance_res_array,
-    "resistance/res_array.cir",
-    ignore = "parameter expression in resistor array not supported"
-);
+harness_test!(harness_resistance_res_array, "resistance/res_array.cir");
 harness_test!(
     harness_resistance_res_partition,
     "resistance/res_partition.cir"

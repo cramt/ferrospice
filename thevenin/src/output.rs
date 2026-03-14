@@ -44,7 +44,7 @@ pub fn format_batch_output(netlist: &Netlist, result: &SimResult) -> String {
         .iter()
         .any(|p| p.analysis.eq_ignore_ascii_case("tran"));
     if has_tran && has_print_tran {
-        format_initial_tran_solution(&mut out, result);
+        format_initial_tran_solution(&mut out, netlist, result);
     }
 
     // Netlist echo when `.options list` is specified (after initial tran solution)
@@ -277,6 +277,95 @@ fn build_node_voltage_map(op_plot: &SimPlot) -> HashMap<String, f64> {
     map
 }
 
+/// Compute the display resistance for a resistor element (applies m divisor but not scale).
+///
+/// This matches ngspice's `resistance` column: the effective resistance considering
+/// the sheet-resistance model (RSH × L / W_eff) and the `m` multiplicity parameter,
+/// but NOT the `scale` parameter (which is applied to the circuit but not displayed).
+fn resistor_display_resistance(
+    value: &Expr,
+    params: &[thevenin_types::Param],
+    models: &HashMap<String, &ModelDef>,
+) -> f64 {
+    let get_num = |list: &[thevenin_types::Param], name: &str| -> Option<f64> {
+        list.iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+    };
+    let m = get_num(params, "m").unwrap_or(1.0).max(1e-30);
+    let base_r = match value {
+        Expr::Num(v) => *v,
+        Expr::Param(model_name) => {
+            let mkey = model_name.to_lowercase();
+            if let Some(mdef) = models.get(&mkey) {
+                for p in &mdef.params {
+                    if (p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance"))
+                        && let Expr::Num(v) = &p.value
+                    {
+                        return v / m;
+                    }
+                }
+                let rsh = get_num(&mdef.params, "rsh").unwrap_or(0.0);
+                if rsh != 0.0 {
+                    let l = get_num(params, "l").unwrap_or(0.0);
+                    let w = get_num(params, "w").unwrap_or(1.0);
+                    let narrow = get_num(&mdef.params, "narrow").unwrap_or(0.0);
+                    let w_eff = (w - narrow).max(1e-30);
+                    if l > 0.0 {
+                        return rsh * l / w_eff / m;
+                    }
+                }
+            }
+            0.0
+        }
+        _ => 0.0,
+    };
+    base_r / m
+}
+
+/// Compute the full effective simulation resistance (applies both m and scale).
+fn resistor_sim_resistance(
+    value: &Expr,
+    params: &[thevenin_types::Param],
+    models: &HashMap<String, &ModelDef>,
+) -> f64 {
+    let get_num = |list: &[thevenin_types::Param], name: &str| -> Option<f64> {
+        list.iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+    };
+    let m = get_num(params, "m").unwrap_or(1.0).max(1e-30);
+    let scale = get_num(params, "scale").unwrap_or(1.0);
+    let base_r = match value {
+        Expr::Num(v) => *v,
+        Expr::Param(model_name) => {
+            let mkey = model_name.to_lowercase();
+            if let Some(mdef) = models.get(&mkey) {
+                for p in &mdef.params {
+                    if (p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance"))
+                        && let Expr::Num(v) = &p.value
+                    {
+                        return v * scale / m;
+                    }
+                }
+                let rsh = get_num(&mdef.params, "rsh").unwrap_or(0.0);
+                if rsh != 0.0 {
+                    let l = get_num(params, "l").unwrap_or(0.0);
+                    let w = get_num(params, "w").unwrap_or(1.0);
+                    let narrow = get_num(&mdef.params, "narrow").unwrap_or(0.0);
+                    let w_eff = (w - narrow).max(1e-30);
+                    if l > 0.0 {
+                        return rsh * l / w_eff * scale / m;
+                    }
+                }
+            }
+            0.0
+        }
+        _ => 0.0,
+    };
+    base_r * scale / m
+}
+
 /// Format the `.op` section: node voltages, JFET model/device info, Vsource table.
 fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
     let op_plot = match result.plots.iter().find(|p| p.name.starts_with("op")) {
@@ -284,6 +373,48 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         None => return,
     };
     let node_v = build_node_voltage_map(op_plot);
+
+    // Build device operating point node voltages and branch currents.
+    // When a TRAN analysis was run, use the last transient time point (the
+    // "current state" after simulation) for device table i/p values — matching
+    // ngspice's behavior.  Otherwise fall back to the DC OP.
+    let (device_node_v, device_branch_i): (HashMap<String, f64>, HashMap<String, f64>) = {
+        let tran_plot = result
+            .plots
+            .iter()
+            .find(|p| plot_analysis_type(&p.name) == "tran");
+        if let Some(tran) = tran_plot {
+            let mut nv: HashMap<String, f64> = HashMap::new();
+            nv.insert("0".to_string(), 0.0);
+            nv.insert("gnd".to_string(), 0.0);
+            let mut bi: HashMap<String, f64> = HashMap::new();
+            for vec in &tran.vecs {
+                if vec.real.is_empty() {
+                    continue;
+                }
+                let last = *vec.real.last().unwrap();
+                let lname = vec.name.to_lowercase();
+                if lname.starts_with("v(") && lname.ends_with(')') {
+                    let node = lname[2..lname.len() - 1].to_string();
+                    nv.insert(node, last);
+                } else if lname.ends_with("#branch") {
+                    let src = lname[..lname.len() - 7].to_string();
+                    bi.insert(src, last);
+                }
+            }
+            (nv, bi)
+        } else {
+            // No TRAN: use DC OP for both node voltages and branch currents.
+            let mut bi: HashMap<String, f64> = HashMap::new();
+            for vec in &op_plot.vecs {
+                if vec.name.ends_with("#branch") && !vec.real.is_empty() {
+                    let src = vec.name[..vec.name.len() - 7].to_lowercase();
+                    bi.insert(src, vec.real[0]);
+                }
+            }
+            (node_v.clone(), bi)
+        }
+    };
 
     // ── Node voltages section ──────────────────────────────────────────────
     out.push_str("\n\tNode                                  Voltage\n");
@@ -528,19 +659,76 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         out.push_str(&format!("{:>12}{:>22}\n", "thick", format_op_val(0.0)));
     }
 
-    // Resistor model section.
+    // Resistor model section: show named models first (in order of first use),
+    // then the default "R" model.
     if !res_elements.is_empty() {
+        // Collect unique named resistor models (Expr::Param references).
+        let mut named_res_models: Vec<String> = Vec::new();
+        for (_, _, _, value, _) in &res_elements {
+            if let Expr::Param(mname) = value {
+                let key = mname.to_lowercase();
+                if !named_res_models.iter().any(|n| n == &key) {
+                    named_res_models.push(mname.to_string()); // preserve original case
+                }
+            }
+        }
+
         out.push_str("\n Resistor models (Simple linear resistor)\n");
-        out.push_str(&format!("{:>12}{:>22}\n", "model", "R"));
+
+        // Header: named models first, then default "R".
+        out.push_str(&format!("{:>12}", "model"));
+        for mname in &named_res_models {
+            out.push_str(&format!("{:>22}", mname));
+        }
+        out.push_str(&format!("{:>22}\n", "R"));
         out.push('\n');
-        out.push_str(&format!("{:>12}{:>22}\n", "rsh", format_op_val(0.0)));
-        out.push_str(&format!("{:>12}{:>22}\n", "narrow", format_op_val(0.0)));
-        out.push_str(&format!("{:>12}{:>22}\n", "short", format_op_val(0.0)));
-        out.push_str(&format!("{:>12}{:>22}\n", "tc1", format_op_val(0.0)));
-        out.push_str(&format!("{:>12}{:>22}\n", "tc2", format_op_val(0.0)));
-        out.push_str(&format!("{:>12}{:>22}\n", "defw", format_op_val(1e-5)));
-        out.push_str(&format!("{:>12}{:>22}\n", "kf", format_op_val(0.0)));
-        out.push_str(&format!("{:>12}{:>22}\n", "af", format_op_val(0.0)));
+
+        // Helper: get a numeric param from a model def.
+        let get_model_param =
+            |mname: &str, pname: &str, default: f64| -> f64 {
+                models
+                    .get(&mname.to_lowercase())
+                    .and_then(|md| {
+                        md.params.iter().find(|p| p.name.eq_ignore_ascii_case(pname))
+                    })
+                    .and_then(|p| {
+                        if let Expr::Num(v) = &p.value {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(default)
+            };
+
+        let param_rows: &[(&str, f64)] = &[
+            ("rsh", 0.0),
+            ("narrow", 0.0),
+            ("short", 0.0),
+            ("tc1", 0.0),
+            ("tc2", 0.0),
+        ];
+        for (pname, default) in param_rows {
+            out.push_str(&format!("{:>12}", pname));
+            for mname in &named_res_models {
+                out.push_str(&format!("{:>22}", format_op_val(get_model_param(mname, pname, *default))));
+            }
+            out.push_str(&format!("{:>22}\n", format_op_val(*default)));
+        }
+        // defw: default 1e-5 for all
+        out.push_str(&format!("{:>12}", "defw"));
+        for mname in &named_res_models {
+            out.push_str(&format!("{:>22}", format_op_val(get_model_param(mname, "defw", 1e-5))));
+        }
+        out.push_str(&format!("{:>22}\n", format_op_val(1e-5)));
+        // kf, af: always 0
+        for pname in &["kf", "af"] {
+            out.push_str(&format!("{:>12}", pname));
+            for _ in &named_res_models {
+                out.push_str(&format!("{:>22}", format_op_val(0.0)));
+            }
+            out.push_str(&format!("{:>22}\n", format_op_val(0.0)));
+        }
     }
 
     // MESA model section.
@@ -739,118 +927,113 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
     }
 
     // Resistor device section.
+    // ngspice groups resistors: named-model instances first (in original order),
+    // then default-R instances in reversed order.  Each group is chunked into
+    // rows of max 3 elements (fitting within 80-column output).
     if !res_elements.is_empty() {
-        let mut res_rev = res_elements.clone();
-        res_rev.reverse();
-        out.push_str("\n Resistor: Simple linear resistor\n");
+        // Separate into named-model and default-R resistors, preserving order.
+        let named_res: Vec<_> = res_elements
+            .iter()
+            .filter(|(_, _, _, v, _)| matches!(v, Expr::Param(_)))
+            .collect();
+        let mut default_res: Vec<_> = res_elements
+            .iter()
+            .filter(|(_, _, _, v, _)| !matches!(v, Expr::Param(_)))
+            .collect();
+        default_res.reverse();
 
-        out.push_str(&format!("{:>12}", "device"));
-        for (name, _, _, _, _) in &res_rev {
-            out.push_str(&format!("{:>22}", name.to_lowercase()));
-        }
-        out.push('\n');
+        // Merge: named first, then default-R reversed.
+        let ordered: Vec<_> = named_res.into_iter().chain(default_res).collect();
 
-        out.push_str(&format!("{:>12}", "model"));
-        for _ in &res_rev {
-            out.push_str(&format!("{:>22}", "R"));
-        }
-        out.push('\n');
+        // Chunk into groups of max 3.
+        for chunk in ordered.chunks(3) {
+            out.push_str("\n Resistor: Simple linear resistor\n");
 
-        out.push_str(&format!("{:>12}", "resistance"));
-        for (_, _, _, value, _) in &res_rev {
-            let r = if let thevenin_types::Expr::Num(v) = value {
-                *v
-            } else {
-                0.0
-            };
-            out.push_str(&format!("{:>22}", format_op_val(r)));
-        }
-        out.push('\n');
+            out.push_str(&format!("{:>12}", "device"));
+            for (name, _, _, _, _) in chunk {
+                out.push_str(&format!("{:>22}", name.to_lowercase()));
+            }
+            out.push('\n');
 
-        out.push_str(&format!("{:>12}", "ac"));
-        for (_, _, _, value, params) in &res_rev {
-            let dc_r = if let thevenin_types::Expr::Num(v) = value {
-                *v
-            } else {
-                0.0
-            };
-            let ac_r = params
-                .iter()
-                .find(|p| p.name.eq_ignore_ascii_case("ac"))
-                .and_then(|p| {
-                    if let thevenin_types::Expr::Num(v) = &p.value {
-                        Some(*v)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(dc_r);
-            out.push_str(&format!("{:>22}", format_op_val(ac_r)));
-        }
-        out.push('\n');
+            out.push_str(&format!("{:>12}", "model"));
+            for (_, _, _, value, _) in chunk {
+                let mname = match value {
+                    Expr::Param(n) => n.as_str(),
+                    _ => "R",
+                };
+                out.push_str(&format!("{:>22}", mname));
+            }
+            out.push('\n');
 
-        out.push_str(&format!("{:>12}", "dtemp"));
-        for (_, _, _, _, params) in &res_rev {
-            let dtemp = params
-                .iter()
-                .find(|p| p.name.eq_ignore_ascii_case("dtemp"))
-                .and_then(|p| {
-                    if let thevenin_types::Expr::Num(v) = &p.value {
-                        Some(*v)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0.0);
-            out.push_str(&format!("{:>22}", format_op_val(dtemp)));
-        }
-        out.push('\n');
+            out.push_str(&format!("{:>12}", "resistance"));
+            for (_, _, _, value, params) in chunk {
+                let r = resistor_display_resistance(value, params, &models);
+                out.push_str(&format!("{:>22}", format_op_val(r)));
+            }
+            out.push('\n');
 
-        out.push_str(&format!("{:>12}", "noisy"));
-        for (_, _, _, _, params) in &res_rev {
-            let noisy = params
-                .iter()
-                .find(|p| p.name.eq_ignore_ascii_case("noisy"))
-                .and_then(|p| {
-                    if let thevenin_types::Expr::Num(v) = &p.value {
-                        Some(*v)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(1.0);
-            out.push_str(&format!("{:>22}", format_op_val(noisy)));
-        }
-        out.push('\n');
+            out.push_str(&format!("{:>12}", "ac"));
+            for (_, _, _, value, params) in chunk {
+                let dc_base = resistor_display_resistance(value, params, &models);
+                let m = params
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case("m"))
+                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .unwrap_or(1.0)
+                    .max(1e-30);
+                let ac_r = params
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case("ac"))
+                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .map(|ac_base| ac_base / m)
+                    .unwrap_or(dc_base);
+                out.push_str(&format!("{:>22}", format_op_val(ac_r)));
+            }
+            out.push('\n');
 
-        out.push_str(&format!("{:>12}", "i"));
-        for (_, pos, neg, value, _) in &res_rev {
-            let r = if let thevenin_types::Expr::Num(v) = value {
-                *v
-            } else {
-                0.0
-            };
-            let vp = node_v.get(pos.as_str()).copied().unwrap_or(0.0);
-            let vn = node_v.get(neg.as_str()).copied().unwrap_or(0.0);
-            let i = if r != 0.0 { (vp - vn) / r } else { 0.0 };
-            out.push_str(&format!("{:>22}", format_op_val(i)));
-        }
-        out.push('\n');
+            out.push_str(&format!("{:>12}", "dtemp"));
+            for (_, _, _, _, params) in chunk {
+                let dtemp = params
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case("dtemp"))
+                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .unwrap_or(0.0);
+                out.push_str(&format!("{:>22}", format_op_val(dtemp)));
+            }
+            out.push('\n');
 
-        out.push_str(&format!("{:>12}", "p"));
-        for (_, pos, neg, value, _) in &res_rev {
-            let r = if let thevenin_types::Expr::Num(v) = value {
-                *v
-            } else {
-                0.0
-            };
-            let vp = node_v.get(pos.as_str()).copied().unwrap_or(0.0);
-            let vn = node_v.get(neg.as_str()).copied().unwrap_or(0.0);
-            let i = if r != 0.0 { (vp - vn) / r } else { 0.0 };
-            let p = (vp - vn) * i;
-            out.push_str(&format!("{:>22}", format_op_val(p)));
+            out.push_str(&format!("{:>12}", "noisy"));
+            for (_, _, _, _, params) in chunk {
+                let noisy = params
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case("noisy"))
+                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .unwrap_or(1.0);
+                out.push_str(&format!("{:>22}", format_op_val(noisy)));
+            }
+            out.push('\n');
+
+            out.push_str(&format!("{:>12}", "i"));
+            for (_, pos, neg, value, params) in chunk {
+                let r_sim = resistor_sim_resistance(value, params, &models);
+                let vp = device_node_v.get(pos.as_str()).copied().unwrap_or(0.0);
+                let vn = device_node_v.get(neg.as_str()).copied().unwrap_or(0.0);
+                let i = if r_sim != 0.0 { (vp - vn) / r_sim } else { 0.0 };
+                out.push_str(&format!("{:>22}", format_op_val(i)));
+            }
+            out.push('\n');
+
+            out.push_str(&format!("{:>12}", "p"));
+            for (_, pos, neg, value, params) in chunk {
+                let r_sim = resistor_sim_resistance(value, params, &models);
+                let vp = device_node_v.get(pos.as_str()).copied().unwrap_or(0.0);
+                let vn = device_node_v.get(neg.as_str()).copied().unwrap_or(0.0);
+                let vdiff = vp - vn;
+                let p = if r_sim != 0.0 { vdiff * vdiff / r_sim } else { 0.0 };
+                out.push_str(&format!("{:>22}", format_op_val(p)));
+            }
+            out.push('\n');
         }
-        out.push('\n');
     }
 
     // MESA device OP section.
@@ -975,96 +1158,84 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         .iter()
         .filter_map(|item| {
             if let Item::Element(el) = item
-                && let ElementKind::VoltageSource {
-                    pos,
-                    neg: _,
-                    source,
-                } = &el.kind
+                && let ElementKind::VoltageSource { pos, neg, source } = &el.kind
             {
-                return Some((&el.name, pos, source));
+                return Some((&el.name, pos, neg, source));
             }
             None
         })
         .collect();
 
     if !vsrcs.is_empty() {
-        // Build branch-current lookup from OP plot.
-        let mut branch_i: HashMap<String, f64> = HashMap::new();
-        for vec in &op_plot.vecs {
-            if vec.name.ends_with("#branch") && !vec.real.is_empty() {
-                let src = vec.name[..vec.name.len() - 7].to_string();
-                branch_i.insert(src, vec.real[0]);
-            }
-        }
-
-        // ngspice outputs vsources in reverse declaration order.
+        // ngspice outputs vsources in reverse declaration order, chunked to max 3 per row.
         let mut sorted_vsrcs = vsrcs;
         sorted_vsrcs.reverse();
 
-        out.push_str("\n Vsource: Independent voltage source\n");
+        for chunk in sorted_vsrcs.chunks(3) {
+            out.push_str("\n Vsource: Independent voltage source\n");
 
-        // device row
-        let names: Vec<String> = sorted_vsrcs
-            .iter()
-            .map(|(n, _, _)| n.to_lowercase())
-            .collect();
-        out.push_str(&format!("{:>12}", "device"));
-        for n in &names {
-            out.push_str(&format!("{:>22}", n));
-        }
-        out.push('\n');
+            // device row
+            out.push_str(&format!("{:>12}", "device"));
+            for (name, _, _, _) in chunk {
+                out.push_str(&format!("{:>22}", name.to_lowercase()));
+            }
+            out.push('\n');
 
-        // dc row
-        out.push_str(&format!("{:>12}", "dc"));
-        for (_, _, src) in &sorted_vsrcs {
-            let dc = src
-                .dc
-                .as_ref()
-                .and_then(|e| if let Expr::Num(v) = e { Some(*v) } else { None })
-                .unwrap_or(0.0);
-            out.push_str(&format!("{:>22}", format_op_val(dc)));
-        }
-        out.push('\n');
+            // dc row
+            out.push_str(&format!("{:>12}", "dc"));
+            for (_, _, _, src) in chunk {
+                let dc = src
+                    .dc
+                    .as_ref()
+                    .and_then(|e| if let Expr::Num(v) = e { Some(*v) } else { None })
+                    .unwrap_or(0.0);
+                out.push_str(&format!("{:>22}", format_op_val(dc)));
+            }
+            out.push('\n');
 
-        // acmag row
-        out.push_str(&format!("{:>12}", "acmag"));
-        for (_, _, src) in &sorted_vsrcs {
-            let acmag = src
-                .ac
-                .as_ref()
-                .and_then(|ac| {
-                    if let Expr::Num(v) = &ac.mag {
-                        Some(*v)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0.0);
-            out.push_str(&format!("{:>22}", format_op_val(acmag)));
-        }
-        out.push('\n');
+            // acmag row
+            out.push_str(&format!("{:>12}", "acmag"));
+            for (_, _, _, src) in chunk {
+                let acmag = src
+                    .ac
+                    .as_ref()
+                    .and_then(|ac| {
+                        if let Expr::Num(v) = &ac.mag {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0.0);
+                out.push_str(&format!("{:>22}", format_op_val(acmag)));
+            }
+            out.push('\n');
 
-        // i (branch current) row
-        out.push_str(&format!("{:>12}", "i"));
-        for (name, _, _) in &sorted_vsrcs {
-            let i = branch_i.get(&name.to_lowercase()).copied().unwrap_or(0.0);
-            out.push_str(&format!("{:>22}", format_sci(i)));
-        }
-        out.push('\n');
+            // i (branch current) from device operating point (TRAN end or DC OP)
+            out.push_str(&format!("{:>12}", "i"));
+            for (name, _, _, _) in chunk {
+                let i = device_branch_i
+                    .get(&name.to_lowercase())
+                    .copied()
+                    .unwrap_or(0.0);
+                out.push_str(&format!("{:>22}", format_sci(i)));
+            }
+            out.push('\n');
 
-        // p (power) row
-        out.push_str(&format!("{:>12}", "p"));
-        for (name, _, src) in &sorted_vsrcs {
-            let dc = src
-                .dc
-                .as_ref()
-                .and_then(|e| if let Expr::Num(v) = e { Some(*v) } else { None })
-                .unwrap_or(0.0);
-            let i = branch_i.get(&name.to_lowercase()).copied().unwrap_or(0.0);
-            let p = -dc * i;
-            out.push_str(&format!("{:>22}", format_sci(p)));
+            // p (power): -(V_pos - V_neg) * i, using device operating point voltages.
+            out.push_str(&format!("{:>12}", "p"));
+            for (name, pos, neg, _) in chunk {
+                let i = device_branch_i
+                    .get(&name.to_lowercase())
+                    .copied()
+                    .unwrap_or(0.0);
+                let vp = device_node_v.get(pos.as_str()).copied().unwrap_or(0.0);
+                let vn = device_node_v.get(neg.as_str()).copied().unwrap_or(0.0);
+                let p = -(vp - vn) * i;
+                out.push_str(&format!("{:>22}", format_sci(p)));
+            }
+            out.push('\n');
         }
-        out.push('\n');
     }
 
     out.push('\n');
@@ -1121,10 +1292,12 @@ fn format_op_val_sci(v: f64) -> String {
 }
 
 /// Format the initial transient solution (OP at t=0).
-fn format_initial_tran_solution(out: &mut String, result: &SimResult) {
-    // Use rfind to get the LAST "op" plot: when both .OP and .TRAN are present,
-    // simulate_op_dc adds the first "op" (DC values) and simulate_op adds the
-    // last "op" (MODEDC, waveform at t=0). The initial transient solution wants t=0 values.
+///
+/// When an explicit `.OP` analysis is present, ngspice prints all-zero initial
+/// conditions here (the pre-convergence starting state), because the DC OP is
+/// shown separately in the `.OP` section.  Without explicit `.OP`, this section
+/// shows the DC operating point used as the transient starting state.
+fn format_initial_tran_solution(out: &mut String, netlist: &Netlist, result: &SimResult) {
     let op_plot = result.plots.iter().rfind(|p| p.name.starts_with("op"));
     if let Some(plot) = op_plot {
         out.push_str("\nInitial Transient Solution\n");
@@ -1132,16 +1305,45 @@ fn format_initial_tran_solution(out: &mut String, result: &SimResult) {
         out.push_str("Node                                   Voltage\n");
         out.push_str("----                                   -------\n");
 
-        for vec in &plot.vecs {
-            if !vec.real.is_empty() {
-                let val = vec.real[0];
-                // Use bare node name (strip "v()" wrapper)
-                let display_name = strip_v_wrapper(&vec.name);
-                out.push_str(&format!(
-                    "{:<40}{:>12}\n",
-                    display_name,
-                    format_value_compact(val)
-                ));
+        if has_explicit_op(netlist) {
+            // Print all-zero initial conditions with ngspice's canonical ordering:
+            // node voltages ascending numerically, then branches reverse-alphabetically.
+            let mut node_names: Vec<String> = Vec::new();
+            let mut branch_names: Vec<String> = Vec::new();
+            for vec in &plot.vecs {
+                if vec.name.ends_with("#branch") {
+                    branch_names.push(vec.name.clone());
+                } else {
+                    node_names.push(strip_v_wrapper(&vec.name));
+                }
+            }
+            node_names.sort_by(|a, b| {
+                match (a.parse::<i64>(), b.parse::<i64>()) {
+                    (Ok(ia), Ok(ib)) => ia.cmp(&ib),
+                    (Ok(_), Err(_)) => std::cmp::Ordering::Less,
+                    (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+                    _ => a.cmp(b),
+                }
+            });
+            branch_names.sort();
+            branch_names.reverse();
+            for name in &node_names {
+                out.push_str(&format!("{:<40}{:>12}\n", name, "0"));
+            }
+            for name in &branch_names {
+                out.push_str(&format!("{:<40}{:>12}\n", name, "0"));
+            }
+        } else {
+            for vec in &plot.vecs {
+                if !vec.real.is_empty() {
+                    let val = vec.real[0];
+                    let display_name = strip_v_wrapper(&vec.name);
+                    out.push_str(&format!(
+                        "{:<40}{:>12}\n",
+                        display_name,
+                        format_value_compact(val)
+                    ));
+                }
             }
         }
         out.push_str("\n\n");
@@ -1265,31 +1467,68 @@ fn format_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: 
 
     out.push_str(&format!("\nNo. of Data Rows : {n_rows}\n"));
 
-    // Title line (centered in 80-char field)
-    let title_padded = format!("{:^80}", title);
-    out.push_str(&title_padded);
-    out.push('\n');
-
-    // Column headers + separators
-    format_table_header(out, &resolved_vars);
-
-    // Data rows with pagination
+    // ngspice splits tables into sections of at most 3 data columns (not counting the
+    // sweep variable) to fit in 80-column output. The sweep variable (resolved_vars[0])
+    // is always included in each section as the first column.
+    const DATA_COLS_PER_SECTION: usize = 3;
     let page_size = 55; // ngspice paginates around 55 rows
-    for i in 0..n_rows {
-        if i > 0 && i % page_size == 0 {
+
+    let n_data_cols = resolved_vars.len().saturating_sub(1);
+    let n_sections = if n_data_cols == 0 {
+        1
+    } else {
+        n_data_cols.div_ceil(DATA_COLS_PER_SECTION)
+    };
+
+    for section in 0..n_sections {
+        let data_start = 1 + section * DATA_COLS_PER_SECTION;
+        let data_end = (data_start + DATA_COLS_PER_SECTION).min(resolved_vars.len());
+
+        // Collect column names for this section's header.
+        let col_names: Vec<&str> = std::iter::once(resolved_vars[0].0.as_str())
+            .chain(resolved_vars[data_start..data_end].iter().map(|(n, _)| n.as_str()))
+            .collect();
+
+        // Title line (centered in 80-char field)
+        let title_padded = format!("{:^80}", title);
+        out.push_str(&title_padded);
+        out.push('\n');
+
+        // Emit header (separator + "Index\tcol...\n" + separator)
+        let emit_header = |out: &mut String| {
+            out.push_str(&"-".repeat(80));
             out.push('\n');
-            // Repeat column headers for new page
-            format_table_header(out, &resolved_vars);
-        }
-        out.push_str(&format!("{i}\t"));
-        for (_, values) in &resolved_vars {
-            if i < values.len() {
-                out.push_str(&format!("{}\t", format_sci(values[i])));
+            out.push_str("Index\t");
+            for &name in &col_names {
+                out.push_str(name);
+                out.push('\t');
             }
+            out.push('\n');
+            out.push_str(&"-".repeat(80));
+            out.push('\n');
+        };
+        emit_header(out);
+
+        for i in 0..n_rows {
+            if i > 0 && i % page_size == 0 {
+                out.push('\n');
+                emit_header(out);
+            }
+            out.push_str(&format!("{i}\t"));
+            // Sweep variable (always index 0)
+            if i < resolved_vars[0].1.len() {
+                out.push_str(&format!("{}\t", format_sci(resolved_vars[0].1[i])));
+            }
+            // Data columns for this section
+            for (_, values) in &resolved_vars[data_start..data_end] {
+                if i < values.len() {
+                    out.push_str(&format!("{}\t", format_sci(values[i])));
+                }
+            }
+            out.push('\n');
         }
         out.push('\n');
     }
-    out.push('\n');
 }
 
 /// Format an AC analysis table with complex output (real,\t imag pairs per column).
@@ -1347,46 +1586,54 @@ fn format_ac_print_table(
 
     out.push_str(&format!("\nNo. of Data Rows : {n_rows}\n"));
 
-    let title_padded = format!("{:^80}", title);
-    out.push_str(&title_padded);
-    out.push('\n');
-
-    // Header: each complex column takes 32 chars
-    out.push_str(&"-".repeat(80));
-    out.push('\n');
-    out.push_str("Index\t");
-    for (name, _) in &cols {
-        out.push_str(&format!("{name:<32}"));
-    }
-    out.push('\n');
-    out.push_str(&"-".repeat(80));
-    out.push('\n');
-
-    // Data rows
+    // ngspice emits 1 data variable per section for AC complex output.
+    // Each complex column takes ~32 chars (real + imag), so frequency + 1 var fits in 80 chars.
+    // cols[0] is always the frequency (sweep) column; cols[1..] are the data variables.
     let page_size = 55;
-    for i in 0..n_rows {
-        if i > 0 && i % page_size == 0 {
-            out.push('\n');
+    let n_data_cols = cols.len().saturating_sub(1);
+    let n_sections = n_data_cols.max(1);
+
+    for section in 0..n_sections {
+        let data_col_idx = section + 1; // index into cols for the data variable
+
+        let title_padded = format!("{:^80}", title);
+        out.push_str(&title_padded);
+        out.push('\n');
+
+        let emit_ac_header = |out: &mut String| {
             out.push_str(&"-".repeat(80));
             out.push('\n');
             out.push_str("Index\t");
-            for (name, _) in &cols {
-                out.push_str(&format!("{name:<32}"));
+            out.push_str(&format!("{:<32}", cols[0].0));
+            if data_col_idx < cols.len() {
+                out.push_str(&format!("{:<32}", cols[data_col_idx].0));
             }
             out.push('\n');
             out.push_str(&"-".repeat(80));
             out.push('\n');
-        }
-        out.push_str(&format!("{i}\t"));
-        for (_, vals) in &cols {
-            if i < vals.len() {
-                let c = &vals[i];
+        };
+        emit_ac_header(out);
+
+        for i in 0..n_rows {
+            if i > 0 && i % page_size == 0 {
+                out.push('\n');
+                emit_ac_header(out);
+            }
+            out.push_str(&format!("{i}\t"));
+            // Frequency column
+            if i < cols[0].1.len() {
+                let c = &cols[0].1[i];
                 out.push_str(&format!("{},\t{}\t", format_sci(c.re), format_sci(c.im)));
             }
+            // Data column for this section
+            if data_col_idx < cols.len() && i < cols[data_col_idx].1.len() {
+                let c = &cols[data_col_idx].1[i];
+                out.push_str(&format!("{},\t{}\t", format_sci(c.re), format_sci(c.im)));
+            }
+            out.push('\n');
         }
         out.push('\n');
     }
-    out.push('\n');
 }
 
 /// Format column header and separators for a data table.
@@ -1907,66 +2154,96 @@ fn compare_with_interpolation(
         return Err(format_diff(norm_expected, norm_actual));
     }
 
-    // Check that both have the same number of dependent columns.
-    let n_deps = exp_data[0].2.len();
-    if act_data[0].2.len() != n_deps {
+    // Split data into contiguous groups by column count.  Each .PRINT section may
+    // have a different number of dependent columns (e.g., section 1 has 3 cols and
+    // section 2 has 2 cols).  Compare each group independently so that we don't mix
+    // columns from different sections or panic on out-of-bounds access.
+    let exp_groups = split_data_groups(&exp_data);
+    let act_groups = split_data_groups(&act_data);
+
+    if exp_groups.len() != act_groups.len() {
         return Err(format_diff(norm_expected, norm_actual));
     }
 
-    // Extract independent variable arrays.
-    let exp_x: Vec<f64> = exp_data.iter().map(|(_, x, _)| *x).collect();
-    let act_x: Vec<f64> = act_data.iter().map(|(_, x, _)| *x).collect();
+    for (exp_grp, act_grp) in exp_groups.iter().zip(act_groups.iter()) {
+        let n_deps = exp_grp[0].2.len();
+        if act_grp[0].2.len() != n_deps {
+            return Err(format_diff(norm_expected, norm_actual));
+        }
 
-    // If both datasets have the same number of data rows, compare row-by-row.
-    // This handles non-monotone x values (e.g., double DC sweeps where v-sweep repeats).
-    // Only fall back to interpolation when row counts differ (e.g., different timesteps).
-    if exp_data.len() == act_data.len() {
-        for col in 0..n_deps {
-            for (i, (exp_row, act_row)) in exp_data.iter().zip(act_data.iter()).enumerate() {
-                let exp_val = exp_row.2[col];
-                let act_val = act_row.2[col];
-                let abs_diff = (exp_val - act_val).abs();
-                let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(act_val.abs());
-                if abs_diff > rel_tol.max(1e-15) {
-                    return Err(format!(
-                        "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
-                        exp_x[i],
-                        col,
-                        exp_val,
-                        act_val,
-                        abs_diff,
-                        format_diff(norm_expected, norm_actual),
-                    ));
+        let exp_x: Vec<f64> = exp_grp.iter().map(|(_, x, _)| *x).collect();
+        let act_x: Vec<f64> = act_grp.iter().map(|(_, x, _)| *x).collect();
+
+        // If both datasets have the same number of data rows, compare row-by-row.
+        // This handles non-monotone x values (e.g., double DC sweeps where v-sweep repeats).
+        // Only fall back to interpolation when row counts differ (e.g., different timesteps).
+        if exp_grp.len() == act_grp.len() {
+            for col in 0..n_deps {
+                for (i, (exp_row, act_row)) in exp_grp.iter().zip(act_grp.iter()).enumerate() {
+                    let exp_val = exp_row.2[col];
+                    let act_val = act_row.2[col];
+                    let abs_diff = (exp_val - act_val).abs();
+                    let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(act_val.abs());
+                    if abs_diff > rel_tol.max(1e-15) {
+                        return Err(format!(
+                            "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
+                            exp_x[i],
+                            col,
+                            exp_val,
+                            act_val,
+                            abs_diff,
+                            format_diff(norm_expected, norm_actual),
+                        ));
+                    }
                 }
             }
-        }
-    } else {
-        // For each dependent column, build actual arrays and interpolate at expected points.
-        for col in 0..n_deps {
-            let act_y: Vec<f64> = act_data.iter().map(|(_, _, deps)| deps[col]).collect();
+        } else {
+            // For each dependent column, build actual arrays and interpolate at expected points.
+            for col in 0..n_deps {
+                let act_y: Vec<f64> = act_grp.iter().map(|(_, _, deps)| deps[col]).collect();
 
-            for (i, exp_row) in exp_data.iter().enumerate() {
-                let exp_val = exp_row.2[col];
-                let interp_val = lerp_at(exp_x[i], &act_x, &act_y);
+                for (i, exp_row) in exp_grp.iter().enumerate() {
+                    let exp_val = exp_row.2[col];
+                    let interp_val = lerp_at(exp_x[i], &act_x, &act_y);
 
-                let abs_diff = (exp_val - interp_val).abs();
-                let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(interp_val.abs());
-                if abs_diff > rel_tol.max(1e-15) {
-                    return Err(format!(
-                        "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
-                        exp_x[i],
-                        col,
-                        exp_val,
-                        interp_val,
-                        abs_diff,
-                        format_diff(norm_expected, norm_actual),
-                    ));
+                    let abs_diff = (exp_val - interp_val).abs();
+                    let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(interp_val.abs());
+                    if abs_diff > rel_tol.max(1e-15) {
+                        return Err(format!(
+                            "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
+                            exp_x[i],
+                            col,
+                            exp_val,
+                            interp_val,
+                            abs_diff,
+                            format_diff(norm_expected, norm_actual),
+                        ));
+                    }
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// Split a flat list of data rows into contiguous groups that share the same column count.
+/// This handles outputs with multiple .PRINT sections that have different numbers of columns.
+fn split_data_groups(data: &[(u64, f64, Vec<f64>)]) -> Vec<Vec<(u64, f64, Vec<f64>)>> {
+    let mut groups: Vec<Vec<(u64, f64, Vec<f64>)>> = Vec::new();
+    let mut current: Vec<(u64, f64, Vec<f64>)> = Vec::new();
+    for row in data {
+        if current.is_empty() || current[0].2.len() == row.2.len() {
+            current.push(row.clone());
+        } else {
+            groups.push(std::mem::take(&mut current));
+            current.push(row.clone());
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
 }
 
 /// Check if two lines match, allowing numeric tolerance.

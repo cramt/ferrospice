@@ -518,20 +518,6 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         })
         .collect();
 
-    // Record initial point if tstart == 0.
-    let mut t = 0.0;
-    if t >= t_start {
-        record_point(
-            t,
-            &solution,
-            &mna,
-            num_nodes,
-            &mut time_vec,
-            &mut node_vecs,
-            &mut branch_vecs,
-        );
-    }
-
     let has_nonlinear = mna.has_nonlinear();
     let has_reactive = !mna.capacitors.is_empty() || !mna.inductors.is_empty();
     let nr_options = NrOptions::default();
@@ -540,12 +526,68 @@ pub fn simulate_tran(netlist: &Netlist) -> Result<SimResult, MnaError> {
         tstop: t_stop,
     };
 
+    // Record initial point at t=0.
+    // For linear circuits with time-varying waveform sources (e.g., SIN with delay),
+    // compute the actual t=0 state by solving the system with t=0 source values rather
+    // than recording the DC OP values directly. This matches ngspice behaviour where the
+    // initial transient solution reflects the circuit state at t=0 with time-domain sources.
+    let mut t = 0.0;
+    if t >= t_start {
+        let t0_solution: Vec<f64> = if !has_reactive
+            && !has_nonlinear
+            && (mna.voltage_sources.iter().any(|vs| vs.waveform.is_some())
+                || mna.current_sources.iter().any(|cs| cs.waveform.is_some()))
+        {
+            // Solve the linear system at t=0 with time-domain source values.
+            let mut system = LinearSystem::new(dim);
+            for triplet in mna.system.matrix.triplets() {
+                system.matrix.add(triplet.row, triplet.col, triplet.value);
+            }
+            for (i, &val) in mna.system.rhs.iter().enumerate() {
+                system.rhs[i] += val;
+            }
+            for vs in &mna.voltage_sources {
+                if let Some(ref wf) = vs.waveform {
+                    let v_t = waveform::evaluate(wf, 0.0, &tran_params);
+                    system.rhs[vs.branch_idx] = v_t;
+                }
+            }
+            for cs in &mna.current_sources {
+                if let Some(ref wf) = cs.waveform {
+                    let i_t = waveform::evaluate(wf, 0.0, &tran_params);
+                    let i_diff = i_t - cs.dc_value;
+                    if let Some(ni) = cs.pos_idx {
+                        system.rhs[ni] -= i_diff;
+                    }
+                    if let Some(nj) = cs.neg_idx {
+                        system.rhs[nj] += i_diff;
+                    }
+                }
+            }
+            system.solve().unwrap_or_else(|_| solution.clone())
+        } else {
+            solution.clone()
+        };
+        record_point(
+            t,
+            &t0_solution,
+            &mna,
+            num_nodes,
+            &mut time_vec,
+            &mut node_vecs,
+            &mut branch_vecs,
+        );
+    }
+
     // Build breakpoint table from source waveforms.
     let mut breakpoints = BreakpointTable::from_mna(&mna, &tran_params);
 
-    // Internal timestep — start with tstep, adapt from there.
-    let mut h = h_print.min(h_max);
+    // Internal timestep — start small and let doubling grow it to h_max.
+    // ngspice starts at h_max/400 and doubles each step (matching its adaptive
+    // initial-step algorithm).  For reactive circuits the LTE will control growth;
+    // for purely resistive circuits the step doubles freely until reaching h_max.
     let h_min = h_print * 1e-9; // Absolute minimum timestep.
+    let mut h = (h_max / 400.0).max(h_min);
     let mut is_first_step = true;
 
     // Adaptive time-stepping loop.
