@@ -99,7 +99,7 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
         let omega = 2.0 * PI * freq;
 
         // Build the AC MNA system at this frequency.
-        let sys = crate::ac::build_ac_system(&mna, &op_solution, omega, netlist, num_nodes);
+        let sys = crate::ac::build_ac_system(&mna, &op_solution, omega, netlist, num_nodes, nr_opts.gmin);
 
         // Solve adjoint system with unit current at output node.
         let adjoint = solve_adjoint(&sys, out_pos_idx, out_neg_idx)?;
@@ -116,7 +116,7 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
         )?;
 
         // Compute total output noise density (V²/Hz).
-        let onoise_sq = compute_total_noise(&mna, &op_solution, &adjoint, freq);
+        let onoise_sq = compute_total_noise(&mna, &op_solution, &adjoint, freq, nr_opts.gmin);
 
         // Input-referred noise density.
         let inoise_sq = onoise_sq * gain_sq_inv;
@@ -254,6 +254,7 @@ fn compute_total_noise(
     op_solution: &[f64],
     adjoint: &[(f64, f64)],
     freq: f64,
+    gmin: f64,
 ) -> f64 {
     let mut total = 0.0;
 
@@ -581,7 +582,7 @@ fn compute_total_noise(
             vbic.junction_voltages(op_solution);
         let comp = vbic
             .model
-            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
+            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
         let s = vbic.m * vbic.area;
 
         let bi = vbic.base_bi_idx;

@@ -552,7 +552,7 @@ impl DeviceVoltageState {
 
                 let comp = vbic
                     .model
-                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
+                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
                 stamp_vbic_with_voltages(
                     &mut system.matrix,
                     &mut system.rhs,

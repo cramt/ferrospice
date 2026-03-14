@@ -288,6 +288,36 @@ R3 R3_P R3_N 500k
     );
 }
 
+// ===================== temp debug: identify convergence failure step =====================
+
+#[test]
+#[ignore = "debug test for finding convergence failure step"]
+fn test_vbic_temp_step_debug() {
+    // Try DC sweep at 150°C in small ranges to find the failing step
+    for (start, stop) in &[(0.5f64, 0.71f64), (0.5, 0.72), (0.5, 0.73), (0.5, 0.74), (0.5, 0.75)] {
+        let cir = format!(
+            "\
+VBIC Temp debug
+V1 1 0 1.0
+VC 1 Q1_C 0.0
+VB 1 Q1_B 0.0
+Q1 Q1_C Q1_B 0 N1
+.OPTIONS TEMP=150 NOACCT
+.DC V1 {start} {stop} 10m
+.print dc i(vc) i(vb)
+.MODEL N1 NPN LEVEL=4
+{VBIC_NPN_PARAMS}
+.END
+"
+        );
+        let netlist = Netlist::parse(&cir).unwrap();
+        match thevenin::simulate_dc(&netlist) {
+            Ok(r) => eprintln!("Range {start}-{stop}: OK ({} points)", r.plots[0].vecs[0].real.len()),
+            Err(e) => eprintln!("Range {start}-{stop}: FAILED: {e}"),
+        }
+    }
+}
+
 // ===================== temp: Temperature test (DC sweep at 150°C) =====================
 
 #[test]

@@ -596,14 +596,15 @@ impl VbicModel {
         let tratio = t_k / tnom_k;
         let tln_ratio = tratio.ln();
 
-        // Current temperature scaling helper:
-        // I_t = I_nom * (tratio^xii) * exp(ea/(nf*vt_nom) - ea/(nf*vt))
+        // Current temperature scaling helper — ngspice vbictemp.c formula:
+        // I_T = I_nom * (rT^xp * exp(-ea*(1-rT)/Vtv))^(1/nf)
+        //     = I_nom * rT^(xp/nf) * exp(ea/nf * (1/Vtnom - 1/Vt))
         let temp_current = |i_nom: f64, xp: f64, ea_val: f64, nf_val: f64| -> f64 {
             if i_nom == 0.0 {
                 return 0.0;
             }
             let arg = ea_val / (nf_val * vt_nom) - ea_val / (nf_val * vt);
-            i_nom * tratio.powf(xp) * safe_exp(arg)
+            i_nom * tratio.powf(xp / nf_val) * safe_exp(arg)
         };
 
         // Resistance temperature scaling: R_t = R_nom * (tratio^xr)
@@ -614,29 +615,29 @@ impl VbicModel {
             r_nom * tratio.powf(xr)
         };
 
-        // Junction potential temperature scaling:
-        // P_t = P_nom * tratio + vt * (P_nom/vt_nom - 3*ln(tratio) - eg_diff)
-        // where eg_diff accounts for bandgap narrowing
+        // Junction potential temperature scaling — ngspice VBIC vbictemp.c formula:
+        //   psiio = 2*Vtnom * ln(2*sinh(PE_nom / (2*Vtnom)))
+        //   psiin = psiio*rT - 3*Vt*ln(rT) - EA*(rT-1)
+        //   PE_t  = psiin + 2*Vt * ln(0.5*(1 + sqrt(1 + 4*exp(-psiin/Vt))))
+        // This matches ngspice vbictemp.c lines 278-319 exactly.
         let temp_potential = |p_nom: f64, ea_val: f64| -> f64 {
             if p_nom == 0.0 {
                 return 0.0;
             }
-            // Standard SPICE junction potential temperature dependence
-            let eg_tnom = 1.16 - 7.02e-4 * tnom_k * tnom_k / (tnom_k + 1108.0);
-            let eg_t = 1.16 - 7.02e-4 * t_k * t_k / (t_k + 1108.0);
-            let arg = -eg_t / (2.0 * KB / QE * t_k) + eg_tnom / (2.0 * KB / QE * tnom_k);
-            let _ = ea_val; // ea_val available for future refinement
-            p_nom * tratio - 3.0 * vt * tln_ratio + vt * (arg * 2.0)
+            let x = p_nom / (2.0 * vt_nom);
+            let sinh2x = x.exp() - (-x).exp(); // 2*sinh(x)
+            let psiio = 2.0 * vt_nom * sinh2x.ln();
+            let psiin = psiio * tratio - 3.0 * vt * tln_ratio - ea_val * (tratio - 1.0);
+            psiin + 2.0 * vt * (0.5 * (1.0 + (1.0 + 4.0 * (-psiin / vt).exp()).sqrt())).ln()
         };
 
-        // Junction capacitance temperature scaling:
-        // C_t = C_nom * (1 + m*(4e-4*delt - (1 - P_t/P_nom)))
+        // Junction capacitance temperature scaling (ngspice vbictemp.c):
+        // C_t = C_nom * (P_nom / P_t)^M
         let temp_cap = |c_nom: f64, p_nom: f64, p_t: f64, m: f64| -> f64 {
-            if c_nom == 0.0 || p_nom == 0.0 {
+            if c_nom == 0.0 || p_nom == 0.0 || p_t <= 0.0 {
                 return 0.0;
             }
-            let arg = 1.0 + m * (4e-4 * delt - (1.0 - p_t / p_nom));
-            if arg > 0.0 { c_nom * arg } else { c_nom }
+            c_nom * (p_nom / p_t).powf(m)
         };
 
         // Transport current IS
@@ -677,9 +678,11 @@ impl VbicModel {
         // VO
         self.vo_t = temp_resistance(self.vo, self.xvo);
 
-        // GAMM temperature scaling
+        // GAMM temperature scaling — ngspice vbictemp.c:
+        //   p[4] = pnom[4] * rT^XIS * exp(-EA*(1-rT)/Vtv)
+        //        = GAMM * rT^XIS * exp(EA/Vtnom - EA/Vt)
         self.gamm_t = if self.gamm > 0.0 {
-            self.gamm * safe_exp(self.ea / vt_nom - self.ea / vt)
+            self.gamm * tratio.powf(self.xis) * safe_exp(self.ea / vt_nom - self.ea / vt)
         } else {
             0.0
         };
@@ -759,6 +762,7 @@ impl VbicModel {
         vrbi: f64,
         vrbp: f64,
         vbcp: f64,
+        gmin: f64,
     ) -> VbicCompanion {
         let vt = self.vt;
 
@@ -785,10 +789,13 @@ impl VbicModel {
         // =====================================================================
         // 2. Depletion charges for Early effect (qdbe, qdbc)
         // =====================================================================
+        // Note: qdbe/qdbc in ngspice are in VOLTS (charge/CJE, i.e., the voltage
+        // integral of the normalized capacitance).  We pass cj=1.0 so the result
+        // has the same Volt units used in q1z = 1 + qdbe*IVER + qdbc*IVEF.
         let (qdbe, dqdbe_dvbei) =
-            depletion_charge(vbei, self.cje_t, self.pe_t, self.me, self.aje, self.fc);
+            depletion_charge(vbei, 1.0, self.pe_t, self.me, self.aje, self.fc);
         let (qdbc, dqdbc_dvbci) =
-            depletion_charge(vbci, self.cjc_t, self.pc_t, self.mc, self.ajc, self.fc);
+            depletion_charge(vbci, 1.0, self.pc_t, self.mc, self.ajc, self.fc);
 
         // =====================================================================
         // 3. Base charge normalization (qb)
@@ -1259,6 +1266,25 @@ impl VbicModel {
         // Qbcp = CJCP_t * qdbcp + CCSO * Vbcp
         let cqbcp_vbcp = cqbcp + self.ccso;
 
+        // Apply gmin stabilisation to junction currents (matches ngspice vbicload.c lines 756-771).
+        // CKTgmin is added to each junction to prevent singular matrices and provide a numerical
+        // floor in reverse-biased / subthreshold regions.
+        let ibe = ibe + gmin * vbei;
+        let dibe_dvbei = dibe_dvbei + gmin;
+        let ibex = ibex + gmin * vbex;
+        let dibex_dvbex = dibex_dvbex + gmin;
+        let ibc = ibc + gmin * vbci;
+        let dibc_dvbci = dibc_dvbci + gmin;
+        let ibep = ibep + gmin * vbep;
+        let dibep_dvbep = dibep_dvbep + gmin;
+        // Irci gets three gmin terms: on Vrci, Vbci, and Vbcx
+        let irci = irci + gmin * vrci + gmin * vbci + gmin * vbcx;
+        let dirci_dvrci = dirci_dvrci + gmin;
+        let dirci_dvbci = dirci_dvbci + gmin;
+        let dirci_dvbcx = dirci_dvbcx + gmin;
+        let ibcp = ibcp + gmin * vbcp;
+        let dibcp_dvbcp = dibcp_dvbcp + gmin;
+
         VbicCompanion {
             // Transport
             iciei,
@@ -1353,16 +1379,19 @@ impl VbicModel {
             0.0
         };
 
-        let rkp1 = (kbci + kbcx) / 2.0;
-        let drkp1_dvbci = dkbci_dvbci / 2.0;
-        let drkp1_dvbcx = dkbcx_dvbcx / 2.0;
+        // rKp1 = (Kbci+1) / (Kbcx+1)  [ngspice vbicload.c line 3691]
+        let rkp1 = (kbci + 1.0) / (kbcx + 1.0);
+        let drkp1_dvbci = dkbci_dvbci / (kbcx + 1.0);
+        let drkp1_dvbcx = -(kbci + 1.0) * dkbcx_dvbcx / ((kbcx + 1.0) * (kbcx + 1.0));
 
-        // Ohmic current: Iohm = Vrci / (RCI * rKp1)
-        let rci_rkp1 = self.rci_t * rkp1;
-        let iohm = vrci / rci_rkp1;
-        let diohm_dvrci = 1.0 / rci_rkp1;
-        let diohm_dvbci = -vrci * self.rci_t * drkp1_dvbci / (rci_rkp1 * rci_rkp1);
-        let diohm_dvbcx = -vrci * self.rci_t * drkp1_dvbcx / (rci_rkp1 * rci_rkp1);
+        // Ohmic current: Iohm = (Vrci + Vt*(Kbci - Kbcx - ln(rKp1))) / RCI  [ngspice line 3703]
+        let ln_rkp1 = rkp1.ln();
+        let dln_rkp1_dvbci = drkp1_dvbci / rkp1;
+        let dln_rkp1_dvbcx = drkp1_dvbcx / rkp1;
+        let iohm = (vrci + vt * (kbci - kbcx - ln_rkp1)) / self.rci_t;
+        let diohm_dvrci = 1.0 / self.rci_t;
+        let diohm_dvbci = vt * (dkbci_dvbci - dln_rkp1_dvbci) / self.rci_t;
+        let diohm_dvbcx = vt * (-dkbcx_dvbcx - dln_rkp1_dvbcx) / self.rci_t;
 
         if self.vo_t > 0.0 {
             // Velocity saturation model
@@ -1913,7 +1942,7 @@ mod tests {
     fn test_companion_forward_active() {
         let m = VbicModel::new(VbicType::Npn);
         // Forward active: Vbei=0.8V, all others near zero
-        let comp = m.companion(0.8, 0.0, -2.0, -2.0, 0.0, 0.1, 0.0, 0.0, 0.0);
+        let comp = m.companion(0.8, 0.0, -2.0, -2.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0);
 
         // Forward transport current should be positive
         assert!(
@@ -1937,7 +1966,7 @@ mod tests {
     fn test_companion_cutoff() {
         let m = VbicModel::new(VbicType::Npn);
         // Cutoff: all junctions reverse biased
-        let comp = m.companion(-0.5, -0.5, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let comp = m.companion(-0.5, -0.5, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
         assert!(
             comp.iciei.abs() < 1e-10,
@@ -1954,7 +1983,7 @@ mod tests {
     #[test]
     fn test_companion_derivatives_positive() {
         let m = VbicModel::new(VbicType::Npn);
-        let comp = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.05, 0.0, 0.0, 0.0);
+        let comp = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0);
 
         // dIciei/dVbei should be positive (more base-emitter = more collector current)
         assert!(
@@ -2004,7 +2033,7 @@ mod tests {
     fn test_irci_simple_resistive() {
         // With GAMM=0, VO=0, Irci should be simple V/R
         let m = VbicModel::new(VbicType::Npn);
-        let comp = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.5, 0.0, 0.0, 0.0);
+        let comp = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0);
         // Irci should be approximately Vrci / RCI = 0.5 / 0.1 = 5.0
         // (modified by Kbci/Kbcx factors, but with GAMM=0 these are 1)
         assert_abs_diff_eq!(comp.irci, 5.0, epsilon = 0.1);
@@ -2014,7 +2043,7 @@ mod tests {
     fn test_irbi_modulated() {
         let m = VbicModel::new(VbicType::Npn);
         // With forward bias, qb > 1, so effective Rbi < nominal Rbi
-        let comp = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.0, 0.1, 0.0, 0.0);
+        let comp = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0);
         // Irbi = Vrbi * qb / RBI
         // With qb ≈ 1 at moderate injection, Irbi ≈ 0.1 / 0.1 = 1.0
         assert!(
@@ -2030,8 +2059,8 @@ mod tests {
         m.vef = 50.0;
         m.temperature_adjust(27.0);
 
-        let comp1 = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-        let comp2 = m.companion(0.7, 0.0, -10.0, -10.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let comp1 = m.companion(0.7, 0.0, -2.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let comp2 = m.companion(0.7, 0.0, -10.0, -10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
         // With Early effect, more reverse bias on BC should increase forward current
         // (larger |Vce| = larger Ic) -- but in VBIC the Early effect works through
@@ -2181,7 +2210,7 @@ mod tests {
         m.temperature_adjust(27.0);
 
         // At Vbei=0.2V (forward bias for PNP), all other junctions at 0V
-        let comp = m.companion(0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let comp = m.companion(0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e-13);
 
         // Expected: IS * exp(0.2/Vt) ≈ 1e-16 * 2277 ≈ 2.28e-13
         eprintln!("iciei = {:.6e}", comp.iciei);

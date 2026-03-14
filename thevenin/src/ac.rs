@@ -84,7 +84,7 @@ pub fn simulate_ac(netlist: &Netlist) -> Result<SimResult, MnaError> {
         let omega = 2.0 * PI * freq;
 
         // Build and solve the complex MNA system at this frequency.
-        let solution = solve_ac_point(&mna, &op_solution, omega, netlist)?;
+        let solution = solve_ac_point(&mna, &op_solution, omega, netlist, nr_opts.gmin)?;
 
         freq_vec.real.push(freq);
 
@@ -124,6 +124,7 @@ fn solve_ac_point(
     op_solution: &[f64],
     omega: f64,
     netlist: &Netlist,
+    gmin: f64,
 ) -> Result<Vec<(f64, f64)>, MnaError> {
     let num_nodes = mna.total_num_nodes();
     let dim = num_nodes + mna.vsource_names.len();
@@ -131,7 +132,7 @@ fn solve_ac_point(
     let mut sys = ComplexLinearSystem::new(dim);
 
     // Stamp base matrix, reactive elements, and all device small-signal models.
-    stamp_ac_devices(mna, op_solution, omega, &mut sys);
+    stamp_ac_devices(mna, op_solution, omega, &mut sys, gmin);
 
     // Apply AC source excitation to RHS.
     apply_ac_excitation(&mut sys, netlist, mna, num_nodes);
@@ -149,11 +150,12 @@ pub fn build_ac_system(
     omega: f64,
     netlist: &Netlist,
     num_nodes: usize,
+    gmin: f64,
 ) -> ComplexLinearSystem {
     let dim = num_nodes + mna.vsource_names.len();
     let mut sys = ComplexLinearSystem::new(dim);
 
-    stamp_ac_devices(mna, op_solution, omega, &mut sys);
+    stamp_ac_devices(mna, op_solution, omega, &mut sys, gmin);
     apply_ac_excitation(&mut sys, netlist, mna, num_nodes);
 
     sys
@@ -170,6 +172,7 @@ pub fn stamp_ac_devices(
     op_solution: &[f64],
     omega: f64,
     sys: &mut ComplexLinearSystem,
+    gmin: f64,
 ) {
     // 1. Stamp DC conductance matrix (real part) from base MNA stamps.
     for triplet in mna.system.matrix.triplets() {
@@ -567,7 +570,7 @@ pub fn stamp_ac_devices(
             vbic.junction_voltages(op_solution);
         let comp = vbic
             .model
-            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp);
+            .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
         let s = vbic.m * vbic.area;
 
         let bi = vbic.base_bi_idx;

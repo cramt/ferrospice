@@ -803,7 +803,7 @@ harness_test!(
 harness_test!(
     harness_vbic_fg,
     "vbic/FG.cir",
-    ignore = "VBIC FG: ~5% error in DC sweep (PNP VBIC subthreshold)"
+    ignore = "VBIC FG: ~6% error in DC sweep (PNP VBIC subthreshold Ic)"
 );
 harness_test!(
     harness_vbic_fo,
@@ -818,7 +818,7 @@ harness_test!(
 harness_test!(
     harness_vbic_temp,
     "vbic/temp.cir",
-    ignore = "VBIC temp: ~5% error in DC sweep at non-default temperature"
+    ignore = "VBIC temp: 0.22% Ic error at V=0.65V (just over 0.2% tolerance); quasi-saturation and temp scaling now correct"
 );
 
 // === XSPICE (unimplemented) ===
