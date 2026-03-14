@@ -1067,6 +1067,102 @@ fn resolve_analysis(
 }
 
 // ---------------------------------------------------------------------------
+// B-source expression helpers
+// ---------------------------------------------------------------------------
+
+/// Substitute `v(node)` and `v(n1,n2)` voltage references in a B-source expression
+/// with their actual numeric values from `node_voltages`.
+/// Node "0" (ground) is always 0.0.
+pub fn substitute_v_refs(expr: &str, node_voltages: &std::collections::BTreeMap<String, f64>) -> String {
+    let mut result = String::with_capacity(expr.len() + 32);
+    let mut pos = 0;
+
+    while pos < expr.len() {
+        // Case-insensitive search for 'v('
+        let remaining = &expr[pos..];
+        let found = remaining
+            .char_indices()
+            .find(|&(i, c)| {
+                (c == 'v' || c == 'V')
+                    && remaining[i + c.len_utf8()..].starts_with('(')
+            });
+
+        let (rel, ch) = match found {
+            Some(x) => x,
+            None => {
+                result.push_str(&expr[pos..]);
+                break;
+            }
+        };
+
+        let v_start = pos + rel;
+
+        // Check word boundary: char before 'v' must not be alphanumeric/underscore
+        let is_word_start = if v_start == 0 {
+            true
+        } else {
+            let prev = expr[..v_start].chars().last().unwrap_or(' ');
+            !prev.is_alphanumeric() && prev != '_'
+        };
+
+        if is_word_start {
+            let after_paren = v_start + 2; // skip 'v('
+            // Find matching ')'
+            if let Some(rel_close) = expr[after_paren..].find(')') {
+                let close = after_paren + rel_close;
+                let content = &expr[after_paren..close];
+                let parts: Vec<&str> = content.split(',').collect();
+
+                let lookup = |name: &str| -> f64 {
+                    let n = name.trim();
+                    if n == "0" {
+                        return 0.0;
+                    }
+                    node_voltages
+                        .get(n)
+                        .or_else(|| node_voltages.get(&n.to_lowercase()))
+                        .or_else(|| node_voltages.get(&n.to_uppercase()))
+                        .copied()
+                        .unwrap_or(0.0)
+                };
+
+                let v = match parts.len() {
+                    1 => lookup(parts[0]),
+                    2 => lookup(parts[0]) - lookup(parts[1]),
+                    _ => {
+                        // Unknown, copy verbatim
+                        result.push_str(&expr[pos..close + 1]);
+                        pos = close + 1;
+                        continue;
+                    }
+                };
+
+                result.push_str(&expr[pos..v_start]);
+                result.push_str(&format!("({v:.15e})"));
+                pos = close + 1;
+                continue;
+            }
+        }
+
+        // Not a v() call at word boundary, copy char and advance
+        result.push_str(&expr[pos..v_start + ch.len_utf8()]);
+        pos = v_start + ch.len_utf8();
+    }
+
+    result
+}
+
+/// Evaluate a B-source expression with node voltages substituted.
+pub fn evaluate_bsrc_expr(
+    expr: &str,
+    node_voltages: &std::collections::BTreeMap<String, f64>,
+) -> Result<f64, ExprError> {
+    let substituted = substitute_v_refs(expr, node_voltages);
+    let ctx = EvalContext::default();
+    ctx.eval_str(&substituted)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

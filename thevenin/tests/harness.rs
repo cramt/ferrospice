@@ -513,11 +513,7 @@ harness_test!(harness_mesa_mesa15, "mesa/mesa15.cir");
 harness_test!(harness_mesa_mesa21, "mesa/mesa21.cir");
 harness_test!(harness_mesa_mesa, "mesa/mesa.cir");
 harness_test!(harness_mesa_mesgout, "mesa/mesgout.cir");
-harness_test!(
-    harness_mesa_mesinv,
-    "mesa/mesinv.cir",
-    ignore = "tran: initial transient solution values wrong"
-);
+harness_test!(harness_mesa_mesinv, "mesa/mesinv.cir");
 harness_test!(
     harness_mesa_mesosc,
     "mesa/mesosc.cir",

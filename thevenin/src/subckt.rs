@@ -16,6 +16,60 @@
 use std::collections::{BTreeMap, HashMap};
 
 use thevenin_types::{Element, ElementKind, Expr, Item, Netlist, Param, SubcktDef};
+
+/// Remap node names inside `v(...)` calls in a B-source spec string.
+fn remap_v_calls_in_spec(spec: &str, remap: &impl Fn(&str) -> String) -> String {
+    let mut result = String::with_capacity(spec.len() + 32);
+    let mut pos = 0;
+
+    while pos < spec.len() {
+        // Find 'v(' case-insensitively
+        let remaining = &spec[pos..];
+        let found = remaining.char_indices().find(|&(i, c)| {
+            (c == 'v' || c == 'V') && remaining[i + 1..].starts_with('(')
+        });
+
+        let (rel, ch) = match found {
+            Some(x) => x,
+            None => {
+                result.push_str(&spec[pos..]);
+                break;
+            }
+        };
+
+        let v_start = pos + rel;
+
+        // Check word boundary
+        let is_word_start = v_start == 0 || {
+            let prev = spec[..v_start].chars().last().unwrap_or(' ');
+            !prev.is_alphanumeric() && prev != '_'
+        };
+
+        if is_word_start {
+            let after_paren = v_start + 2;
+            if let Some(rel_close) = spec[after_paren..].find(')') {
+                let close = after_paren + rel_close;
+                let content = &spec[after_paren..close];
+                let parts: Vec<&str> = content.split(',').collect();
+                let remapped: Vec<String> = parts.iter().map(|p| remap(p.trim())).collect();
+
+                result.push_str(&spec[pos..v_start]);
+                // Preserve the 'v' or 'V' case
+                result.push(ch);
+                result.push('(');
+                result.push_str(&remapped.join(", "));
+                result.push(')');
+                pos = close + 1;
+                continue;
+            }
+        }
+
+        result.push_str(&spec[pos..v_start + ch.len_utf8()]);
+        pos = v_start + ch.len_utf8();
+    }
+
+    result
+}
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -473,7 +527,7 @@ fn remap_element(
         ElementKind::BehavioralSource { pos, neg, spec } => ElementKind::BehavioralSource {
             pos: remap(pos),
             neg: remap(neg),
-            spec: spec.clone(),
+            spec: remap_v_calls_in_spec(spec, &remap),
         },
         // SubcktCall should have been handled before calling this
         ElementKind::SubcktCall { .. } => {

@@ -227,6 +227,19 @@ pub struct CcvsInstance {
     pub rm: f64,
 }
 
+/// A resolved behavioral source (B-element) instance.
+#[derive(Debug, Clone)]
+pub struct BehavioralSourceInstance {
+    /// Element name.
+    pub name: String,
+    /// Positive terminal node index (None = ground).
+    pub pos_idx: Option<usize>,
+    /// Negative terminal node index (None = ground).
+    pub neg_idx: Option<usize>,
+    /// Expression string after `I=` (only I= supported currently).
+    pub expr: String,
+}
+
 /// The assembled MNA system ready for solving.
 #[derive(Debug)]
 pub struct MnaSystem {
@@ -289,6 +302,8 @@ pub struct MnaSystem {
     pub cccs_sources: Vec<CccsInstance>,
     /// Resolved CCVS (H) instances.
     pub ccvs_sources: Vec<CcvsInstance>,
+    /// Resolved behavioral source (B-element) instances for NR iteration.
+    pub behavioral_sources: Vec<BehavioralSourceInstance>,
 }
 
 impl MnaSystem {
@@ -321,6 +336,7 @@ impl MnaSystem {
             || !self.mesas.is_empty()
             || !self.mesfets.is_empty()
             || !self.hfets.is_empty()
+            || !self.behavioral_sources.is_empty()
     }
 
     /// Total number of nodes including internal nodes created by nonlinear
@@ -1049,6 +1065,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
     let mut vccs_sources = Vec::new();
     let mut cccs_sources = Vec::new();
     let mut ccvs_sources = Vec::new();
+    let mut behavioral_sources = Vec::new();
     let mut internal_idx = node_map.len(); // internal nodes start after external nodes
 
     // Second pass: stamp each element.
@@ -2304,6 +2321,39 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                 };
                 cpls.push(inst);
             }
+            ElementKind::BehavioralSource { pos, neg, spec } => {
+                // Parse spec: "I=expr" or "i=expr"
+                let spec_trimmed = spec.trim();
+                let expr_str = if let Some(rest) = spec_trimmed
+                    .strip_prefix("I=")
+                    .or_else(|| spec_trimmed.strip_prefix("i="))
+                    .or_else(|| spec_trimmed.strip_prefix("I ="))
+                    .or_else(|| spec_trimmed.strip_prefix("i ="))
+                {
+                    rest.trim()
+                } else {
+                    // V= behavioral sources not yet supported; skip
+                    continue;
+                };
+                // Strip braces/quotes
+                let expr_clean =
+                    if let Some(inner) = expr_str.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                        inner.trim()
+                    } else if let Some(inner) = expr_str
+                        .strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                    {
+                        inner.trim()
+                    } else {
+                        expr_str
+                    };
+                behavioral_sources.push(BehavioralSourceInstance {
+                    name: element.name.clone(),
+                    pos_idx: node_map.get(pos),
+                    neg_idx: node_map.get(neg),
+                    expr: expr_clean.to_string(),
+                });
+            }
             _ => {
                 stamp_element(
                     element,
@@ -2352,6 +2402,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
         ltras,
         txls,
         cpls,
+        behavioral_sources,
     })
 }
 

@@ -635,5 +635,43 @@ impl DeviceVoltageState {
                 );
             }
         }
+
+        // Behavioral current sources (B-elements with I=...)
+        for bsrc in &mna.behavioral_sources {
+            // Build node voltage map from current solution
+            let mut node_voltages: std::collections::BTreeMap<String, f64> =
+                std::collections::BTreeMap::new();
+            node_voltages.insert("0".to_string(), 0.0);
+            for (name, idx) in mna.node_map.iter() {
+                node_voltages.insert(name.to_string(), solution[idx]);
+            }
+
+            let i0 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &node_voltages).unwrap_or(0.0);
+
+            // Numerical Jacobian: perturb each node by DV and measure dI/dV
+            const DV: f64 = 1e-8;
+            let mut i_eq = i0;
+
+            for (name, idx) in mna.node_map.iter() {
+                let v_old = node_voltages[name];
+                let mut perturbed = node_voltages.clone();
+                *perturbed.get_mut(name).unwrap() = v_old + DV;
+                let i1 =
+                    crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0);
+                let g = (i1 - i0) / DV;
+
+                if g.abs() > 1e-30 {
+                    if let Some(ni) = bsrc.pos_idx {
+                        system.matrix.add(ni, idx, g);
+                    }
+                    if let Some(nj) = bsrc.neg_idx {
+                        system.matrix.add(nj, idx, -g);
+                    }
+                    i_eq -= g * v_old;
+                }
+            }
+
+            stamp_current_source(&mut system.rhs, bsrc.pos_idx, bsrc.neg_idx, i_eq);
+        }
     }
 }
