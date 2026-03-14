@@ -5,11 +5,12 @@
 
 use thevenin_types::{Expr, ModelDef, Param};
 
-use crate::physics::safe_exp;
+use crate::physics::{KBOQ, safe_exp};
 
 /// Thermal voltage at nominal temperature (27°C = 300.15K).
-/// Vt = kT/q where k = 1.3806e-23, q = 1.602e-19.
-pub const VT_NOM: f64 = 0.02585;
+/// VT = k/q * T = 8.617087e-5 * 300.15 = 0.025864187 V
+/// Matches ngspice: VT_NOM = KOverQ * (273.15 + 27.0).
+pub const VT_NOM: f64 = KBOQ * 300.15;
 
 /// Diode model parameters matching ngspice defaults.
 #[derive(Debug, Clone)]

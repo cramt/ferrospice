@@ -1114,14 +1114,20 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
             } => {
                 let level = get_bjt_level(models.get(&model.to_uppercase()), params);
 
-                // Extract area and M from instance params
+                // Extract area, areab, areac, M, and temp from instance params
                 let mut area = 1.0;
+                let mut areab = 1.0;
+                let mut areac = 1.0;
                 let mut m_mult = 1.0;
+                let mut inst_temp = f64::NAN;
                 for p in params {
                     if let Expr::Num(v) = &p.value {
                         match p.name.to_uppercase().as_str() {
                             "AREA" => area = *v,
+                            "AREAB" => areab = *v,
+                            "AREAC" => areac = *v,
                             "M" => m_mult = *v,
+                            "TEMP" => inst_temp = *v,
                             _ => {}
                         }
                     }
@@ -1249,7 +1255,10 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         emit_prime_idx,
                         model: bm,
                         area,
+                        areab,
+                        areac,
                         m: m_mult,
+                        temp: inst_temp,
                     });
                 }
                 // BJT/VBIC stamps are applied during NR iteration, not here.

@@ -122,6 +122,9 @@ where
         }
 
         let new_solution = system.solve()?;
+        if new_solution.iter().any(|v| v.is_nan() || v.is_infinite()) {
+            return Err(NrError::NoConvergence { iterations: iter + 1 });
+        }
         total_iters = iter + 1;
 
         if iter > 0 && check_convergence(&solution, &new_solution, num_nodes, options) {

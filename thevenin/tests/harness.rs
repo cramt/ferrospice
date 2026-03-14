@@ -744,11 +744,7 @@ harness_test!(
 harness_test!(harness_resistance_res_simple, "resistance/res_simple.cir");
 
 // === Sensitivity ===
-harness_test!(
-    harness_sensitivity_diffpair,
-    "sensitivity/diffpair.cir",
-    ignore = "sensitivity parameter set mismatch: missing bjt eg/fc/rbm/tnom/xti/areab/areac/temp params, different ordering"
-);
+harness_test!(harness_sensitivity_diffpair, "sensitivity/diffpair.cir", ignore = "q3/q4:is sensitivity requires bit-exact LU reuse from NR solver (dense LU refactoring loses CMRR precision)");
 
 // === Transient ===
 harness_test!(

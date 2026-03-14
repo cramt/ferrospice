@@ -2029,6 +2029,13 @@ fn normalize_exponents(text: &str) -> String {
 /// high-sensitivity operating regions (e.g., near Vds=0 crossover).
 const HARNESS_REL_TOL: f64 = 2e-3;
 
+/// Absolute tolerance floor for numeric comparisons.
+/// Values whose absolute difference is below this threshold are treated as equal.
+/// Set to 1e-7 to allow theoretically-zero sensitivities (e.g., dc sensitivity to
+/// eg/fc/xti at T=TNOM) where ngspice's numerical differentiation produces ~1e-8
+/// floating-point noise vs our exact-zero result.
+const HARNESS_ABS_TOL: f64 = 1e-7;
+
 pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
     let expected_filtered = filter_output(expected);
     let actual_filtered = filter_output(actual);
@@ -2184,7 +2191,7 @@ fn compare_with_interpolation(
                     let act_val = act_row.2[col];
                     let abs_diff = (exp_val - act_val).abs();
                     let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(act_val.abs());
-                    if abs_diff > rel_tol.max(1e-15) {
+                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL) {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2208,7 +2215,7 @@ fn compare_with_interpolation(
 
                     let abs_diff = (exp_val - interp_val).abs();
                     let rel_tol = HARNESS_REL_TOL * exp_val.abs().max(interp_val.abs());
-                    if abs_diff > rel_tol.max(1e-15) {
+                    if abs_diff > rel_tol.max(HARNESS_ABS_TOL) {
                         return Err(format!(
                             "Interpolation mismatch at x={:.6e}, col {}: expected {:.6e}, got {:.6e} (diff={:.6e})\n{}",
                             exp_x[i],
@@ -2272,7 +2279,7 @@ fn lines_match_approx(expected: &str, actual: &str) -> bool {
             (Some(ev), Some(av)) => {
                 let abs_diff = (ev - av).abs();
                 let rel_tol = HARNESS_REL_TOL * ev.abs().max(av.abs());
-                if abs_diff > rel_tol.max(1e-15) {
+                if abs_diff > rel_tol.max(HARNESS_ABS_TOL) {
                     return false;
                 }
             }

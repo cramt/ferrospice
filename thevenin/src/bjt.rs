@@ -7,7 +7,10 @@
 use thevenin_types::{Expr, ModelDef, Param};
 
 use crate::diode::{VT_NOM, pnjlim, vcrit};
-use crate::physics::safe_exp;
+use crate::physics::{KBOQ, safe_exp};
+
+/// Default nominal temperature (°C) matching SPICE TNOM.
+const TNOM_DEFAULT_C: f64 = 27.0;
 
 /// BJT polarity: NPN or PNP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,16 @@ pub struct BjtModel {
     pub kf: f64,
     /// Flicker noise exponent (default 1).
     pub af: f64,
+    /// Energy gap (default 1.11 eV, silicon).
+    pub eg: f64,
+    /// Saturation current temperature exponent (default 3.0).
+    pub xti: f64,
+    /// Forward-bias depletion capacitance coefficient (default 0.5).
+    pub fc: f64,
+    /// Minimum base resistance at high injection (default = rb).
+    pub rbm: f64,
+    /// Nominal temperature for model parameters in °C (default 27.0).
+    pub tnom: f64,
 }
 
 impl BjtModel {
@@ -122,6 +135,11 @@ impl BjtModel {
             xcjc: 1.0,
             kf: 0.0,
             af: 1.0,
+            eg: 1.11,
+            xti: 3.0,
+            fc: 0.5,
+            rbm: 0.0, // sentinel: set to rb after parsing
+            tnom: TNOM_DEFAULT_C,
         }
     }
 
@@ -133,6 +151,7 @@ impl BjtModel {
             BjtType::Npn
         };
         let mut m = Self::new(bjt_type);
+        let mut rbm_given = false;
         for p in &model_def.params {
             if let Expr::Num(v) = &p.value {
                 match p.name.to_uppercase().as_str() {
@@ -150,6 +169,7 @@ impl BjtModel {
                     "IKF" | "JBF" => m.ikf = *v,
                     "IKR" | "JBR" => m.ikr = *v,
                     "RB" => m.rb = *v,
+                    "RBM" => { m.rbm = *v; rbm_given = true; }
                     "RC" => m.rc = *v,
                     "RE" => m.re = *v,
                     "CJE" => m.cje = *v,
@@ -164,9 +184,17 @@ impl BjtModel {
                     "XCJC" => m.xcjc = *v,
                     "KF" => m.kf = *v,
                     "AF" => m.af = *v,
+                    "EG" => m.eg = *v,
+                    "XTI" => m.xti = *v,
+                    "FC" => m.fc = *v,
+                    "TNOM" => m.tnom = *v,
                     _ => {} // ignore unknown params (LEVEL, etc.)
                 }
             }
+        }
+        // RBM defaults to RB if not explicitly given (SPICE convention).
+        if !rbm_given {
+            m.rbm = m.rb;
         }
         m
     }
@@ -211,26 +239,19 @@ impl BjtModel {
         vcrit(self.nr * VT_NOM, self.is)
     }
 
-    /// Compute the BJT operating point and NR companion model.
-    ///
-    /// Returns `BjtCompanion` with all conductances and equivalent currents
-    /// needed for matrix stamping.
-    ///
-    /// Junction voltages should already be limited via `pnjlim` before calling.
-    pub fn companion(&self, vbe: f64, vbc: f64) -> BjtCompanion {
-        let vt = VT_NOM;
-
+    /// Internal: compute companion model given explicit thermal voltage and saturation current.
+    fn companion_impl(&self, vbe: f64, vbc: f64, vt: f64, is: f64) -> BjtCompanion {
         // Junction currents and conductances (Shockley diode equations)
         let vte_f = self.nf * vt;
         let vte_r = self.nr * vt;
 
         let exp_be = safe_exp(vbe / vte_f);
-        let cbe = self.is * (exp_be - 1.0);
-        let gbe = self.is / vte_f * exp_be;
+        let cbe = is * (exp_be - 1.0);
+        let gbe = is / vte_f * exp_be;
 
         let exp_bc = safe_exp(vbc / vte_r);
-        let cbc = self.is * (exp_bc - 1.0);
-        let gbc = self.is / vte_r * exp_bc;
+        let cbc = is * (exp_bc - 1.0);
+        let gbc = is / vte_r * exp_bc;
 
         // Leakage currents
         let (cben, gben) = if self.ise > 0.0 {
@@ -250,37 +271,15 @@ impl BjtModel {
         };
 
         // Base charge normalization (Gummel-Poon)
-        let inv_vaf = if self.vaf.is_finite() {
-            1.0 / self.vaf
-        } else {
-            0.0
-        };
-        let inv_var = if self.var.is_finite() {
-            1.0 / self.var
-        } else {
-            0.0
-        };
-        let inv_ikf = if self.ikf.is_finite() {
-            1.0 / self.ikf
-        } else {
-            0.0
-        };
-        let inv_ikr = if self.ikr.is_finite() {
-            1.0 / self.ikr
-        } else {
-            0.0
-        };
+        let inv_vaf = if self.vaf.is_finite() { 1.0 / self.vaf } else { 0.0 };
+        let inv_var = if self.var.is_finite() { 1.0 / self.var } else { 0.0 };
+        let inv_ikf = if self.ikf.is_finite() { 1.0 / self.ikf } else { 0.0 };
+        let inv_ikr = if self.ikr.is_finite() { 1.0 / self.ikr } else { 0.0 };
 
         let q1_denom = 1.0 - inv_vaf * vbc - inv_var * vbe;
-        let q1 = if q1_denom > 0.0 {
-            1.0 / q1_denom
-        } else {
-            // Avoid division by zero / negative
-            1.0 / 1e-6
-        };
+        let q1 = if q1_denom > 0.0 { 1.0 / q1_denom } else { 1.0 / 1e-6 };
 
         let (qb, dqbdve, dqbdvc) = if inv_ikf == 0.0 && inv_ikr == 0.0 {
-            // No high-injection rolloff
             let dve = q1 * q1 * inv_var;
             let dvc = q1 * q1 * inv_vaf;
             (q1, dve, dvc)
@@ -305,31 +304,47 @@ impl BjtModel {
         let gm = (gbe - (cbe - cbc) * dqbdve / qb) / qb - go;
 
         // Equivalent current sources for the RHS (ngspice formulation)
-        // ceqbe = cc + cb - vbe*(gm+go+gpi) + vbc*go
-        // ceqbc = -cc + vbe*(gm+go) - vbc*(gmu+go)
         let ceqbe = cc + cb - vbe * (gm + go + gpi) + vbc * go;
         let ceqbc = -cc + vbe * (gm + go) - vbc * (gmu + go);
 
-        BjtCompanion {
-            gpi,
-            gmu,
-            gm,
-            go,
-            ceqbe,
-            ceqbc,
-            cc,
-            cb,
-        }
+        BjtCompanion { gpi, gmu, gm, go, ceqbe, ceqbc, cc, cb, qb }
+    }
+
+    /// Compute the BJT operating point and NR companion model at nominal temperature.
+    ///
+    /// Uses `VT_NOM` thermal voltage and `self.is` without temperature scaling.
+    /// Junction voltages should already be limited via `pnjlim` before calling.
+    pub fn companion(&self, vbe: f64, vbc: f64) -> BjtCompanion {
+        self.companion_impl(vbe, vbc, VT_NOM, self.is)
+    }
+
+    /// Compute the BJT companion model at a specified device temperature in Kelvin.
+    ///
+    /// Applies IS temperature scaling:
+    /// `IS_t = IS * (T/Tnom)^(xti/nf) * exp(eg/(nf*KB) * (1/Tnom - 1/T))`
+    /// and uses temperature-scaled thermal voltage `VT = KB * T`.
+    pub fn companion_at(&self, vbe: f64, vbc: f64, temp_k: f64) -> BjtCompanion {
+        let vt = KBOQ * temp_k;
+        let tnom_k = self.tnom + 273.15;
+        let ratio = temp_k / tnom_k;
+        let is_t = if (ratio - 1.0).abs() < 1e-9 {
+            self.is
+        } else {
+            let xti_nf = self.xti / self.nf;
+            let eg_arg = (self.eg / (self.nf * KBOQ)) * (1.0 / tnom_k - 1.0 / temp_k);
+            self.is * ratio.powf(xti_nf) * eg_arg.exp()
+        };
+        self.companion_impl(vbe, vbc, vt, is_t)
     }
 
     /// B-E junction capacitance at voltage v.
     pub fn cap_be(&self, v: f64) -> f64 {
-        junction_cap(v, self.cje, self.vje, self.mje)
+        junction_cap(v, self.cje, self.vje, self.mje, self.fc)
     }
 
     /// B-C junction capacitance at voltage v.
     pub fn cap_bc(&self, v: f64) -> f64 {
-        junction_cap(v, self.cjc, self.vjc, self.mjc)
+        junction_cap(v, self.cjc, self.vjc, self.mjc, self.fc)
     }
 
     /// Limit B-E junction voltage.
@@ -344,11 +359,10 @@ impl BjtModel {
 }
 
 /// Junction depletion capacitance with forward-bias linear extrapolation.
-fn junction_cap(v: f64, cj0: f64, vj: f64, m: f64) -> f64 {
+fn junction_cap(v: f64, cj0: f64, vj: f64, m: f64, fc: f64) -> f64 {
     if cj0 <= 0.0 {
         return 0.0;
     }
-    let fc = 0.5;
     let fc_vj = fc * vj;
     if v < fc_vj {
         cj0 / (1.0 - v / vj).powf(m)
@@ -378,6 +392,8 @@ pub struct BjtCompanion {
     pub cc: f64,
     /// Base current (for output).
     pub cb: f64,
+    /// Normalized base charge QB (used for base-resistance modulation).
+    pub qb: f64,
 }
 
 /// Resolved node indices for a BJT instance in the MNA system.
@@ -401,8 +417,14 @@ pub struct BjtInstance {
     pub model: BjtModel,
     /// Area scaling factor (default 1.0).
     pub area: f64,
+    /// Base area factor for sensitivity (default 1.0).
+    pub areab: f64,
+    /// Collector area factor for sensitivity (default 1.0).
+    pub areac: f64,
     /// Parallel multiplier (default 1.0).
     pub m: f64,
+    /// Instance temperature override in °C (NaN = use circuit temperature).
+    pub temp: f64,
 }
 
 impl BjtInstance {
@@ -469,7 +491,11 @@ pub fn stamp_bjt(
 
     // 5. Series resistances (stamped as conductances between external and internal)
     if inst.model.rb > 0.0 {
-        let gx = 1.0 / inst.model.rb;
+        // QB-modulated base resistance: rbb = rbm + (rb - rbm) / QB
+        // When rbm == rb (default), this reduces to rbb = rb regardless of QB.
+        let qb_safe = comp.qb.max(0.01);
+        let rbb = inst.model.rbm + (inst.model.rb - inst.model.rbm) / qb_safe;
+        let gx = 1.0 / rbb.max(1e-12);
         crate::stamp_conductance(matrix, inst.base_idx, bp, m * gx);
     }
     if inst.model.rc > 0.0 {

@@ -947,7 +947,7 @@ D1 2 0 DMOD
         let i_v1 = dc_vector(&result, "v1#branch");
 
         let is = 1e-14_f64;
-        let vt = 0.02585_f64;
+        let vt = crate::diode::VT_NOM;
 
         for idx in 0..v_diode.len() {
             let vd = v_diode[idx];
