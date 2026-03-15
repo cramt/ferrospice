@@ -290,7 +290,13 @@ fn resistor_display_resistance(
     let get_num = |list: &[thevenin_types::Param], name: &str| -> Option<f64> {
         list.iter()
             .find(|p| p.name.eq_ignore_ascii_case(name))
-            .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+            .and_then(|p| {
+                if let Expr::Num(v) = &p.value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
     };
     let m = get_num(params, "m").unwrap_or(1.0).max(1e-30);
     let base_r = match value {
@@ -299,7 +305,8 @@ fn resistor_display_resistance(
             let mkey = model_name.to_lowercase();
             if let Some(mdef) = models.get(&mkey) {
                 for p in &mdef.params {
-                    if (p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance"))
+                    if (p.name.eq_ignore_ascii_case("r")
+                        || p.name.eq_ignore_ascii_case("resistance"))
                         && let Expr::Num(v) = &p.value
                     {
                         return v / m;
@@ -332,7 +339,13 @@ fn resistor_sim_resistance(
     let get_num = |list: &[thevenin_types::Param], name: &str| -> Option<f64> {
         list.iter()
             .find(|p| p.name.eq_ignore_ascii_case(name))
-            .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+            .and_then(|p| {
+                if let Expr::Num(v) = &p.value {
+                    Some(*v)
+                } else {
+                    None
+                }
+            })
     };
     let m = get_num(params, "m").unwrap_or(1.0).max(1e-30);
     let scale = get_num(params, "scale").unwrap_or(1.0);
@@ -342,7 +355,8 @@ fn resistor_sim_resistance(
             let mkey = model_name.to_lowercase();
             if let Some(mdef) = models.get(&mkey) {
                 for p in &mdef.params {
-                    if (p.name.eq_ignore_ascii_case("r") || p.name.eq_ignore_ascii_case("resistance"))
+                    if (p.name.eq_ignore_ascii_case("r")
+                        || p.name.eq_ignore_ascii_case("resistance"))
                         && let Expr::Num(v) = &p.value
                     {
                         return v * scale / m;
@@ -684,22 +698,23 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         out.push('\n');
 
         // Helper: get a numeric param from a model def.
-        let get_model_param =
-            |mname: &str, pname: &str, default: f64| -> f64 {
-                models
-                    .get(&mname.to_lowercase())
-                    .and_then(|md| {
-                        md.params.iter().find(|p| p.name.eq_ignore_ascii_case(pname))
-                    })
-                    .and_then(|p| {
-                        if let Expr::Num(v) = &p.value {
-                            Some(*v)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(default)
-            };
+        let get_model_param = |mname: &str, pname: &str, default: f64| -> f64 {
+            models
+                .get(&mname.to_lowercase())
+                .and_then(|md| {
+                    md.params
+                        .iter()
+                        .find(|p| p.name.eq_ignore_ascii_case(pname))
+                })
+                .and_then(|p| {
+                    if let Expr::Num(v) = &p.value {
+                        Some(*v)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(default)
+        };
 
         let param_rows: &[(&str, f64)] = &[
             ("rsh", 0.0),
@@ -711,14 +726,20 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
         for (pname, default) in param_rows {
             out.push_str(&format!("{:>12}", pname));
             for mname in &named_res_models {
-                out.push_str(&format!("{:>22}", format_op_val(get_model_param(mname, pname, *default))));
+                out.push_str(&format!(
+                    "{:>22}",
+                    format_op_val(get_model_param(mname, pname, *default))
+                ));
             }
             out.push_str(&format!("{:>22}\n", format_op_val(*default)));
         }
         // defw: default 1e-5 for all
         out.push_str(&format!("{:>12}", "defw"));
         for mname in &named_res_models {
-            out.push_str(&format!("{:>22}", format_op_val(get_model_param(mname, "defw", 1e-5))));
+            out.push_str(&format!(
+                "{:>22}",
+                format_op_val(get_model_param(mname, "defw", 1e-5))
+            ));
         }
         out.push_str(&format!("{:>22}\n", format_op_val(1e-5)));
         // kf, af: always 0
@@ -978,13 +999,25 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
                 let m = params
                     .iter()
                     .find(|p| p.name.eq_ignore_ascii_case("m"))
-                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .and_then(|p| {
+                        if let Expr::Num(v) = &p.value {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(1.0)
                     .max(1e-30);
                 let ac_r = params
                     .iter()
                     .find(|p| p.name.eq_ignore_ascii_case("ac"))
-                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .and_then(|p| {
+                        if let Expr::Num(v) = &p.value {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    })
                     .map(|ac_base| ac_base / m)
                     .unwrap_or(dc_base);
                 out.push_str(&format!("{:>22}", format_op_val(ac_r)));
@@ -996,7 +1029,13 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
                 let dtemp = params
                     .iter()
                     .find(|p| p.name.eq_ignore_ascii_case("dtemp"))
-                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .and_then(|p| {
+                        if let Expr::Num(v) = &p.value {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(0.0);
                 out.push_str(&format!("{:>22}", format_op_val(dtemp)));
             }
@@ -1007,7 +1046,13 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
                 let noisy = params
                     .iter()
                     .find(|p| p.name.eq_ignore_ascii_case("noisy"))
-                    .and_then(|p| if let Expr::Num(v) = &p.value { Some(*v) } else { None })
+                    .and_then(|p| {
+                        if let Expr::Num(v) = &p.value {
+                            Some(*v)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(1.0);
                 out.push_str(&format!("{:>22}", format_op_val(noisy)));
             }
@@ -1029,7 +1074,11 @@ fn format_op_section(out: &mut String, netlist: &Netlist, result: &SimResult) {
                 let vp = device_node_v.get(pos.as_str()).copied().unwrap_or(0.0);
                 let vn = device_node_v.get(neg.as_str()).copied().unwrap_or(0.0);
                 let vdiff = vp - vn;
-                let p = if r_sim != 0.0 { vdiff * vdiff / r_sim } else { 0.0 };
+                let p = if r_sim != 0.0 {
+                    vdiff * vdiff / r_sim
+                } else {
+                    0.0
+                };
                 out.push_str(&format!("{:>22}", format_op_val(p)));
             }
             out.push('\n');
@@ -1317,13 +1366,11 @@ fn format_initial_tran_solution(out: &mut String, netlist: &Netlist, result: &Si
                     node_names.push(strip_v_wrapper(&vec.name));
                 }
             }
-            node_names.sort_by(|a, b| {
-                match (a.parse::<i64>(), b.parse::<i64>()) {
-                    (Ok(ia), Ok(ib)) => ia.cmp(&ib),
-                    (Ok(_), Err(_)) => std::cmp::Ordering::Less,
-                    (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
-                    _ => a.cmp(b),
-                }
+            node_names.sort_by(|a, b| match (a.parse::<i64>(), b.parse::<i64>()) {
+                (Ok(ia), Ok(ib)) => ia.cmp(&ib),
+                (Ok(_), Err(_)) => std::cmp::Ordering::Less,
+                (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+                _ => a.cmp(b),
             });
             branch_names.sort();
             branch_names.reverse();
@@ -1486,7 +1533,11 @@ fn format_print_table(out: &mut String, title: &str, plot: &SimPlot, print_dir: 
 
         // Collect column names for this section's header.
         let col_names: Vec<&str> = std::iter::once(resolved_vars[0].0.as_str())
-            .chain(resolved_vars[data_start..data_end].iter().map(|(n, _)| n.as_str()))
+            .chain(
+                resolved_vars[data_start..data_end]
+                    .iter()
+                    .map(|(n, _)| n.as_str()),
+            )
             .collect();
 
         // Title line (centered in 80-char field)
@@ -1930,9 +1981,9 @@ fn is_plot_art(line: &str) -> bool {
     };
     // Remaining tokens should be plot symbols: single chars or dots.
     let plot_chars: &[char] = &['.', '+', '*', '$', '=', 'X', 'x'];
-    tokens[num_start..].iter().all(|t| {
-        t.len() <= 2 && t.chars().all(|c| plot_chars.contains(&c))
-    })
+    tokens[num_start..]
+        .iter()
+        .all(|t| t.len() <= 2 && t.chars().all(|c| plot_chars.contains(&c)))
 }
 
 /// Apply the check.sh filter to text output.
@@ -2018,10 +2069,38 @@ pub fn filter_output(text: &str) -> String {
         if is_plot_art(line) {
             continue;
         }
+        // Filter circuit listing and node voltage lines that appear in ngspice
+        // batch output but not in our output (or vice versa).  These are lines
+        // from `.opt list` echoes, initial transient solution node voltages,
+        // title lines, SPICE comments, and continuation lines.
+        //
+        // A reliable discriminator: data rows always contain at least one number
+        // in scientific notation (e.g. "1.23e+04").  Circuit listing, node
+        // voltage, title, and comment lines do not.
+        if !contains_sci_notation(line) {
+            continue;
+        }
         lines.push(line);
     }
 
     lines.join("\n")
+}
+
+/// Check if a line contains at least one number in scientific notation (e.g. `1.23e+04`).
+fn contains_sci_notation(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    for i in 0..bytes.len().saturating_sub(2) {
+        if (bytes[i] == b'e' || bytes[i] == b'E')
+            && (bytes[i + 1] == b'+' || bytes[i + 1] == b'-')
+            && bytes[i + 2].is_ascii_digit()
+        {
+            // Verify there's a digit before the 'e'
+            if i > 0 && (bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'.') {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Normalize Windows-style 3-digit exponents to 2-digit.

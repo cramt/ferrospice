@@ -1073,19 +1073,19 @@ fn resolve_analysis(
 /// Substitute `v(node)` and `v(n1,n2)` voltage references in a B-source expression
 /// with their actual numeric values from `node_voltages`.
 /// Node "0" (ground) is always 0.0.
-pub fn substitute_v_refs(expr: &str, node_voltages: &std::collections::BTreeMap<String, f64>) -> String {
+pub fn substitute_v_refs(
+    expr: &str,
+    node_voltages: &std::collections::BTreeMap<String, f64>,
+) -> String {
     let mut result = String::with_capacity(expr.len() + 32);
     let mut pos = 0;
 
     while pos < expr.len() {
         // Case-insensitive search for 'v('
         let remaining = &expr[pos..];
-        let found = remaining
-            .char_indices()
-            .find(|&(i, c)| {
-                (c == 'v' || c == 'V')
-                    && remaining[i + c.len_utf8()..].starts_with('(')
-            });
+        let found = remaining.char_indices().find(|&(i, c)| {
+            (c == 'v' || c == 'V') && remaining[i + c.len_utf8()..].starts_with('(')
+        });
 
         let (rel, ch) = match found {
             Some(x) => x,

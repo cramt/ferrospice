@@ -202,7 +202,10 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
     let solution = if !mna.has_nonlinear() {
         solve_op_raw(&mna)?
     } else {
-        let opts = NrOptions { diag_gmin: 0.0, ..NrOptions::default() };
+        let opts = NrOptions {
+            diag_gmin: 0.0,
+            ..NrOptions::default()
+        };
         crate::simulate::solve_nonlinear_op(&mna, &opts)?
     };
     let dim = mna.system.dim();
@@ -256,20 +259,20 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // For eg, fc, xti: sensitivity is theoretically 0 at T=TNOM; companion() used.
             type BjtSetter = Box<dyn Fn(&mut crate::bjt::BjtModel, f64)>;
             let model_params: &[(&str, f64, BjtSetter)] = &[
-                ("bf",   bjt.model.bf,   Box::new(|m, v| m.bf = v)),
-                ("br",   bjt.model.br,   Box::new(|m, v| m.br = v)),
-                ("eg",   bjt.model.eg,   Box::new(|m, v| m.eg = v)),
-                ("fc",   bjt.model.fc,   Box::new(|m, v| m.fc = v)),
-                ("is",   bjt.model.is,   Box::new(|m, v| m.is = v)),
-                ("nc",   bjt.model.nc,   Box::new(|m, v| m.nc = v)),
-                ("ne",   bjt.model.ne,   Box::new(|m, v| m.ne = v)),
-                ("nf",   bjt.model.nf,   Box::new(|m, v| m.nf = v)),
-                ("nr",   bjt.model.nr,   Box::new(|m, v| m.nr = v)),
-                ("rb",   bjt.model.rb,   Box::new(|m, v| m.rb = v)),
-                ("rbm",  bjt.model.rbm,  Box::new(|m, v| m.rbm = v)),
+                ("bf", bjt.model.bf, Box::new(|m, v| m.bf = v)),
+                ("br", bjt.model.br, Box::new(|m, v| m.br = v)),
+                ("eg", bjt.model.eg, Box::new(|m, v| m.eg = v)),
+                ("fc", bjt.model.fc, Box::new(|m, v| m.fc = v)),
+                ("is", bjt.model.is, Box::new(|m, v| m.is = v)),
+                ("nc", bjt.model.nc, Box::new(|m, v| m.nc = v)),
+                ("ne", bjt.model.ne, Box::new(|m, v| m.ne = v)),
+                ("nf", bjt.model.nf, Box::new(|m, v| m.nf = v)),
+                ("nr", bjt.model.nr, Box::new(|m, v| m.nr = v)),
+                ("rb", bjt.model.rb, Box::new(|m, v| m.rb = v)),
+                ("rbm", bjt.model.rbm, Box::new(|m, v| m.rbm = v)),
                 ("tnom", bjt.model.tnom, Box::new(|m, v| m.tnom = v)),
-                ("vaf",  bjt.model.vaf,  Box::new(|m, v| m.vaf = v)),
-                ("xti",  bjt.model.xti,  Box::new(|m, v| m.xti = v)),
+                ("vaf", bjt.model.vaf, Box::new(|m, v| m.vaf = v)),
+                ("xti", bjt.model.xti, Box::new(|m, v| m.xti = v)),
             ];
 
             for (param_name, param_value, setter) in model_params {
@@ -316,11 +319,11 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
             // areab and areac only affect junction capacitances (no DC effect → ~0 sensitivity).
             // temp uses companion_at to capture IS/VT temperature dependence.
             let instance_params: &[(&str, f64)] = &[
-                ("area",  bjt.area),
+                ("area", bjt.area),
                 ("areab", bjt.areab),
                 ("areac", bjt.areac),
-                ("m",     bjt.m),
-                ("temp",  bjt.temp),
+                ("m", bjt.m),
+                ("temp", bjt.temp),
             ];
 
             for (param_name, param_value) in instance_params {
@@ -352,11 +355,11 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
                     |matrix, rhs| {
                         let mut inst = bjt.clone();
                         match *param_name {
-                            "area"  => inst.area  = base_temp + delta,
+                            "area" => inst.area = base_temp + delta,
                             "areab" => inst.areab = base_temp + delta,
                             "areac" => inst.areac = base_temp + delta,
-                            "m"     => inst.m     = base_temp + delta,
-                            "temp"  => {
+                            "m" => inst.m = base_temp + delta,
+                            "temp" => {
                                 // Perturb device temperature; recompute IS_t
                                 let new_temp_k = (base_temp + delta) + 273.15;
                                 let comp = inst.model.companion_at(vbe, vbc, new_temp_k);
@@ -486,21 +489,30 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
 
             // Sensitivity to resistance R: dG/dR = -1/R^2
             let dg_dr = -g * g;
-            res_pairs.push((name.clone(), conductance_sensitivity_direct(
-                &lu, r.pos_idx, r.neg_idx, dg_dr, &solution, out_pos, out_neg,
-            )));
+            res_pairs.push((
+                name.clone(),
+                conductance_sensitivity_direct(
+                    &lu, r.pos_idx, r.neg_idx, dg_dr, &solution, out_pos, out_neg,
+                ),
+            ));
 
             // Sensitivity to multiplier m (default 1): dG/dm = G/m
             let dg_dm = g; // m=1
-            res_pairs.push((format!("{name}_m"), conductance_sensitivity_direct(
-                &lu, r.pos_idx, r.neg_idx, dg_dm, &solution, out_pos, out_neg,
-            )));
+            res_pairs.push((
+                format!("{name}_m"),
+                conductance_sensitivity_direct(
+                    &lu, r.pos_idx, r.neg_idx, dg_dm, &solution, out_pos, out_neg,
+                ),
+            ));
 
             // Sensitivity to scale (default 1): dG/dscale = -G/scale
             let dg_dscale = -g; // scale=1
-            res_pairs.push((format!("{name}_scale"), conductance_sensitivity_direct(
-                &lu, r.pos_idx, r.neg_idx, dg_dscale, &solution, out_pos, out_neg,
-            )));
+            res_pairs.push((
+                format!("{name}_scale"),
+                conductance_sensitivity_direct(
+                    &lu, r.pos_idx, r.neg_idx, dg_dscale, &solution, out_pos, out_neg,
+                ),
+            ));
         }
         append_group!(res_pairs);
     }
@@ -530,8 +542,12 @@ pub fn simulate_sens(netlist: &Netlist) -> Result<SimResult, MnaError> {
             let mut z = vec![0.0f64; dim];
             // SPICE convention: current exits n+ (rhs[pos] -= I) and enters n-  (rhs[neg] += I)
             // So when I increases by 1: delta_b[pos] = -1, delta_b[neg] = +1
-            if let Some(p) = cs.pos_idx { z[p] -= 1.0; }
-            if let Some(n) = cs.neg_idx { z[n] += 1.0; }
+            if let Some(p) = cs.pos_idx {
+                z[p] -= 1.0;
+            }
+            if let Some(n) = cs.neg_idx {
+                z[n] += 1.0;
+            }
             let delta_e = solve_forward(&lu, &z);
             let s = extract_output(&delta_e, out_pos, out_neg);
             isrc_pairs.push((name.clone(), s));

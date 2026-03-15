@@ -99,7 +99,8 @@ pub fn simulate_noise(netlist: &Netlist) -> Result<SimResult, MnaError> {
         let omega = 2.0 * PI * freq;
 
         // Build the AC MNA system at this frequency.
-        let sys = crate::ac::build_ac_system(&mna, &op_solution, omega, netlist, num_nodes, nr_opts.gmin);
+        let sys =
+            crate::ac::build_ac_system(&mna, &op_solution, omega, netlist, num_nodes, nr_opts.gmin);
 
         // Solve adjoint system with unit current at output node.
         let adjoint = solve_adjoint(&sys, out_pos_idx, out_neg_idx)?;

@@ -294,7 +294,13 @@ R3 R3_P R3_N 500k
 #[ignore = "debug test for finding convergence failure step"]
 fn test_vbic_temp_step_debug() {
     // Try DC sweep at 150°C in small ranges to find the failing step
-    for (start, stop) in &[(0.5f64, 0.71f64), (0.5, 0.72), (0.5, 0.73), (0.5, 0.74), (0.5, 0.75)] {
+    for (start, stop) in &[
+        (0.5f64, 0.71f64),
+        (0.5, 0.72),
+        (0.5, 0.73),
+        (0.5, 0.74),
+        (0.5, 0.75),
+    ] {
         let cir = format!(
             "\
 VBIC Temp debug
@@ -312,7 +318,10 @@ Q1 Q1_C Q1_B 0 N1
         );
         let netlist = Netlist::parse(&cir).unwrap();
         match thevenin::simulate_dc(&netlist) {
-            Ok(r) => eprintln!("Range {start}-{stop}: OK ({} points)", r.plots[0].vecs[0].real.len()),
+            Ok(r) => eprintln!(
+                "Range {start}-{stop}: OK ({} points)",
+                r.plots[0].vecs[0].real.len()
+            ),
             Err(e) => eprintln!("Range {start}-{stop}: FAILED: {e}"),
         }
     }

@@ -169,7 +169,10 @@ impl BjtModel {
                     "IKF" | "JBF" => m.ikf = *v,
                     "IKR" | "JBR" => m.ikr = *v,
                     "RB" => m.rb = *v,
-                    "RBM" => { m.rbm = *v; rbm_given = true; }
+                    "RBM" => {
+                        m.rbm = *v;
+                        rbm_given = true;
+                    }
                     "RC" => m.rc = *v,
                     "RE" => m.re = *v,
                     "CJE" => m.cje = *v,
@@ -271,13 +274,33 @@ impl BjtModel {
         };
 
         // Base charge normalization (Gummel-Poon)
-        let inv_vaf = if self.vaf.is_finite() { 1.0 / self.vaf } else { 0.0 };
-        let inv_var = if self.var.is_finite() { 1.0 / self.var } else { 0.0 };
-        let inv_ikf = if self.ikf.is_finite() { 1.0 / self.ikf } else { 0.0 };
-        let inv_ikr = if self.ikr.is_finite() { 1.0 / self.ikr } else { 0.0 };
+        let inv_vaf = if self.vaf.is_finite() {
+            1.0 / self.vaf
+        } else {
+            0.0
+        };
+        let inv_var = if self.var.is_finite() {
+            1.0 / self.var
+        } else {
+            0.0
+        };
+        let inv_ikf = if self.ikf.is_finite() {
+            1.0 / self.ikf
+        } else {
+            0.0
+        };
+        let inv_ikr = if self.ikr.is_finite() {
+            1.0 / self.ikr
+        } else {
+            0.0
+        };
 
         let q1_denom = 1.0 - inv_vaf * vbc - inv_var * vbe;
-        let q1 = if q1_denom > 0.0 { 1.0 / q1_denom } else { 1.0 / 1e-6 };
+        let q1 = if q1_denom > 0.0 {
+            1.0 / q1_denom
+        } else {
+            1.0 / 1e-6
+        };
 
         let (qb, dqbdve, dqbdvc) = if inv_ikf == 0.0 && inv_ikr == 0.0 {
             let dve = q1 * q1 * inv_var;
@@ -307,7 +330,17 @@ impl BjtModel {
         let ceqbe = cc + cb - vbe * (gm + go + gpi) + vbc * go;
         let ceqbc = -cc + vbe * (gm + go) - vbc * (gmu + go);
 
-        BjtCompanion { gpi, gmu, gm, go, ceqbe, ceqbc, cc, cb, qb }
+        BjtCompanion {
+            gpi,
+            gmu,
+            gm,
+            go,
+            ceqbe,
+            ceqbc,
+            cc,
+            cb,
+            qb,
+        }
     }
 
     /// Compute the BJT operating point and NR companion model at nominal temperature.
@@ -425,6 +458,8 @@ pub struct BjtInstance {
     pub m: f64,
     /// Instance temperature override in °C (NaN = use circuit temperature).
     pub temp: f64,
+    /// Device initially off (all junction voltages = 0 for initial guess).
+    pub off: bool,
 }
 
 impl BjtInstance {

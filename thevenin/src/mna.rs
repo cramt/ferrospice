@@ -790,6 +790,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                 substrate,
                 model,
                 params,
+                ..
             } => {
                 node_map.index(c);
                 node_map.index(b);
@@ -1111,6 +1112,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                 substrate,
                 model,
                 params,
+                off,
             } => {
                 let level = get_bjt_level(models.get(&model.to_uppercase()), params);
 
@@ -1272,6 +1274,7 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         areac,
                         m: m_mult,
                         temp: inst_temp,
+                        off: *off,
                     });
                 }
                 // BJT/VBIC stamps are applied during NR iteration, not here.

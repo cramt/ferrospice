@@ -25,9 +25,9 @@ fn remap_v_calls_in_spec(spec: &str, remap: &impl Fn(&str) -> String) -> String 
     while pos < spec.len() {
         // Find 'v(' case-insensitively
         let remaining = &spec[pos..];
-        let found = remaining.char_indices().find(|&(i, c)| {
-            (c == 'v' || c == 'V') && remaining[i + 1..].starts_with('(')
-        });
+        let found = remaining
+            .char_indices()
+            .find(|&(i, c)| (c == 'v' || c == 'V') && remaining[i + 1..].starts_with('('));
 
         let (rel, ch) = match found {
             Some(x) => x,
@@ -420,6 +420,7 @@ fn remap_element(
             substrate,
             model,
             params,
+            off,
         } => ElementKind::Bjt {
             c: remap(c),
             b: remap(b),
@@ -427,6 +428,7 @@ fn remap_element(
             substrate: substrate.as_ref().map(|s| remap(s)),
             model: model.clone(),
             params: resolve_params(params, param_map),
+            off: *off,
         },
         ElementKind::Mosfet {
             d,

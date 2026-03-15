@@ -218,7 +218,22 @@ fn jct_initial_guess(
         system.matrix.add(i, i, options.gmin);
     }
 
-    system.solve().unwrap_or(zeros)
+    let mut result = system.solve().unwrap_or(zeros);
+
+    // Apply BJT MODEINITJCT initial conditions to the solution:
+    // For non-off BJTs, set V(base') = V(emitter') + sign * Vcrit.
+    // This biases the BJT into its forward-active region, helping NR
+    // converge to the correct operating point for bistable circuits.
+    for bjt in &mna.bjts {
+        if !bjt.off
+            && let (Some(bp), Some(ep)) = (bjt.base_prime_idx, bjt.emit_prime_idx)
+        {
+            let sign = bjt.model.bjt_type.sign();
+            result[bp] = result[ep] + sign * bjt.model.vcrit_be();
+        }
+    }
+
+    result
 }
 
 fn solve_nonlinear_op_with_guess(
@@ -241,7 +256,7 @@ fn solve_nonlinear_op_with_guess(
         } else {
             vec![0.0; dim]
         }
-    } else if !mna.mosfets.is_empty() {
+    } else if !mna.mosfets.is_empty() || !mna.bjts.is_empty() {
         jct_initial_guess(mna, dim, num_nodes, options, base_matrix, base_rhs)
     } else {
         vec![0.0; dim]

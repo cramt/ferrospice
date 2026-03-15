@@ -403,6 +403,8 @@ pub enum ElementKind {
         substrate: Option<String>,
         model: String,
         params: Vec<Param>,
+        /// Device initially off (all junction voltages = 0).
+        off: bool,
     },
     /// `Mname d g s bulk [body] model [params]`
     ///
@@ -601,12 +603,16 @@ impl fmt::Display for Element {
                 substrate,
                 model,
                 params,
+                off,
             } => {
                 write!(f, "{} {c} {b} {e}", self.name)?;
                 if let Some(sub) = substrate {
                     write!(f, " {sub}")?;
                 }
                 write!(f, " {model}")?;
+                if *off {
+                    write!(f, " off")?;
+                }
                 write_params(f, params)
             }
             ElementKind::Mosfet {

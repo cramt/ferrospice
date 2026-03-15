@@ -848,6 +848,7 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
             let c = need!(0, "collector").to_string();
             let b_node = need!(1, "base").to_string();
             let e = need!(2, "emitter").to_string();
+            let has_off = rest[3..].iter().any(|t| t.eq_ignore_ascii_case("off"));
             let positional: Vec<&str> = rest[3..]
                 .iter()
                 .filter(|t| !t.contains('=') && !t.eq_ignore_ascii_case("off"))
@@ -872,6 +873,7 @@ fn parse_element(lineno: usize, line: &str) -> Result<Element, ParseError> {
                 substrate,
                 model,
                 params,
+                off: has_off,
             }
         }
         'M' => {
