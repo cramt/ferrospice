@@ -1194,6 +1194,17 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         subs_idx
                     };
 
+                    // Thermal node for self-heating (RTH > 0)
+                    let rth_idx = if vm.rth > 0.0 {
+                        let idx = internal_idx;
+                        internal_idx += 1;
+                        Some(idx)
+                    } else {
+                        None
+                    };
+
+                    let t_ambient = crate::netlist_temp(netlist);
+
                     vbics.push(VbicInstance {
                         name: element.name.clone(),
                         coll_idx,
@@ -1207,9 +1218,11 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                         base_bx_idx,
                         emit_ei_idx,
                         subs_si_idx,
+                        rth_idx,
                         model: vm,
                         area,
                         m: m_mult,
+                        t_ambient,
                     });
                 } else {
                     let bm = if let Some(mdef) = models.get(&model.to_uppercase()) {
@@ -2345,17 +2358,18 @@ fn assemble_mna_flat(netlist: &Netlist, modedc: bool) -> Result<MnaSystem, MnaEr
                     continue;
                 };
                 // Strip braces/quotes
-                let expr_clean =
-                    if let Some(inner) = expr_str.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-                        inner.trim()
-                    } else if let Some(inner) = expr_str
-                        .strip_prefix('\'')
-                        .and_then(|s| s.strip_suffix('\''))
-                    {
-                        inner.trim()
-                    } else {
-                        expr_str
-                    };
+                let expr_clean = if let Some(inner) =
+                    expr_str.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+                {
+                    inner.trim()
+                } else if let Some(inner) = expr_str
+                    .strip_prefix('\'')
+                    .and_then(|s| s.strip_suffix('\''))
+                {
+                    inner.trim()
+                } else {
+                    expr_str
+                };
                 behavioral_sources.push(BehavioralSourceInstance {
                     name: element.name.clone(),
                     pos_idx: node_map.get(pos),

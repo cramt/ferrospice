@@ -21,7 +21,7 @@ use crate::mesa::{mesa_companion, stamp_mesa};
 use crate::mesfet::{mesfet_companion, stamp_mesfet_with_voltages};
 use crate::mna::{MnaSystem, stamp_conductance};
 use crate::mosfet::{mos_limit, stamp_mosfet};
-use crate::vbic::stamp_vbic_with_voltages;
+use crate::vbic::{compute_self_heating_power, stamp_vbic_with_voltages};
 
 /// Stamp a current source into the RHS vector.
 /// Current flows from ni (pos) to nj (neg) externally:
@@ -546,13 +546,22 @@ impl DeviceVoltageState {
                 let (raw_vbei, vbex, raw_vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp) =
                     vbic.junction_voltages(solution);
 
-                let vbei = vbic.model.limit_vbei(raw_vbei, prev[vi].0);
-                let vbci = vbic.model.limit_vbci(raw_vbci, prev[vi].1);
+                // Self-heating: clone model and adjust temperature based on Vrth
+                let model = if vbic.model.rth > 0.0 && vbic.rth_idx.is_some() {
+                    let vrth = vbic.vrth(solution);
+                    let mut m = vbic.model.clone();
+                    m.temperature_adjust(vbic.t_ambient + vrth);
+                    m
+                } else {
+                    vbic.model.clone()
+                };
+
+                let vbei = model.limit_vbei(raw_vbei, prev[vi].0);
+                let vbci = model.limit_vbci(raw_vbci, prev[vi].1);
                 prev[vi] = (vbei, vbci);
 
-                let comp = vbic
-                    .model
-                    .companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
+                let comp =
+                    model.companion(vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp, gmin);
                 stamp_vbic_with_voltages(
                     &mut system.matrix,
                     &mut system.rhs,
@@ -568,6 +577,39 @@ impl DeviceVoltageState {
                     vrbp,
                     vbcp,
                 );
+
+                // Self-heating thermal stamps
+                if let Some(rth_idx) = vbic.rth_idx {
+                    let g_th = 1.0 / model.rth;
+
+                    // Conductance: Irth = Vrth / RTH
+                    system.matrix.add(rth_idx, rth_idx, g_th);
+
+                    // Compute external resistance voltages for power calculation
+                    let node = |idx: Option<usize>| idx.map(|i| solution[i]).unwrap_or(0.0);
+                    let sign = model.vbic_type.sign();
+                    let v_c = node(vbic.coll_idx);
+                    let v_b = node(vbic.base_idx);
+                    let v_e = node(vbic.emit_idx);
+                    let v_s = node(vbic.subs_idx);
+                    let v_cx = node(vbic.coll_cx_idx);
+                    let v_bx = node(vbic.base_bx_idx);
+                    let v_ei = node(vbic.emit_ei_idx);
+                    let v_si = node(vbic.subs_si_idx);
+                    let vrcx = sign * (v_c - v_cx);
+                    let vrbx = sign * (v_b - v_bx);
+                    let vre = sign * (v_ei - v_e);
+                    let vrs = sign * (v_si - v_s);
+
+                    let ith = compute_self_heating_power(
+                        &comp, &model, vbei, vbex, vbci, vbep, vbcp, vrci, vrbi, vrbp, vrcx, vrbx,
+                        vre, vrs, vbic.area, vbic.m,
+                    );
+
+                    // RHS: Ith flows into thermal node (power source).
+                    // G_th * Vrth is handled by the matrix stamp above.
+                    system.rhs[rth_idx] += ith;
+                }
             }
         }
 
@@ -656,8 +698,7 @@ impl DeviceVoltageState {
                 let v_old = node_voltages[name];
                 let mut perturbed = node_voltages.clone();
                 *perturbed.get_mut(name).unwrap() = v_old + DV;
-                let i1 =
-                    crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0);
+                let i1 = crate::expr::evaluate_bsrc_expr(&bsrc.expr, &perturbed).unwrap_or(0.0);
                 let g = (i1 - i0) / DV;
 
                 if g.abs() > 1e-30 {

@@ -9,10 +9,10 @@ use thevenin_types::{Expr, ModelDef, Param};
 use crate::diode::{VT_NOM, pnjlim, vcrit};
 use crate::physics::safe_exp;
 
-/// Boltzmann constant (J/K).
-const KB: f64 = 1.380649e-23;
-/// Elementary charge (C).
-const QE: f64 = 1.602176634e-19;
+/// Boltzmann constant (J/K) — matches ngspice vbicload.c.
+const KB: f64 = 1.380662e-23;
+/// Elementary charge (C) — matches ngspice vbicload.c.
+const QE: f64 = 1.602189e-19;
 
 /// Thermal voltage at a given temperature in Kelvin.
 fn vt_at(t_k: f64) -> f64 {
@@ -578,6 +578,9 @@ impl VbicModel {
         }
         if has_substrate && self.rs > 0.0 {
             count += 1;
+        }
+        if self.rth > 0.0 {
+            count += 1; // thermal node for self-heating
         }
         count
     }
@@ -1543,9 +1546,13 @@ pub struct VbicInstance {
     pub base_bx_idx: Option<usize>, // = base_idx if RBX=0
     pub emit_ei_idx: Option<usize>, // = emit_idx if RE=0
     pub subs_si_idx: Option<usize>, // = subs_idx if RS=0
+    /// Internal thermal node for self-heating (only when RTH > 0).
+    pub rth_idx: Option<usize>,
     pub model: VbicModel,
     pub area: f64,
     pub m: f64,
+    /// Ambient temperature (°C) for self-heating computation.
+    pub t_ambient: f64,
 }
 
 impl VbicInstance {
@@ -1579,6 +1586,80 @@ impl VbicInstance {
 
         (vbei, vbex, vbci, vbcx, vbep, vrci, vrbi, vrbp, vbcp)
     }
+
+    /// Get the thermal voltage rise (Vrth) from the solution vector.
+    /// Returns 0 if self-heating is not active.
+    pub fn vrth(&self, solution: &[f64]) -> f64 {
+        self.rth_idx.map(|i| solution[i]).unwrap_or(0.0)
+    }
+}
+
+/// Compute self-heating power dissipation Ith for a VBIC device.
+///
+/// Ith = sum of V_branch × I_branch for all electrical branches.
+/// This follows ngspice vbicload.c's Ith computation.
+#[expect(clippy::too_many_arguments)]
+pub fn compute_self_heating_power(
+    comp: &VbicCompanion,
+    model: &VbicModel,
+    vbei: f64,
+    vbex: f64,
+    vbci: f64,
+    vbep: f64,
+    vbcp: f64,
+    vrci: f64,
+    vrbi: f64,
+    vrbp: f64,
+    vrcx: f64,
+    vrbx: f64,
+    vre: f64,
+    vrs: f64,
+    area: f64,
+    m: f64,
+) -> f64 {
+    let scale = m * area;
+    // Vcei = Vbei - Vbci (collector-emitter internal voltage)
+    let vcei = vbei - vbci;
+    // Vcep = Vbep - Vbcp (parasitic collector-emitter voltage)
+    let vcep = vbep - vbcp;
+
+    // External resistance currents (V²/R = V*I)
+    let p_rcx = if model.rcx_t > 0.0 {
+        vrcx * vrcx / model.rcx_t
+    } else {
+        0.0
+    };
+    let p_rbx = if model.rbx_t > 0.0 {
+        vrbx * vrbx / model.rbx_t
+    } else {
+        0.0
+    };
+    let p_re = if model.re_t > 0.0 {
+        vre * vre / model.re_t
+    } else {
+        0.0
+    };
+    let p_rs = if model.rs_t > 0.0 {
+        vrs * vrs / model.rs_t
+    } else {
+        0.0
+    };
+
+    scale
+        * (comp.ibe * vbei
+            + comp.ibex * vbex
+            + (comp.itzf - comp.itzr) * vcei
+            + comp.ibc * vbci
+            + comp.ibep * vbep
+            + comp.ibcp * vbcp
+            + comp.iccp * vcep
+            + comp.irci * vrci
+            + comp.irbi * vrbi
+            + comp.irbp * vrbp
+            + p_rcx
+            + p_rbx
+            + p_re
+            + p_rs)
 }
 
 /// Stamp the VBIC companion model conductances into the MNA matrix.
