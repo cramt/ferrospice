@@ -131,7 +131,9 @@ fn parse_print_directives(netlist: &Netlist) -> Vec<PrintDirective> {
         if let Item::Raw(line) = item {
             let trimmed = line.trim();
             let lower = trimmed.to_lowercase();
-            if (lower.starts_with(".print") || lower.starts_with(".plot"))
+            // Only parse `.print` directives — `.plot` produces ASCII art in
+            // ngspice batch mode which the filter strips, not data tables.
+            if lower.starts_with(".print")
                 && let Some(d) = parse_single_print(trimmed)
             {
                 directives.push(d);

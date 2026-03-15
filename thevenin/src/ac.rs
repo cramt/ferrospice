@@ -698,6 +698,15 @@ pub fn stamp_ac_devices(
             let xqbco = omega * s * vbic.model.cbco;
             stamp_imag_conductance(&mut sys.imag, vbic.base_idx, vbic.coll_idx, xqbco);
         }
+
+        // Self-heating thermal node: G_th + j*omega*CTH
+        if let Some(rth_idx) = vbic.rth_idx {
+            let g_th = 1.0 / vbic.model.rth;
+            sys.real.add(rth_idx, rth_idx, g_th);
+            if vbic.model.cth > 0.0 {
+                sys.imag.add(rth_idx, rth_idx, omega * vbic.model.cth);
+            }
+        }
     }
 
     // 5h. Stamp MESA FET small-signal model at DC operating point.

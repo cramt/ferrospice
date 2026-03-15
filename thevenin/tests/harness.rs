@@ -482,11 +482,7 @@ harness_test!(
     "general/rca3040.cir",
     ignore = "times out (>30s) — transient analysis too slow"
 );
-harness_test!(
-    harness_general_rc,
-    "general/rc.cir",
-    ignore = ".plot ASCII art (US-058)"
-);
+harness_test!(harness_general_rc, "general/rc.cir");
 harness_test!(
     harness_general_rtlinv,
     "general/rtlinv.cir",
@@ -495,7 +491,7 @@ harness_test!(
 harness_test!(
     harness_general_schmitt,
     "general/schmitt.cir",
-    ignore = "device info output (US-061)"
+    ignore = "transient timestep mismatch at Schmitt trigger transition (US-055)"
 );
 
 // === HFET ===
@@ -778,7 +774,7 @@ harness_test!(
 harness_test!(
     harness_vbic_ceamp,
     "vbic/CEamp.cir",
-    ignore = "VBIC AC/PZ numerical accuracy: ~0.3% AC error + PZ eigenvalue mismatch"
+    ignore = "VBIC AC numerical accuracy: ~0.2% AC gain error (self-heating FP difference)"
 );
 harness_test!(
     harness_vbic_diffamp,
