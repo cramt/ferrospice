@@ -339,3 +339,66 @@ would have the same issue when refactoring a rebuilt matrix.
 **Policy:** Slight numerical deviations from ngspice are acceptable when caused
 by floating-point implementation differences. Mark affected tests as `#[ignore]`
 with a clear explanation rather than rewriting solver libraries.
+
+---
+
+## Applied fix: VBIC self-heating (RTH > 0)
+
+**Affected tests:** `harness_vbic_temp`, `harness_vbic_fg`, `harness_vbic_fo`
+
+**Root cause:** All three VBIC test circuits specify `RTH=300` in their model
+parameters. In ngspice, RTH > 0 activates self-heating: the device's junction
+temperature rises above ambient by `Vrth = Ith × RTH`, where Ith is total
+electrical power dissipation. This creates a 5th internal "thermal" node that
+couples electrically and thermally through the NR iteration.
+
+Without self-heating, errors grow with current because power dissipation raises
+the junction temperature, which increases IS_T, which increases current — a
+positive feedback loop that our code was ignoring. At V=1.0V in the FG test,
+the temperature rise was ~3°C, causing ~6% error in collector current.
+
+**Fix applied:** Added an internal thermal node (`rth_idx`) to `VbicInstance`
+when RTH > 0. At each NR iteration, the VBIC model is cloned, its temperature
+adjusted to `T_ambient + Vrth`, and the companion model computed with the
+updated parameters. The thermal node is stamped with:
+- Matrix: `G_th = 1/RTH` (conductance to ground = ambient)
+- RHS: `Ith` (power dissipation flowing into the thermal node)
+
+Power is computed as `Ith = Σ(V_branch × I_branch)` for all 14 branches.
+
+**Result:** FG error dropped from ~6% to ~0.02%, temp error from ~0.22% to
+~0.02%. The FO test still fails (singular matrix in deep saturation).
+
+**Remaining ~0.02% gap:** Likely caused by our simplified thermal Jacobian —
+we only stamp `G_th` on the diagonal without `dIth/dV` cross-derivatives.
+ngspice's kernel (`vbic_4T_et_cf_fj`) computes full Vrth derivatives for all
+branches, giving the NR solver better convergence and slightly different
+final values due to FP path differences.
+
+---
+
+## Important: always match ngspice's implementation exactly
+
+When porting device model code from ngspice, **always use ngspice's exact
+values** for physical constants, formulas, and conventions — even when "more
+correct" modern values exist. The goal is to match ngspice's output, not to
+be physically more accurate. For example, the VBIC module uses ngspice's
+Boltzmann constant (`1.380662e-23`) and elementary charge (`1.602189e-19`)
+rather than the 2019 SI exact values, because the ngspice kernel hardcodes
+these values in `vbicload.c`.
+
+---
+
+## Triage update (post self-heating fix)
+
+The VBIC tests have moved categories:
+
+| Test | Before | After |
+|---|---|---|
+| `harness_vbic_temp` | 0.22% error | ~0.02% error (residual FP diff) |
+| `harness_vbic_fg` | ~6% error | ~0.02% error (residual FP diff) |
+| `harness_vbic_fo` | ~27% error | singular matrix (deep saturation) |
+| `harness_general_rca3040` | passing | times out (>30s, pre-existing) |
+
+The `rca3040` timeout is pre-existing (confirmed by testing on the parent
+commit) and unrelated to the VBIC changes.
