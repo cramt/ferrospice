@@ -553,23 +553,19 @@ harness_test!(harness_regression_func_1, "regression/func/func-1.cir");
 // === Regression: lib-processing ===
 harness_test!(
     harness_regression_lib_ex1a,
-    "regression/lib-processing/ex1a.cir",
-    ignore = "Requires .control scripting language"
+    "regression/lib-processing/ex1a.cir"
 );
 harness_test!(
     harness_regression_lib_ex1b,
-    "regression/lib-processing/ex1b.cir",
-    ignore = "Requires .control scripting language"
+    "regression/lib-processing/ex1b.cir"
 );
 harness_test!(
     harness_regression_lib_ex2a,
-    "regression/lib-processing/ex2a.cir",
-    ignore = "Requires .control scripting language"
+    "regression/lib-processing/ex2a.cir"
 );
 harness_test!(
     harness_regression_lib_ex3a,
-    "regression/lib-processing/ex3a.cir",
-    ignore = "Requires .control scripting language"
+    "regression/lib-processing/ex3a.cir"
 );
 harness_test!(
     harness_regression_lib_scope1,
@@ -587,18 +583,15 @@ harness_test!(
 // === Regression: misc ===
 harness_test!(
     harness_regression_misc_ac_zero,
-    "regression/misc/ac-zero.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/ac-zero.cir"
 );
 harness_test!(
     harness_regression_misc_alter_vec,
-    "regression/misc/alter-vec.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/alter-vec.cir"
 );
 harness_test!(
     harness_regression_misc_asrc_tc_1,
-    "regression/misc/asrc-tc-1.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/asrc-tc-1.cir"
 );
 harness_test!(
     harness_regression_misc_asrc_tc_2,
@@ -614,8 +607,7 @@ harness_test!(
 );
 harness_test!(
     harness_regression_misc_empty_1,
-    "regression/misc/empty-1.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/empty-1.cir"
 );
 harness_test!(
     harness_regression_misc_if_elseif,
@@ -623,23 +615,19 @@ harness_test!(
 );
 harness_test!(
     harness_regression_misc_log_functions_1,
-    "regression/misc/log-functions-1.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/log-functions-1.cir"
 );
 harness_test!(
     harness_regression_misc_resume_1,
-    "regression/misc/resume-1.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/resume-1.cir"
 );
 harness_test!(
     harness_regression_misc_test_noise_2,
-    "regression/misc/test-noise-2.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/test-noise-2.cir"
 );
 harness_test!(
     harness_regression_misc_test_noise_3,
-    "regression/misc/test-noise-3.cir",
-    ignore = "Requires .control scripting language"
+    "regression/misc/test-noise-3.cir"
 );
 
 // === Regression: model ===
@@ -649,13 +637,11 @@ harness_test!(
 );
 harness_test!(
     harness_regression_model_instance_defaults,
-    "regression/model/instance-defaults.cir",
-    ignore = "Requires .control scripting language"
+    "regression/model/instance-defaults.cir"
 );
 harness_test!(
     harness_regression_model_special_names_1,
-    "regression/model/special-names-1.cir",
-    ignore = "Requires .control scripting language"
+    "regression/model/special-names-1.cir"
 );
 
 // === Regression: parser ===
@@ -665,8 +651,7 @@ harness_test!(
 );
 harness_test!(
     harness_regression_parser_minus_minus,
-    "regression/parser/minus-minus.cir",
-    ignore = "Requires .control scripting language"
+    "regression/parser/minus-minus.cir"
 );
 harness_test!(
     harness_regression_parser_xpressn_1,
@@ -685,8 +670,7 @@ harness_test!(
 // === Regression: pz ===
 harness_test!(
     harness_regression_pz_ac_resistance,
-    "regression/pz/ac-resistance.cir",
-    ignore = "Requires .control scripting language"
+    "regression/pz/ac-resistance.cir"
 );
 
 // === Regression: sens ===
@@ -720,13 +704,11 @@ harness_test!(
 // === Regression: temper ===
 harness_test!(
     harness_regression_temper_1,
-    "regression/temper/temper-1.cir",
-    ignore = "Requires TEMPER keyword + .control"
+    "regression/temper/temper-1.cir"
 );
 harness_test!(
     harness_regression_temper_2,
-    "regression/temper/temper-2.cir",
-    ignore = "Requires TEMPER keyword + .control"
+    "regression/temper/temper-2.cir"
 );
 harness_test!(
     harness_regression_temper_3,
@@ -735,8 +717,7 @@ harness_test!(
 );
 harness_test!(
     harness_regression_temper_res_1,
-    "regression/temper/temper-res-1.cir",
-    ignore = "Requires TEMPER keyword + .control"
+    "regression/temper/temper-res-1.cir"
 );
 
 // === Resistance ===
@@ -827,18 +808,6 @@ harness_test!(
 );
 
 // === XSPICE (unimplemented) ===
-harness_test!(
-    harness_xspice_d_ram,
-    "xspice/digital/d_ram.cir",
-    ignore = "XSPICE not implemented (US-056)"
-);
-harness_test!(
-    harness_xspice_d_source,
-    "xspice/digital/d_source.cir",
-    ignore = "XSPICE not implemented (US-056)"
-);
-harness_test!(
-    harness_xspice_d_state,
-    "xspice/digital/d_state.cir",
-    ignore = "XSPICE not implemented (US-056)"
-);
+harness_test!(harness_xspice_d_ram, "xspice/digital/d_ram.cir");
+harness_test!(harness_xspice_d_source, "xspice/digital/d_source.cir");
+harness_test!(harness_xspice_d_state, "xspice/digital/d_state.cir");

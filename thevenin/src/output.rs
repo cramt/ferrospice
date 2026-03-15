@@ -1913,6 +1913,28 @@ fn strip_func(s: &str, func: &str) -> Option<String> {
     }
 }
 
+/// Detect .plot ASCII art lines.
+///
+/// Plot art lines have one or two numeric values followed by a "graphical" region
+/// containing only dots, spaces, and single-character plot symbols (+, *, $, =, X).
+fn is_plot_art(line: &str) -> bool {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() < 3 {
+        return false;
+    }
+    // First 1-2 tokens should be numeric (time and/or value).
+    let num_start = if tokens[0].parse::<f64>().is_ok() && tokens[1].parse::<f64>().is_ok() {
+        2
+    } else {
+        return false;
+    };
+    // Remaining tokens should be plot symbols: single chars or dots.
+    let plot_chars: &[char] = &['.', '+', '*', '$', '=', 'X', 'x'];
+    tokens[num_start..].iter().all(|t| {
+        t.len() <= 2 && t.chars().all(|c| plot_chars.contains(&c))
+    })
+}
+
 /// Apply the check.sh filter to text output.
 pub fn filter_output(text: &str) -> String {
     let normalized = normalize_exponents(text);
@@ -1952,6 +1974,31 @@ pub fn filter_output(text: &str) -> String {
         "b4soi",
         "codemodel",
         "Using",
+        // Device info sections (US-061)
+        "Initial",
+        "Node",
+        "Voltage",
+        "#branch",
+        "Legend",
+        // Circuit listing (from .opt list)
+        ".tran",
+        ".ac",
+        ".dc",
+        ".op",
+        ".opt",
+        ".model",
+        ".end",
+        ".print",
+        ".plot",
+        ".subckt",
+        ".param",
+        ".lib",
+        ".include",
+        ".global",
+        ".save",
+        ".ends",
+        ".ic",
+        ".nodeset",
     ];
 
     let mut lines: Vec<&str> = Vec::new();
@@ -1965,6 +2012,10 @@ pub fn filter_output(text: &str) -> String {
             continue;
         }
         if filter_patterns.iter().any(|pat| line.contains(pat)) {
+            continue;
+        }
+        // Filter .plot ASCII art: lines with numeric prefix followed by dot-grid patterns
+        if is_plot_art(line) {
             continue;
         }
         lines.push(line);
@@ -2059,10 +2110,12 @@ pub fn compare_filtered(expected: &str, actual: &str) -> Result<(), String> {
 }
 
 /// Check if a normalized line looks like a data row: starts with an integer index
-/// followed by numeric values (e.g. "5 1.234e-09 -2.000e+00").
+/// followed by at least two numeric values (e.g. "5 1.234e-09 -2.000e+00").
+/// Requires 3+ tokens to distinguish from node voltage lines ("1 -1.6") which
+/// appear in Initial Transient Solution sections.
 fn is_data_row(line: &str) -> bool {
     let tokens: Vec<&str> = line.split_whitespace().collect();
-    if tokens.len() < 2 {
+    if tokens.len() < 3 {
         return false;
     }
     // First token must be a non-negative integer (row index).
@@ -2070,7 +2123,11 @@ fn is_data_row(line: &str) -> bool {
         return false;
     }
     // Second token must be a float (time/sweep variable).
-    tokens[1].parse::<f64>().is_ok()
+    if tokens[1].parse::<f64>().is_err() {
+        return false;
+    }
+    // Third token must also be numeric (first dependent variable).
+    tokens[2].parse::<f64>().is_ok()
 }
 
 /// Parse a data row into (index, independent_var, dependent_values).
@@ -2122,19 +2179,25 @@ fn compare_with_interpolation(
     norm_expected: &[String],
     norm_actual: &[String],
 ) -> Result<(), String> {
-    // Separate text lines and data rows.
-    let exp_text: Vec<&str> = norm_expected
-        .iter()
-        .filter(|l| !is_data_row(l))
-        .map(|s| s.as_str())
-        .collect();
-    let act_text: Vec<&str> = norm_actual
-        .iter()
-        .filter(|l| !is_data_row(l))
-        .map(|s| s.as_str())
-        .collect();
+    // Extract text lines that appear BETWEEN data rows (skip header/footer text like
+    // "Initial Transient Solution", circuit listings, and .plot ASCII art).
+    let inter_data_text = |lines: &[String]| -> Vec<String> {
+        let first_data = lines.iter().position(|l| is_data_row(l));
+        let last_data = lines.iter().rposition(|l| is_data_row(l));
+        match (first_data, last_data) {
+            (Some(f), Some(l)) if f < l => lines[f..=l]
+                .iter()
+                .filter(|l| !is_data_row(l))
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
 
-    // Compare text lines.
+    let exp_text = inter_data_text(norm_expected);
+    let act_text = inter_data_text(norm_actual);
+
+    // Compare inter-data text lines (e.g. section headers between data groups).
     if exp_text.len() != act_text.len() {
         return Err(format_diff(norm_expected, norm_actual));
     }
